@@ -9,9 +9,10 @@
 #include "bpf_helpers.h"
 #include "types.h"
 
-typedef struct {
-    void  *iov_base;    /* Starting address */
-    size_t iov_len;     /* Number of bytes to transfer */
+typedef struct
+{
+    void *iov_base; /* Starting address */
+    size_t iov_len; /* Number of bytes to transfer */
 } iovec_t, *piovec_t;
 
 /*
@@ -106,8 +107,10 @@ static __always_inline syscall_pattern_t ptrace_syscall_pattern(u32 request)
         return SP_PTRACE_POKETEXT;
     case PTRACE_POKEDATA:
         return SP_PTRACE_POKEDATA;
+#ifndef __aarch64__
     case PTRACE_SETREGS:
         return SP_PTRACE_SETREGS;
+#endif
     case PTRACE_SETREGSET:
         return SP_PTRACE_SETREGSET;
     case PTRACE_POKEUSR:
@@ -239,7 +242,8 @@ int kprobe__sys_process_vm_writev_5_5(struct pt_regs *__ctx)
     piovec_t remote_iov_ptr = (piovec_t)PT_REGS_PARM4(&ctx);
 
 #pragma unroll
-    for (u32 ii = 0; ii < MAX_ADDRESSES && ii < riovcnt; ++ii, remote_iov_ptr++) {
+    for (u32 ii = 0; ii < MAX_ADDRESSES && ii < riovcnt; ++ii, remote_iov_ptr++)
+    {
         iovec_t remote_iov;
         bpf_probe_read_user(&remote_iov, sizeof(remote_iov), remote_iov_ptr);
         ev.addresses[ii] = (u64)remote_iov.iov_base;
