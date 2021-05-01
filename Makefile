@@ -29,7 +29,7 @@ CFLAGS += \
 	-DCONFIG_ARM64_VA_BITS=48
 KERNEL_ARCH_NAME = arm64
 KERNEL_HEADER_VERSION ?= 4.10.0-14-generic
-TARGET = --target=aarch64-linux-gnu
+TARGET = -target aarch64
 else ifeq ($(ARCH),x86_64)
 CFLAGS += -D__ASM_SYSREG_H
 KERNEL_ARCH_NAME = x86
