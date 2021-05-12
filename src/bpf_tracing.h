@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: (LGPL-2.1 OR BSD-2-Clause) */
+// SPDX-License-Identifier: GPL-2.0+
 #pragma once
 
 /* Scan the ARCH passed in from ARCH env variable (see Makefile) */
