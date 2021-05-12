@@ -7,8 +7,7 @@ LLVM_DIS = llvm-dis-6.0
 
 SOURCES ?= -c src/programs.c
 
-CFLAGS = \
-	-D__KERNEL__ \
+CFLAGS = -D__KERNEL__ \
 	-D__BPF_TRACING__ \
 	-Wunused \
 	-Wall \
@@ -34,6 +33,7 @@ else ifeq ($(ARCH),x86_64)
 CFLAGS += -D__ASM_SYSREG_H
 KERNEL_ARCH_NAME = x86
 KERNEL_HEADER_VERSION ?= 4.4.0-98-generic
+TARGET = -target x86_64
 else
 $(error Unknown architecture $(ARCH))
 endif
@@ -76,7 +76,7 @@ depends:
 		make binutils curl coreutils
 
 ebpf: check_headers
-	ARCH=arm64 $(CC) $(TARGET) $(CFLAGS) -emit-llvm $(SOURCES) $(INCLUDES) -o - | \
+	$(CC) $(TARGET) $(CFLAGS) -emit-llvm $(SOURCES) $(INCLUDES) -o - | \
 		$(OPT) -O2 -mtriple=bpf-pc-linux | $(LLVM_DIS) | \
 		$(LLC) -march=bpf -filetype=obj -o $(OBJDIR)/redcanary-ebpf-programs
 

@@ -141,15 +141,15 @@ static __always_inline syscall_pattern_t ptrace_syscall_pattern(u32 request)
     u32 pid = pid_tgid >> 32;                  \
     u32 tid = pid_tgid & 0xFFFFFFFF;           \
     u64 ruid_rgid = bpf_get_current_uid_gid(); \
-    u32 rgid = ruid_rgid >> 32;                \
-    u32 ruid = ruid_rgid & 0xFFFFFFFF;         \
+    u32 __rgid = ruid_rgid >> 32;              \
+    u32 __ruid = ruid_rgid & 0xFFFFFFFF;       \
     u64 mono_ns = bpf_ktime_get_ns();          \
     credentials_event_t ev = {                 \
         .syscall_pattern = SP,                 \
         .pid = pid,                            \
         .tid = tid,                            \
-        .current_ruid = ruid,                  \
-        .current_rgid = rgid,                  \
+        .current_ruid = __ruid,                \
+        .current_rgid = __rgid,                \
         .euid = -1,                            \
         .egid = -1,                            \
         .ruid = -1,                            \
@@ -173,12 +173,10 @@ static __always_inline syscall_pattern_t ptrace_syscall_pattern(u32 request)
     }
 
 SEC("kprobe/sys_ptrace_write")
-int kprobe__sys_ptrace_write(struct pt_regs *__ctx)
+int BPF_KPROBE_SYSCALL(kprobe__sys_ptrace_write,
+                       u32 request, u32 target_pid, void *addr)
 {
-    struct pt_regs ctx = {};
-    bpf_probe_read(&ctx, sizeof(ctx), (void *)PT_REGS_PARM1(__ctx));
-
-    syscall_pattern_t syscall_pattern = ptrace_syscall_pattern(PT_REGS_PARM1(&ctx));
+    syscall_pattern_t syscall_pattern = ptrace_syscall_pattern(request);
     if (SP_IGNORE == syscall_pattern)
     {
         goto Exit;
@@ -187,10 +185,10 @@ int kprobe__sys_ptrace_write(struct pt_regs *__ctx)
     if (SP_PTRACE_ATTACH != syscall_pattern && SP_PTRACE_SEIZE != syscall_pattern)
     {
         DECLARE_EVENT(write_process_memory_event_t, syscall_pattern);
-        ev.target_pid = PT_REGS_PARM2(&ctx);
-        ev.addresses[0] = PT_REGS_PARM3(&ctx);
+        ev.target_pid = target_pid;
+        ev.addresses[0] = (u64) addr;
 
-        bpf_perf_event_output(__ctx,
+        bpf_perf_event_output(ctx,
                               &write_process_memory_events,
                               bpf_get_smp_processor_id(),
                               &ev,
@@ -202,12 +200,10 @@ Exit:
 }
 
 SEC("kprobe/sys_ptrace")
-int kprobe__sys_ptrace(struct pt_regs *__ctx)
+int BPF_KPROBE_SYSCALL(kprobe__sys_ptrace,
+                       u32 request, u32 target_pid)
 {
-    struct pt_regs ctx = {};
-    bpf_probe_read(&ctx, sizeof(ctx), (void *)PT_REGS_PARM1(__ctx));
-
-    syscall_pattern_t syscall_pattern = ptrace_syscall_pattern(PT_REGS_PARM1(&ctx));
+    syscall_pattern_t syscall_pattern = ptrace_syscall_pattern(request);
     if (SP_IGNORE == syscall_pattern)
     {
         goto Exit;
@@ -216,9 +212,9 @@ int kprobe__sys_ptrace(struct pt_regs *__ctx)
     if (SP_PTRACE_ATTACH == syscall_pattern || SP_PTRACE_SEIZE == syscall_pattern)
     {
         DECLARE_EVENT(trace_process_event_t, syscall_pattern);
-        ev.target_pid = PT_REGS_PARM2(&ctx);
+        ev.target_pid = target_pid;
 
-        bpf_perf_event_output(__ctx,
+        bpf_perf_event_output(ctx,
                               &trace_process_events,
                               bpf_get_smp_processor_id(),
                               &ev,
@@ -230,26 +226,21 @@ Exit:
 }
 
 SEC("kprobe/sys_process_vm_writev_5_5")
-int kprobe__sys_process_vm_writev_5_5(struct pt_regs *__ctx)
+int BPF_KPROBE_SYSCALL(kprobe__sys_process_vm_writev_5_5,
+        u32 target_pid, piovec_t liov, u32 liovcnt, piovec_t riov, u32 riovcnt)
 {
-    struct pt_regs ctx = {};
-    bpf_probe_read(&ctx, sizeof(ctx), (void *)PT_REGS_PARM1(__ctx));
-
     DECLARE_EVENT(write_process_memory_event_t, SP_PROCESS_VM_WRITEV);
-    ev.target_pid = PT_REGS_PARM1(&ctx);
-
-    u32 riovcnt = PT_REGS_PARM5(&ctx);
-    piovec_t remote_iov_ptr = (piovec_t)PT_REGS_PARM4(&ctx);
+    ev.target_pid = target_pid;
 
 #pragma unroll
-    for (u32 ii = 0; ii < MAX_ADDRESSES && ii < riovcnt; ++ii, remote_iov_ptr++)
+    for (u32 ii = 0; ii < MAX_ADDRESSES && ii < riovcnt; ++ii, riov++)
     {
         iovec_t remote_iov;
-        bpf_probe_read_user(&remote_iov, sizeof(remote_iov), remote_iov_ptr);
+        bpf_probe_read_user(&remote_iov, sizeof(remote_iov), (const void *) riov);
         ev.addresses[ii] = (u64)remote_iov.iov_base;
     }
 
-    bpf_perf_event_output(__ctx,
+    bpf_perf_event_output(ctx,
                           &write_process_memory_events,
                           bpf_get_smp_processor_id(),
                           &ev,
@@ -259,15 +250,13 @@ int kprobe__sys_process_vm_writev_5_5(struct pt_regs *__ctx)
 }
 
 SEC("kprobe/sys_process_vm_writev")
-int kprobe__sys_process_vm_writev(struct pt_regs *__ctx)
+int BPF_KPROBE_SYSCALL(kprobe__sys_process_vm_writev,
+                       u32 target_pid)
 {
-    struct pt_regs ctx = {};
-    bpf_probe_read(&ctx, sizeof(ctx), (void *)PT_REGS_PARM1(__ctx));
-
     DECLARE_EVENT(write_process_memory_event_t, SP_PROCESS_VM_WRITEV);
-    ev.target_pid = PT_REGS_PARM1(&ctx);
+    ev.target_pid = target_pid;
 
-    bpf_perf_event_output(__ctx,
+    bpf_perf_event_output(ctx,
                           &write_process_memory_events,
                           bpf_get_smp_processor_id(),
                           &ev,
@@ -277,17 +266,15 @@ int kprobe__sys_process_vm_writev(struct pt_regs *__ctx)
 }
 
 SEC("kprobe/sys_mprotect")
-int kprobe__sys_mprotect(struct pt_regs *__ctx)
+int BPF_KPROBE_SYSCALL(kprobe__sys_mprotect,
+                       void *addr, u64 len, u32 prot)
 {
-    struct pt_regs ctx = {};
-    bpf_probe_read(&ctx, sizeof(ctx), (void *)PT_REGS_PARM1(__ctx));
-
     DECLARE_EVENT(change_memory_permission_event_t, SP_MPROTECT);
-    ev.address = PT_REGS_PARM1(&ctx);
-    ev.len = PT_REGS_PARM2(&ctx);
-    ev.prot = (u32)PT_REGS_PARM3(&ctx);
+    ev.address = (u64) addr;
+    ev.len = len;
+    ev.prot = prot;
 
-    bpf_perf_event_output(__ctx,
+    bpf_perf_event_output(ctx,
                           &change_process_memory_events,
                           bpf_get_smp_processor_id(),
                           &ev,
@@ -301,11 +288,11 @@ int kprobe__do_mount(struct pt_regs *ctx)
 {
     DECLARE_EVENT(mount_event_t, SP_MOUNT);
 
-    bpf_probe_read_str(&ev.source, sizeof(ev.source), (void *)PT_REGS_PARM1(ctx));
-    bpf_probe_read_str(&ev.target, sizeof(ev.target), (void *)PT_REGS_PARM2(ctx));
-    bpf_probe_read_str(&ev.fs_type, sizeof(ev.fs_type), (void *)PT_REGS_PARM3(ctx));
-    ev.flags = PT_REGS_PARM4(ctx);
-    bpf_probe_read_str(&ev.data, sizeof(ev.data), (void *)PT_REGS_PARM5(ctx));
+    bpf_probe_read_str(&ev.source, sizeof(ev.source), (void *)PT_REGS_PARM1_CORE(ctx));
+    bpf_probe_read_str(&ev.target, sizeof(ev.target), (void *)PT_REGS_PARM2_CORE(ctx));
+    bpf_probe_read_str(&ev.fs_type, sizeof(ev.fs_type), (void *)PT_REGS_PARM3_CORE(ctx));
+    ev.flags = PT_REGS_PARM4_CORE(ctx);
+    bpf_probe_read_str(&ev.data, sizeof(ev.data), (void *)PT_REGS_PARM5_CORE(ctx));
 
     bpf_perf_event_output(ctx,
                           &mount_events,
@@ -319,7 +306,7 @@ int kprobe__do_mount(struct pt_regs *ctx)
 static __always_inline int dispatch_credentials_event(struct pt_regs *__ctx)
 {
     struct pt_regs ctx = {};
-    bpf_probe_read(&ctx, sizeof(ctx), (void *)PT_REGS_PARM1(__ctx));
+    bpf_probe_read(&ctx, sizeof(ctx), (void *)SYSCALL_PARM1_CORE(__ctx));
     u64 pid_tgid = bpf_get_current_pid_tgid();
 
     credentials_event_t *pcreds = bpf_map_lookup_elem(&cred_hash, &pid_tgid);
@@ -343,14 +330,12 @@ Exit:
 }
 
 SEC("kprobe/sys_setuid")
-int kprobe__sys_setuid(struct pt_regs *__ctx)
+int BPF_KPROBE_SYSCALL(kprobe__sys_setuid,
+                       u32 ruid)
 {
-    struct pt_regs ctx = {};
     u64 _pad __attribute__((unused));
-    bpf_probe_read(&ctx, sizeof(ctx), (void *)PT_REGS_PARM1(__ctx));
-
     DECLARE_CRED_EVENT(SP_SETUID);
-    ev.ruid = PT_REGS_PARM1(&ctx);
+    ev.ruid = ruid;
     bpf_map_update_elem(&cred_hash, &pid_tgid, &ev, BPF_ANY);
     return 0;
 }
@@ -362,13 +347,12 @@ int kretprobe__sys_setuid(struct pt_regs *__ctx)
 }
 
 SEC("kprobe/sys_setgid")
-int kprobe__sys_setgid(struct pt_regs *__ctx)
+int BPF_KPROBE_SYSCALL(kprobe__sys_setgid,
+                       u32 rgid)
 {
-    struct pt_regs ctx = {};
-    bpf_probe_read(&ctx, sizeof(ctx), (void *)PT_REGS_PARM1(__ctx));
-
+    u64 _pad __attribute__((unused));
     DECLARE_CRED_EVENT(SP_SETGID);
-    ev.rgid = PT_REGS_PARM1(&ctx);
+    ev.rgid = rgid;
     bpf_map_update_elem(&cred_hash, &pid_tgid, &ev, BPF_ANY);
     return 0;
 }
@@ -380,14 +364,13 @@ int kretprobe__sys_setgid(struct pt_regs *__ctx)
 }
 
 SEC("kprobe/sys_setreuid")
-int kprobe__sys_setreuid(struct pt_regs *__ctx)
+int BPF_KPROBE_SYSCALL(kprobe__sys_setreuid,
+                       u32 ruid, u32 euid)
 {
-    struct pt_regs ctx = {};
-    bpf_probe_read(&ctx, sizeof(ctx), (void *)PT_REGS_PARM1(__ctx));
-
+    u64 _pad __attribute__((unused));
     DECLARE_CRED_EVENT(SP_SETREUID);
-    ev.ruid = PT_REGS_PARM1(&ctx);
-    ev.euid = PT_REGS_PARM2(&ctx);
+    ev.ruid = ruid;
+    ev.euid = euid;
     bpf_map_update_elem(&cred_hash, &pid_tgid, &ev, BPF_ANY);
     return 0;
 }
@@ -399,15 +382,13 @@ int kretprobe__sys_setreuid(struct pt_regs *__ctx)
 }
 
 SEC("kprobe/sys_setregid")
-int kprobe__sys_setregid(struct pt_regs *__ctx)
+int BPF_KPROBE_SYSCALL(kprobe__sys_setregid,
+                       u32 rgid, u32 egid)
 {
-    struct pt_regs ctx = {};
     u64 _pad __attribute__((unused));
-    bpf_probe_read(&ctx, sizeof(ctx), (void *)PT_REGS_PARM1(__ctx));
-
     DECLARE_CRED_EVENT(SP_SETREGID);
-    ev.rgid = PT_REGS_PARM1(&ctx);
-    ev.egid = PT_REGS_PARM2(&ctx);
+    ev.rgid = rgid;
+    ev.egid = egid;
     bpf_map_update_elem(&cred_hash, &pid_tgid, &ev, BPF_ANY);
     return 0;
 }
@@ -419,16 +400,14 @@ int kretprobe__sys_setregid(struct pt_regs *__ctx)
 }
 
 SEC("kprobe/sys_setresuid")
-int kprobe__sys_setresuid(struct pt_regs *__ctx)
+int BPF_KPROBE_SYSCALL(kprobe__sys_setresuid,
+                       u32 ruid, u32 euid, u32 suid)
 {
-    struct pt_regs ctx = {};
     u64 _pad __attribute__((unused));
-    bpf_probe_read(&ctx, sizeof(ctx), (void *)PT_REGS_PARM1(__ctx));
-
     DECLARE_CRED_EVENT(SP_SETREUID);
-    ev.ruid = PT_REGS_PARM1(&ctx);
-    ev.euid = PT_REGS_PARM2(&ctx);
-    ev.suid = PT_REGS_PARM3(&ctx);
+    ev.ruid = ruid;
+    ev.euid = euid;
+    ev.suid = suid;
     bpf_map_update_elem(&cred_hash, &pid_tgid, &ev, BPF_ANY);
     return 0;
 }
@@ -440,16 +419,14 @@ int kretprobe__sys_setresuid(struct pt_regs *__ctx)
 }
 
 SEC("kprobe/sys_setresgid")
-int kprobe__sys_setresgid(struct pt_regs *__ctx)
+int BPF_KPROBE_SYSCALL(kprobe__sys_setresgid,
+                       u32 rgid, u32 egid, u32 sgid)
 {
-    struct pt_regs ctx = {};
     u64 _pad __attribute__((unused));
-    bpf_probe_read(&ctx, sizeof(ctx), (void *)PT_REGS_PARM1(__ctx));
-
     DECLARE_CRED_EVENT(SP_SETREGID);
-    ev.rgid = PT_REGS_PARM1(&ctx);
-    ev.egid = PT_REGS_PARM2(&ctx);
-    ev.sgid = PT_REGS_PARM3(&ctx);
+    ev.rgid = rgid;
+    ev.egid = egid;
+    ev.sgid = sgid;
     bpf_map_update_elem(&cred_hash, &pid_tgid, &ev, BPF_ANY);
     return 0;
 }
