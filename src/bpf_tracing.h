@@ -79,13 +79,22 @@
 #define SYSCALL_PARM1(x) ((x)->di)
 #define SYSCALL_PARM2(x) ((x)->si)
 #define SYSCALL_PARM3(x) ((x)->dx)
-#define SYSCALL_PARM4(x) ((x)->r10)
 #define SYSCALL_PARM5(x) ((x)->r8)
 #define SYSCALL_PARM1_CORE(x) BPF_CORE_READ((x), di)
 #define SYSCALL_PARM2_CORE(x) BPF_CORE_READ((x), si)
 #define SYSCALL_PARM3_CORE(x) BPF_CORE_READ((x), dx)
-#define SYSCALL_PARM4_CORE(x) BPF_CORE_READ((x), r10)
 #define SYSCALL_PARM5_CORE(x) BPF_CORE_READ((x), r8)
+
+// For kernels where CONFIG_SYSCALL_WRAPPER is used,
+// we use `r10` for syscall parameter 4.
+// Otherwise we use `rcx` for syscall parameter 4.
+#ifdef CONFIG_SYSCALL_WRAPPER
+#define SYSCALL_PARM4(x) ((x)->r10)
+#define SYSCALL_PARM4_CORE(x) BPF_CORE_READ((x), r10)
+#else
+#define SYSCALL_PARM4(x) ((x)->cx)
+#define SYSCALL_PARM4_CORE(x) BPF_CORE_READ((x), cx)
+#endif
 
 #else
 
@@ -435,39 +444,50 @@ typeof(name(0)) name(struct pt_regs *ctx)				    \
 }									    \
 static __always_inline typeof(name(0)) ____##name(struct pt_regs *ctx, ##args)
 
-// Macros to populate arguments to BPF_KRPOBE_SYSCALL functions
+// Macros to populate arguments to the BPF_KRPOBE_SYSCALL function
 #define ___bpf_kprobe_syscall_args0() ctx
 #define ___bpf_kprobe_syscall_args1(x) \
-	___bpf_kprobe_syscall_args0(), (void *)SYSCALL_PARM1_CORE(___ctx)
+	___bpf_kprobe_syscall_args0(), (void *)SYSCALL_PARM1(&___ctx)
 #define ___bpf_kprobe_syscall_args2(x, args...) \
-	___bpf_kprobe_syscall_args1(args), (void *)SYSCALL_PARM2_CORE(___ctx)
+	___bpf_kprobe_syscall_args1(args), (void *)SYSCALL_PARM2(&___ctx)
 #define ___bpf_kprobe_syscall_args3(x, args...) \
-	___bpf_kprobe_syscall_args2(args), (void *)SYSCALL_PARM3_CORE(___ctx)
+	___bpf_kprobe_syscall_args2(args), (void *)SYSCALL_PARM3(&___ctx)
 #define ___bpf_kprobe_syscall_args4(x, args...) \
-	___bpf_kprobe_syscall_args3(args), (void *)SYSCALL_PARM4_CORE(___ctx)
+	___bpf_kprobe_syscall_args3(args), (void *)SYSCALL_PARM4(&___ctx)
 #define ___bpf_kprobe_syscall_args5(x, args...) \
-	___bpf_kprobe_syscall_args4(args), (void *)SYSCALL_PARM5_CORE(___ctx)
+	___bpf_kprobe_syscall_args4(args), (void *)SYSCALL_PARM5(&___ctx)
 #define ___bpf_kprobe_syscall_args(args...) \
 	___bpf_apply(___bpf_kprobe_syscall_args, ___bpf_narg(args))(args)
+
+#ifdef CONFIG_SYSCALL_WRAPPER
+#define position_syscall_regs() \
+    struct pt_regs ___ctx = {}; \
+    u64 _pad __attribute__((unused)); \
+    bpf_probe_read(&___ctx, sizeof(___ctx), (void *)SYSCALL_PARM1_CORE(ctx))
+#else
+#define position_syscall_regs() \
+    struct pt_regs ___ctx = {}; \
+    u64 _pad __attribute__((unused)); \
+    bpf_probe_read(&___ctx, sizeof(___ctx), (void *)ctx)
+#endif
 
 /*
  * BPF_KPROBE_SYSCALL wraps kprobes attached to syscall functions (sys_*) to
  * correctly extract and pass arguments used in system calls.
  */
-#define BPF_KPROBE_SYSCALL(name, args...)					    \
-name(struct pt_regs *ctx);						    \
-static __attribute__((always_inline)) typeof(name(0))			    \
-____##name(struct pt_regs *ctx, ##args);				    \
-typeof(name(0)) name(struct pt_regs *ctx)				    \
-{                                                 \
-                        \
-	_Pragma("GCC diagnostic push")					    \
-	_Pragma("GCC diagnostic ignored \"-Wint-conversion\"")     \
-    struct pt_regs *___ctx = (struct pt_regs *)SYSCALL_PARM1_CORE(ctx);    \
-	return ____##name(___bpf_kprobe_syscall_args(args));			    \
-	_Pragma("GCC diagnostic pop")					    \
-}									    \
-static __attribute__((always_inline)) typeof(name(0))			    \
+#define BPF_KPROBE_SYSCALL(name, args...) \
+name(struct pt_regs *ctx); \
+static __attribute__((always_inline)) typeof(name(0)) \
+____##name(struct pt_regs *ctx, ##args); \
+typeof(name(0)) name(struct pt_regs *ctx) \
+{ \
+    _Pragma("GCC diagnostic push") \
+    _Pragma("GCC diagnostic ignored \"-Wint-conversion\"") \
+    position_syscall_regs(); \
+    return ____##name(___bpf_kprobe_syscall_args(args)); \
+    _Pragma("GCC diagnostic pop") \
+} \
+static __attribute__((always_inline)) typeof(name(0)) \
 ____##name(struct pt_regs *ctx, ##args)
 
 /*

@@ -6,8 +6,10 @@ OPT = opt-6.0
 LLVM_DIS = llvm-dis-6.0
 
 SOURCES ?= -c src/programs.c
+CLAGS ?=
 
-CFLAGS = -D__KERNEL__ \
+CFLAGS += \
+	-D__KERNEL__ \
 	-D__BPF_TRACING__ \
 	-Wunused \
 	-Wall \
@@ -75,10 +77,13 @@ depends:
 		linux-headers-4.4.0-98-generic linux-headers-4.10.0-14-generic \
 		make binutils curl coreutils
 
-ebpf: check_headers
+$(OBJDIR)/%: check_headers
 	$(CC) $(TARGET) $(CFLAGS) -emit-llvm $(SOURCES) $(INCLUDES) -o - | \
 		$(OPT) -O2 -mtriple=bpf-pc-linux | $(LLVM_DIS) | \
-		$(LLC) -march=bpf -filetype=obj -o $(OBJDIR)/redcanary-ebpf-programs
+		$(LLC) -march=bpf -filetype=obj -o $@
+
+ebpf: $(OBJDIR)/redcanary-ebpf-programs
+	CFLAGS="-DCONFIG_SYSCALL_WRAPPER" $(MAKE) $(OBJDIR)/redcanary-ebpf-programs-indirect
 
 all: $(OBJDIR) depends ebpf
 	@:

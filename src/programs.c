@@ -195,7 +195,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_ptrace_write,
                               sizeof(ev));
     }
 
-Exit:
+    Exit:
     return 0;
 }
 
@@ -265,6 +265,34 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_process_vm_writev,
     return 0;
 }
 
+//SEC("kprobe/sys_process_vm_writev")
+//int kprobe__sys_process_vm_writev(struct pt_regs *__ctx)
+//{
+//    struct pt_regs ctx = {};
+//    u64 _pad __attribute__((unused));
+//    bpf_probe_read(&ctx, sizeof(ctx), (void *)__ctx);
+//
+//    DECLARE_EVENT(write_process_memory_event_t, SP_PROCESS_VM_WRITEV);
+//    ev.target_pid = PT_REGS_PARM1(&ctx);
+//    //3208, 139787650665136, 1, 139787650664864, 1, 139787650664864
+//    ev.addresses[0] = (u64) ctx.di; //3208
+//    ev.addresses[1] = (u64) ctx.si; //139787650665136
+//    ev.addresses[2] = (u64) ctx.dx; //1
+//    ev.addresses[3] = (u64) ctx.cx;//139787650664864
+//    ev.addresses[4] = (u64) ctx.r8;//1
+//    ev.addresses[5] = (u64) ctx.r10;//139787650664864
+//
+//
+//    bpf_perf_event_output(__ctx,
+//                          &write_process_memory_events,
+//                          bpf_get_smp_processor_id(),
+//                          &ev,
+//                          sizeof(ev));
+//
+//    return 0;
+//}
+
+
 SEC("kprobe/sys_mprotect")
 int BPF_KPROBE_SYSCALL(kprobe__sys_mprotect,
                        void *addr, u64 len, u32 prot)
@@ -288,11 +316,11 @@ int kprobe__do_mount(struct pt_regs *ctx)
 {
     DECLARE_EVENT(mount_event_t, SP_MOUNT);
 
-    bpf_probe_read_str(&ev.source, sizeof(ev.source), (void *)PT_REGS_PARM1_CORE(ctx));
-    bpf_probe_read_str(&ev.target, sizeof(ev.target), (void *)PT_REGS_PARM2_CORE(ctx));
-    bpf_probe_read_str(&ev.fs_type, sizeof(ev.fs_type), (void *)PT_REGS_PARM3_CORE(ctx));
-    ev.flags = PT_REGS_PARM4_CORE(ctx);
-    bpf_probe_read_str(&ev.data, sizeof(ev.data), (void *)PT_REGS_PARM5_CORE(ctx));
+    bpf_probe_read_str(&ev.source, sizeof(ev.source), (void *)PT_REGS_PARM1(ctx));
+    bpf_probe_read_str(&ev.target, sizeof(ev.target), (void *)PT_REGS_PARM2(ctx));
+    bpf_probe_read_str(&ev.fs_type, sizeof(ev.fs_type), (void *)PT_REGS_PARM3(ctx));
+    ev.flags = PT_REGS_PARM4(ctx);
+    bpf_probe_read_str(&ev.data, sizeof(ev.data), (void *)PT_REGS_PARM5(ctx));
 
     bpf_perf_event_output(ctx,
                           &mount_events,
@@ -306,7 +334,7 @@ int kprobe__do_mount(struct pt_regs *ctx)
 static __always_inline int dispatch_credentials_event(struct pt_regs *__ctx)
 {
     struct pt_regs ctx = {};
-    bpf_probe_read(&ctx, sizeof(ctx), (void *)SYSCALL_PARM1_CORE(__ctx));
+    bpf_probe_read(&ctx, sizeof(ctx), (void *)SYSCALL_PARM1(__ctx));
     u64 pid_tgid = bpf_get_current_pid_tgid();
 
     credentials_event_t *pcreds = bpf_map_lookup_elem(&cred_hash, &pid_tgid);
@@ -333,7 +361,6 @@ SEC("kprobe/sys_setuid")
 int BPF_KPROBE_SYSCALL(kprobe__sys_setuid,
                        u32 ruid)
 {
-    u64 _pad __attribute__((unused));
     DECLARE_CRED_EVENT(SP_SETUID);
     ev.ruid = ruid;
     bpf_map_update_elem(&cred_hash, &pid_tgid, &ev, BPF_ANY);
@@ -350,7 +377,6 @@ SEC("kprobe/sys_setgid")
 int BPF_KPROBE_SYSCALL(kprobe__sys_setgid,
                        u32 rgid)
 {
-    u64 _pad __attribute__((unused));
     DECLARE_CRED_EVENT(SP_SETGID);
     ev.rgid = rgid;
     bpf_map_update_elem(&cred_hash, &pid_tgid, &ev, BPF_ANY);
@@ -367,7 +393,6 @@ SEC("kprobe/sys_setreuid")
 int BPF_KPROBE_SYSCALL(kprobe__sys_setreuid,
                        u32 ruid, u32 euid)
 {
-    u64 _pad __attribute__((unused));
     DECLARE_CRED_EVENT(SP_SETREUID);
     ev.ruid = ruid;
     ev.euid = euid;
@@ -385,7 +410,6 @@ SEC("kprobe/sys_setregid")
 int BPF_KPROBE_SYSCALL(kprobe__sys_setregid,
                        u32 rgid, u32 egid)
 {
-    u64 _pad __attribute__((unused));
     DECLARE_CRED_EVENT(SP_SETREGID);
     ev.rgid = rgid;
     ev.egid = egid;
@@ -403,7 +427,6 @@ SEC("kprobe/sys_setresuid")
 int BPF_KPROBE_SYSCALL(kprobe__sys_setresuid,
                        u32 ruid, u32 euid, u32 suid)
 {
-    u64 _pad __attribute__((unused));
     DECLARE_CRED_EVENT(SP_SETREUID);
     ev.ruid = ruid;
     ev.euid = euid;
@@ -422,7 +445,6 @@ SEC("kprobe/sys_setresgid")
 int BPF_KPROBE_SYSCALL(kprobe__sys_setresgid,
                        u32 rgid, u32 egid, u32 sgid)
 {
-    u64 _pad __attribute__((unused));
     DECLARE_CRED_EVENT(SP_SETREGID);
     ev.rgid = rgid;
     ev.egid = egid;
