@@ -83,7 +83,7 @@ $(OBJDIR)/%: check_headers
 		$(LLC) -march=bpf -filetype=obj -o $@
 
 ebpf: $(OBJDIR)/redcanary-ebpf-programs
-	CFLAGS="-DCONFIG_SYSCALL_WRAPPER" $(MAKE) $(OBJDIR)/redcanary-ebpf-programs-indirect
+	CFLAGS="-DCONFIG_SYSCALL_WRAPPER" $(MAKE) $(OBJDIR)/redcanary-ebpf-programs-wrapped
 
 all: $(OBJDIR) depends ebpf
 	@:
