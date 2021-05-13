@@ -265,34 +265,6 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_process_vm_writev,
     return 0;
 }
 
-//SEC("kprobe/sys_process_vm_writev")
-//int kprobe__sys_process_vm_writev(struct pt_regs *__ctx)
-//{
-//    struct pt_regs ctx = {};
-//    u64 _pad __attribute__((unused));
-//    bpf_probe_read(&ctx, sizeof(ctx), (void *)__ctx);
-//
-//    DECLARE_EVENT(write_process_memory_event_t, SP_PROCESS_VM_WRITEV);
-//    ev.target_pid = PT_REGS_PARM1(&ctx);
-//    //3208, 139787650665136, 1, 139787650664864, 1, 139787650664864
-//    ev.addresses[0] = (u64) ctx.di; //3208
-//    ev.addresses[1] = (u64) ctx.si; //139787650665136
-//    ev.addresses[2] = (u64) ctx.dx; //1
-//    ev.addresses[3] = (u64) ctx.cx;//139787650664864
-//    ev.addresses[4] = (u64) ctx.r8;//1
-//    ev.addresses[5] = (u64) ctx.r10;//139787650664864
-//
-//
-//    bpf_perf_event_output(__ctx,
-//                          &write_process_memory_events,
-//                          bpf_get_smp_processor_id(),
-//                          &ev,
-//                          sizeof(ev));
-//
-//    return 0;
-//}
-
-
 SEC("kprobe/sys_mprotect")
 int BPF_KPROBE_SYSCALL(kprobe__sys_mprotect,
                        void *addr, u64 len, u32 prot)
