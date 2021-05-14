@@ -5,8 +5,8 @@ LLC = llc-6.0
 OPT = opt-6.0
 LLVM_DIS = llvm-dis-6.0
 
-SOURCES ?= -c src/programs.c
 CLAGS ?=
+SOURCES ?= src/programs.c
 
 CFLAGS += \
 	-D__KERNEL__ \
@@ -77,15 +77,24 @@ depends:
 		linux-headers-4.4.0-98-generic linux-headers-4.10.0-14-generic \
 		make binutils curl coreutils
 
+$(OBJDIR)/ebpf-verifier-%: check_headers
+	sed -r 's/SEC\(\"maps\/\w+\"\)/SEC("maps")/g' $(SOURCES) | \
+		$(CC) $(TARGET) $(CFLAGS) -emit-llvm $(INCLUDES) -c -x c - -o - | \
+		$(OPT) -O2 -mtriple=bpf-pc-linux | $(LLVM_DIS) | \
+		$(LLC) -march=bpf -filetype=obj -o $@
+
 $(OBJDIR)/%: check_headers
-	$(CC) $(TARGET) $(CFLAGS) -emit-llvm $(SOURCES) $(INCLUDES) -o - | \
+	$(CC) $(TARGET) $(CFLAGS) -emit-llvm -c $(SOURCES) $(INCLUDES) -o - | \
 		$(OPT) -O2 -mtriple=bpf-pc-linux | $(LLVM_DIS) | \
 		$(LLC) -march=bpf -filetype=obj -o $@
 
 ebpf: $(OBJDIR)/redcanary-ebpf-programs
 	CFLAGS="-DCONFIG_SYSCALL_WRAPPER" $(MAKE) $(OBJDIR)/redcanary-ebpf-programs-wrapped
 
-all: $(OBJDIR) depends ebpf
+ebpf_verifier: $(OBJDIR)/ebpf-verifier-object
+	CFLAGS="-DCONFIG_SYSCALL_WRAPPER" $(MAKE) $(OBJDIR)/ebpf-verifier-object-wrapped
+
+all: $(OBJDIR) depends ebpf ebpf_verifier
 	@:
 
-.PHONY: all realclean clean ebpf depends check_headers
+.PHONY: all realclean clean ebpf ebpf_verifier depends check_headers
