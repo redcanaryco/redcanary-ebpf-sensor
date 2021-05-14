@@ -107,7 +107,16 @@ static __always_inline syscall_pattern_t ptrace_syscall_pattern(u32 request)
         return SP_PTRACE_POKETEXT;
     case PTRACE_POKEDATA:
         return SP_PTRACE_POKEDATA;
-#ifndef __aarch64__
+#ifdef __aarch64__
+    case COMPAT_PTRACE_SETREGS:
+        return SP_PTRACE_SETREGS;
+    case COMPAT_PTRACE_SET_SYSCALL:
+        return SP_PTRACE_SET_SYSCALL;
+    case COMPAT_PTRACE_SETVFPREGS:
+        return SP_PTRACE_SETREGS;
+    case COMPAT_PTRACE_SETHBPREGS:
+        return SP_PTRACE_SETREGS;
+#else
     case PTRACE_SETREGS:
         return SP_PTRACE_SETREGS;
 #endif
