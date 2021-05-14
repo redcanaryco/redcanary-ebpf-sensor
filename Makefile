@@ -5,7 +5,7 @@ LLC = llc-6.0
 OPT = opt-6.0
 LLVM_DIS = llvm-dis-6.0
 
-SOURCES ?= -c src/programs.c
+SOURCES ?= src/programs.c
 
 CFLAGS = \
 	-D__KERNEL__ \
@@ -76,11 +76,17 @@ depends:
 		make binutils curl coreutils
 
 ebpf: check_headers
-	ARCH=arm64 $(CC) $(TARGET) $(CFLAGS) -emit-llvm $(SOURCES) $(INCLUDES) -o - | \
+	$(CC) $(TARGET) $(CFLAGS) -emit-llvm -c $(SOURCES) $(INCLUDES) -o - | \
 		$(OPT) -O2 -mtriple=bpf-pc-linux | $(LLVM_DIS) | \
 		$(LLC) -march=bpf -filetype=obj -o $(OBJDIR)/redcanary-ebpf-programs
 
-all: $(OBJDIR) depends ebpf
+ebpf_verifier: check_headers
+	sed -r 's/SEC\(\"maps\/\w+\"\)/SEC("maps")/g' $(SOURCES) | \
+		$(CC) $(TARGET) $(CFLAGS) -emit-llvm $(INCLUDES) -c -x c - -o - | \
+		$(OPT) -O2 -mtriple=bpf-pc-linux | $(LLVM_DIS) | \
+		$(LLC) -march=bpf -filetype=obj -o $(OBJDIR)/ebpf-verifier-object
+
+all: $(OBJDIR) depends ebpf ebpf_verifier
 	@:
 
 .PHONY: all realclean clean ebpf depends check_headers
