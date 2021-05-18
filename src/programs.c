@@ -9,6 +9,8 @@
 #include "bpf_helpers.h"
 #include "types.h"
 
+#define MAX_TELEMETRY_STACK_ENTRIES 32
+
 typedef struct
 {
     void *iov_base; /* Starting address */
@@ -56,7 +58,7 @@ struct bpf_map_def SEC("maps/mount_events") mount_events = {
 
 struct bpf_map_def SEC("maps/cred_hash") cred_hash = {
     .type = BPF_MAP_TYPE_HASH,
-    .key_size = sizeof(u32),
+    .key_size = sizeof(u64),
     .value_size = sizeof(credentials_event_t),
     .max_entries = 256,
     .pinning = 0,
@@ -74,7 +76,7 @@ struct bpf_map_def SEC("maps/cred_events") cred_events = {
 
 struct bpf_map_def SEC("maps/pam_hash") pam_hash = {
     .type = BPF_MAP_TYPE_HASH,
-    .key_size = sizeof(u32),
+    .key_size = sizeof(u64),
     .value_size = sizeof(pam_event_t),
     .max_entries = 256,
     .pinning = 0,
@@ -99,7 +101,38 @@ struct bpf_map_def SEC("maps/rrs_events") rrs_events = {
     .namespace = "",
 };
 
-static __always_inline syscall_pattern_t ptrace_syscall_pattern(u32 request)
+/*
+    Telemetry may have multiple events associated with an single
+    syscall.
+*/
+struct bpf_map_def SEC("maps/telemetry_stack") telemetry_stack = {
+    .type = BPF_MAP_TYPE_PERCPU_ARRAY,
+    .key_size = sizeof(u32),
+    .value_size = sizeof(telemetry_event_t),
+    .max_entries = MAX_TELEMETRY_STACK_ENTRIES,
+    .pinning = 0,
+    .namespace = "",
+};
+
+struct bpf_map_def SEC("maps/telemetry_index") telemetry_index = {
+    .type = BPF_MAP_TYPE_PERCPU_ARRAY,
+    .key_size = sizeof(u32),
+    .value_size = sizeof(u32),
+    .max_entries = 1,
+    .pinning = 0,
+    .namespace = "",
+};
+
+struct bpf_map_def SEC("maps/telemetry_events") telemetry_events = {
+    .type = BPF_MAP_TYPE_PERF_EVENT_ARRAY,
+    .key_size = sizeof(u32),
+    .value_size = sizeof(u32),
+    .max_entries = 4096,
+    .pinning = 0,
+    .namespace = "",
+};
+
+static __always_inline syscall_pattern_type_t ptrace_syscall_pattern(u32 request)
 {
     switch (request)
     {
@@ -181,11 +214,30 @@ static __always_inline syscall_pattern_t ptrace_syscall_pattern(u32 request)
         .mono_ns = mono_ns,                    \
     }
 
+#define DECLARE_TELEMETRY_EVENT(SP)            \
+    u64 pid_tgid = bpf_get_current_pid_tgid(); \
+    u64 euid_egid = bpf_get_current_uid_gid(); \
+    u32 pid = pid_tgid >> 32;                  \
+    u32 tid = pid_tgid & 0xFFFFFFFF;           \
+    u32 euid = euid_egid >> 32;                \
+    u32 egid = euid_egid & 0xFFFFFFFF;         \
+    u64 mono_ns = bpf_ktime_get_ns();          \
+    telemetry_event_t ev = {0};                \
+    ev.done = FALSE;                           \
+    ev.u.pid = pid;                            \
+    ev.u.tid = tid;                            \
+    ev.u.ppid = -1;                            \
+    ev.u.luid = -1;                            \
+    ev.u.euid = euid;                          \
+    ev.u.egid = egid;                          \
+    ev.u.mono_ns = mono_ns;                    \
+    bpf_get_current_comm(ev.u.comm, sizeof(ev.u.comm));
+
 SEC("kprobe/sys_ptrace_write")
 int BPF_KPROBE_SYSCALL(kprobe__sys_ptrace_write,
                        u32 request, u32 target_pid, void *addr)
 {
-    syscall_pattern_t syscall_pattern = ptrace_syscall_pattern(request);
+    syscall_pattern_type_t syscall_pattern = ptrace_syscall_pattern(request);
     if (SP_IGNORE == syscall_pattern)
     {
         goto Exit;
@@ -212,7 +264,7 @@ SEC("kprobe/sys_ptrace")
 int BPF_KPROBE_SYSCALL(kprobe__sys_ptrace,
                        u32 request, u32 target_pid)
 {
-    syscall_pattern_t syscall_pattern = ptrace_syscall_pattern(request);
+    syscall_pattern_type_t syscall_pattern = ptrace_syscall_pattern(request);
     if (SP_IGNORE == syscall_pattern)
     {
         goto Exit;
@@ -627,13 +679,99 @@ Exit:
 SEC("uprobe/read_return_string")
 int uprobe__read_return_string(struct pt_regs *ctx)
 {
-    DECLARE_EVENT(read_return_string_t, SP_USERMODE);
+    DECLARE_EVENT(read_return_string_event_t, SP_USERMODE);
     bpf_probe_read(ev.value, sizeof(ev.value), (void *)PT_REGS_RC(ctx));
     bpf_perf_event_output(ctx,
                           &rrs_events,
                           bpf_get_smp_processor_id(),
                           &ev,
                           sizeof(ev));
+    return 0;
+}
+
+static __always_inline void clear_telemetry_events()
+{
+    // The key is always zero since the index is just a simple state counter
+    u32 key = 0;
+    u32 index = 0;
+    bpf_map_update_elem(&telemetry_index, &key, &index, BPF_ANY);
+}
+
+static __always_inline void push_telemetry_event(ptelemetry_event_t ev)
+{
+    u32 key = 0;
+    u32 *pcurrent_index = bpf_map_lookup_elem(&telemetry_index, &key);
+    if (NULL == pcurrent_index)
+    {
+        return;
+    }
+
+    bpf_map_update_elem(&telemetry_stack, pcurrent_index, ev, BPF_ANY);
+
+    // Update the index
+    (*pcurrent_index) += 1;
+    bpf_map_update_elem(&telemetry_index, &key, pcurrent_index, BPF_ANY);
+}
+
+static __always_inline void flush_telemetry_events(struct pt_regs *ctx)
+{
+    u32 key = 0;
+    u32 *pcurrent_index = bpf_map_lookup_elem(&telemetry_index, &key);
+    if (NULL == pcurrent_index)
+    {
+        return;
+    }
+
+#pragma unroll
+    for (u32 ii = 0; ii < MAX_TELEMETRY_STACK_ENTRIES && ii < *pcurrent_index; ++ii)
+    {
+        ptelemetry_event_t ev = bpf_map_lookup_elem(&telemetry_stack, &ii);
+        if (NULL == ev)
+        {
+            continue;
+        }
+
+        if (ii == (*pcurrent_index - 1))
+        {
+            ev->done = TRUE;
+        }
+
+        bpf_perf_event_output(ctx,
+                              &telemetry_events,
+                              bpf_get_smp_processor_id(),
+                              ev,
+                              sizeof(*ev));
+    }
+
+    clear_telemetry_events();
+}
+
+SEC("kprobe/sys_execve")
+int kprobe__sys_execve(struct pt_regs *__ctx)
+{
+    struct pt_regs* ctx = NULL;
+    bpf_probe_read(&ctx, sizeof(ctx), (void *)&PT_REGS_PARM1(__ctx));
+    DECLARE_TELEMETRY_EVENT(SP_EXECVE);
+
+    push_telemetry_event(&ev);
+    return 0;
+}
+
+SEC("kretprobe/sys_execve")
+int kretprobe__sys_execve(struct pt_regs *__ctx)
+{
+    struct pt_regs ctx = {};
+    bpf_probe_read(&ctx, sizeof(ctx), (void *)PT_REGS_PARM1(__ctx));
+
+    if (0 == PT_REGS_RC(&ctx))
+    {
+        flush_telemetry_events(__ctx);
+    }
+    else
+    {
+        clear_telemetry_events();
+    }
+
     return 0;
 }
 

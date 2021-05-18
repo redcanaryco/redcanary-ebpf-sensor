@@ -4,6 +4,8 @@
 
 #include <linux/bpf.h>
 
+#define BPF_MAP_TYPE_PERCPU_ARRAY 6
+
 #define __BPF_EXT_FUNC_MAPPER(FN)           \
     FN(unspec),                             \
         FN(map_lookup_elem),                \

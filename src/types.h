@@ -5,6 +5,8 @@
 #include <linux/types.h>
 
 #define MAX_ADDRESSES 16
+#define TRUE 1
+#define FALSE 0
 
 typedef enum
 {
@@ -46,14 +48,31 @@ typedef enum
     SP_SETREGID,
     SP_SETRESUID,
     SP_SETRESGID,
-} syscall_pattern_t;
+    SP_EXIT,
+    SP_EXITGROUP,
+    SP_UNSHARE,
+    SP_CLONE,
+    SP_FORK,
+    SP_VFORK,
+    SP_EXECVE,
+    SP_EXECVEAT,
+} syscall_pattern_type_t;
+
+typedef enum
+{
+    AI_EXE_PATH,
+    AI_PATH,
+    AI_COMMAND_LINE,
+    AI_CURRNET_WORKING_DIRECTORY,
+    AI_FILE_INFO,
+} additional_info_type_t;
 
 #define COMMON_FIELDS \
     u32 pid;          \
     u32 tid;          \
     u64 mono_ns;      \
-    u32 __pad;        \
-    syscall_pattern_t syscall_pattern;
+    u32 ppid;         \
+    syscall_pattern_type_t syscall_pattern;
 
 typedef struct
 {
@@ -142,4 +161,51 @@ typedef struct
 {
     COMMON_FIELDS;
     char value[384];
-} read_return_string_t;
+} read_return_string_event_t;
+
+typedef struct {
+    u64 inode;
+    u32 devmajor;
+    u32 devminor;
+    char value[368];
+} file_info_t;
+
+typedef struct
+{
+    u32 index;
+    additional_info_type_t type;
+    union {
+        file_info_t file_info;
+        char value[384];
+    } u;
+} additional_info_t;
+
+typedef struct
+{
+    u32 new_pid;
+    u32 fork_flags;
+} process_fork_info_t;
+
+typedef struct
+{
+
+} netconn_info_t;
+
+typedef struct
+{
+    u32 done;
+    union {
+        struct {
+            COMMON_FIELDS;
+            u32 luid;
+            u32 euid;
+            u32 egid;
+            u8 comm[16];
+            union {
+                process_fork_info_t fork_info;
+                netconn_info_t netconn_info;
+            } u;
+        };
+        additional_info_t additional_info;
+    } u;
+} telemetry_event_t, *ptelemetry_event_t;
