@@ -5,9 +5,10 @@ LLC = llc-6.0
 OPT = opt-6.0
 LLVM_DIS = llvm-dis-6.0
 
+CLAGS ?=
 SOURCES ?= src/programs.c
 
-CFLAGS = \
+CFLAGS += \
 	-D__KERNEL__ \
 	-D__BPF_TRACING__ \
 	-Wunused \
@@ -34,6 +35,7 @@ else ifeq ($(ARCH),x86_64)
 CFLAGS += -D__ASM_SYSREG_H
 KERNEL_ARCH_NAME = x86
 KERNEL_HEADER_VERSION ?= 4.4.0-98-generic
+TARGET = -target x86_64
 else
 $(error Unknown architecture $(ARCH))
 endif
@@ -75,18 +77,24 @@ depends:
 		linux-headers-4.4.0-98-generic linux-headers-4.10.0-14-generic \
 		make binutils curl coreutils
 
-ebpf: check_headers
-	$(CC) $(TARGET) $(CFLAGS) -emit-llvm -c $(SOURCES) $(INCLUDES) -o - | \
-		$(OPT) -O2 -mtriple=bpf-pc-linux | $(LLVM_DIS) | \
-		$(LLC) -march=bpf -filetype=obj -o $(OBJDIR)/redcanary-ebpf-programs
-
-ebpf_verifier: check_headers
+$(OBJDIR)/ebpf-verifier-%: check_headers
 	sed -r 's/SEC\(\"maps\/\w+\"\)/SEC("maps")/g' $(SOURCES) | \
 		$(CC) $(TARGET) $(CFLAGS) -emit-llvm $(INCLUDES) -c -x c - -o - | \
 		$(OPT) -O2 -mtriple=bpf-pc-linux | $(LLVM_DIS) | \
-		$(LLC) -march=bpf -filetype=obj -o $(OBJDIR)/ebpf-verifier-object
+		$(LLC) -march=bpf -filetype=obj -o $@
+
+$(OBJDIR)/%: check_headers
+	$(CC) $(TARGET) $(CFLAGS) -emit-llvm -c $(SOURCES) $(INCLUDES) -o - | \
+		$(OPT) -O2 -mtriple=bpf-pc-linux | $(LLVM_DIS) | \
+		$(LLC) -march=bpf -filetype=obj -o $@
+
+ebpf: $(OBJDIR)/redcanary-ebpf-programs
+	CFLAGS="-DCONFIG_SYSCALL_WRAPPER" $(MAKE) $(OBJDIR)/redcanary-ebpf-programs-wrapped
+
+ebpf_verifier: $(OBJDIR)/ebpf-verifier-object
+	CFLAGS="-DCONFIG_SYSCALL_WRAPPER" $(MAKE) $(OBJDIR)/ebpf-verifier-object-wrapped
 
 all: $(OBJDIR) depends ebpf ebpf_verifier
 	@:
 
-.PHONY: all realclean clean ebpf depends check_headers
+.PHONY: all realclean clean ebpf ebpf_verifier depends check_headers
