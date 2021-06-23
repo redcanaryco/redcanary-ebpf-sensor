@@ -5,6 +5,7 @@
 #include <linux/version.h>
 #include <linux/bpf.h>
 #include <linux/uio.h>
+#include <linux/fcntl.h>
 
 #include "bpf_helpers.h"
 #include "types.h"
@@ -214,7 +215,7 @@ static __always_inline syscall_pattern_type_t ptrace_syscall_pattern(u32 request
         .mono_ns = mono_ns,                    \
     }
 
-#define DECLARE_TELEMETRY_EVENT(SP)            \
+#define FILL_TELEMETRY_SYSCALL_EVENT(E, SP)    \
     u64 pid_tgid = bpf_get_current_pid_tgid(); \
     u64 euid_egid = bpf_get_current_uid_gid(); \
     u32 pid = pid_tgid >> 32;                  \
@@ -222,16 +223,16 @@ static __always_inline syscall_pattern_type_t ptrace_syscall_pattern(u32 request
     u32 euid = euid_egid >> 32;                \
     u32 egid = euid_egid & 0xFFFFFFFF;         \
     u64 mono_ns = bpf_ktime_get_ns();          \
-    telemetry_event_t ev = {0};                \
-    ev.done = FALSE;                           \
-    ev.u.pid = pid;                            \
-    ev.u.tid = tid;                            \
-    ev.u.ppid = -1;                            \
-    ev.u.luid = -1;                            \
-    ev.u.euid = euid;                          \
-    ev.u.egid = egid;                          \
-    ev.u.mono_ns = mono_ns;                    \
-    bpf_get_current_comm(ev.u.comm, sizeof(ev.u.comm));
+    E->done = FALSE;                           \
+    E->telemetry_type = TE_SYSCALL_INFO;       \
+    E->u.syscall_info.pid = pid;               \
+    E->u.syscall_info.tid = tid;               \
+    E->u.syscall_info.ppid = -1;               \
+    E->u.syscall_info.luid = -1;               \
+    E->u.syscall_info.euid = euid;             \
+    E->u.syscall_info.egid = egid;             \
+    E->u.syscall_info.mono_ns = mono_ns;       \
+    bpf_get_current_comm(E->u.syscall_info.comm, sizeof(E->u.syscall_info.comm));
 
 SEC("kprobe/sys_ptrace_write")
 int BPF_KPROBE_SYSCALL(kprobe__sys_ptrace_write,
@@ -247,7 +248,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_ptrace_write,
     {
         DECLARE_EVENT(write_process_memory_event_t, syscall_pattern);
         ev.target_pid = target_pid;
-        ev.addresses[0] = (u64) addr;
+        ev.addresses[0] = (u64)addr;
 
         bpf_perf_event_output(ctx,
                               &write_process_memory_events,
@@ -256,7 +257,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_ptrace_write,
                               sizeof(ev));
     }
 
-    Exit:
+Exit:
     return 0;
 }
 
@@ -288,7 +289,7 @@ Exit:
 
 SEC("kprobe/sys_process_vm_writev_5_5")
 int BPF_KPROBE_SYSCALL(kprobe__sys_process_vm_writev_5_5,
-        u32 target_pid, piovec_t liov, u32 liovcnt, piovec_t riov, u32 riovcnt)
+                       u32 target_pid, piovec_t liov, u32 liovcnt, piovec_t riov, u32 riovcnt)
 {
     DECLARE_EVENT(write_process_memory_event_t, SP_PROCESS_VM_WRITEV);
     ev.target_pid = target_pid;
@@ -297,7 +298,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_process_vm_writev_5_5,
     for (u32 ii = 0; ii < MAX_ADDRESSES && ii < riovcnt; ++ii, riov++)
     {
         iovec_t remote_iov;
-        bpf_probe_read_user(&remote_iov, sizeof(remote_iov), (const void *) riov);
+        bpf_probe_read_user(&remote_iov, sizeof(remote_iov), (const void *)riov);
         ev.addresses[ii] = (u64)remote_iov.iov_base;
     }
 
@@ -331,7 +332,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_mprotect,
                        void *addr, u64 len, u32 prot)
 {
     DECLARE_EVENT(change_memory_permission_event_t, SP_MPROTECT);
-    ev.address = (u64) addr;
+    ev.address = (u64)addr;
     ev.len = len;
     ev.prot = prot;
 
@@ -697,20 +698,26 @@ static __always_inline void clear_telemetry_events()
     bpf_map_update_elem(&telemetry_index, &key, &index, BPF_ANY);
 }
 
-static __always_inline void push_telemetry_event(ptelemetry_event_t ev)
+static __always_inline ptelemetry_event_t push_telemetry_event(u64 id)
 {
     u32 key = 0;
     u32 *pcurrent_index = bpf_map_lookup_elem(&telemetry_index, &key);
     if (NULL == pcurrent_index)
     {
-        return;
+        return NULL;
     }
 
-    bpf_map_update_elem(&telemetry_stack, pcurrent_index, ev, BPF_ANY);
+    ptelemetry_event_t ev = bpf_map_lookup_elem(&telemetry_stack, pcurrent_index);
+    if (ev)
+    {
+        ev->id = id;
+    }
 
     // Update the index
     (*pcurrent_index) += 1;
     bpf_map_update_elem(&telemetry_index, &key, pcurrent_index, BPF_ANY);
+
+    return ev;
 }
 
 static __always_inline void flush_telemetry_events(struct pt_regs *ctx)
@@ -746,19 +753,57 @@ static __always_inline void flush_telemetry_events(struct pt_regs *ctx)
     clear_telemetry_events();
 }
 
-SEC("kprobe/sys_execve")
-int kprobe__sys_execve(struct pt_regs *__ctx)
+static __always_inline int enter_exec(syscall_pattern_type_t sp, int fd,
+                                      const char __user *filename,
+                                      const char __user *const __user *argv,
+                                      const char __user *const __user *envp,
+                                      int flags)
 {
-    struct pt_regs* ctx = NULL;
-    bpf_probe_read(&ctx, sizeof(ctx), (void *)&PT_REGS_PARM1(__ctx));
-    DECLARE_TELEMETRY_EVENT(SP_EXECVE);
+    clear_telemetry_events();
 
-    push_telemetry_event(&ev);
+    u64 id = bpf_get_prandom_u32();
+    ptelemetry_event_t ev = push_telemetry_event(id);
+    if (NULL == ev)
+    {
+        goto Exit;
+    }
+
+    FILL_TELEMETRY_SYSCALL_EVENT(ev, sp);
+
+    ptelemetry_event_t filename_ev = push_telemetry_event(id);
+    if (NULL == ev)
+    {
+        goto Exit;
+    }
+
+    filename_ev->type = TE_EXE_PATH;
+    bpf_probe_read_str(&filename_ev->u.value, sizeof(filename_ev->u.value), filename);
+
+Exit:
     return 0;
 }
 
-SEC("kretprobe/sys_execve")
-int kretprobe__sys_execve(struct pt_regs *__ctx)
+SEC("kprobe/sys_execveat")
+int BPF_KPROBE_SYSCALL(kprobe__sys_execveat,
+                       int fd, const char __user *filename,
+                       const char __user *const __user *argv,
+                       const char __user *const __user *envp,
+                       int flags)
+{
+    return enter_exec(SP_EXECVEAT, fd, filename, argv, envp, flags);
+}
+
+SEC("kprobe/sys_execve")
+int BPF_KPROBE_SYSCALL(kprobe__sys_execve,
+                       const char __user *filename,
+                       const char __user *const __user *argv,
+                       const char __user *const __user *envp)
+{
+
+    return enter_exec(SP_EXECVE, AT_FDCWD, filename, argv, envp, 0);
+}
+
+static __always_inline int exit_exec(struct pt_regs *__ctx)
 {
     struct pt_regs ctx = {};
     bpf_probe_read(&ctx, sizeof(ctx), (void *)PT_REGS_PARM1(__ctx));
@@ -773,6 +818,18 @@ int kretprobe__sys_execve(struct pt_regs *__ctx)
     }
 
     return 0;
+}
+
+SEC("kretprobe/ret_sys_execve")
+int kretprobe__ret_sys_execve(struct pt_regs *ctx)
+{
+    return exit_exec(ctx);
+}
+
+SEC("kretprobe/ret_sys_execveat")
+int kretprobe__ret_sys_execveat(struct pt_regs *ctx)
+{
+    return exit_exec(ctx);
 }
 
 char _license[] SEC("license") = "GPL";

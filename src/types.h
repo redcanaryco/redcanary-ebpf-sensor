@@ -60,12 +60,13 @@ typedef enum
 
 typedef enum
 {
-    AI_EXE_PATH,
-    AI_PATH,
-    AI_COMMAND_LINE,
-    AI_CURRNET_WORKING_DIRECTORY,
-    AI_FILE_INFO,
-} additional_info_type_t;
+    TE_SYSCALL_INFO,
+    TE_EXE_PATH,
+    TE_PATH,
+    TE_COMMAND_LINE,
+    TE_CURRNET_WORKING_DIRECTORY,
+    TE_FILE_INFO,
+} telemetry_event_type_t;
 
 #define COMMON_FIELDS \
     u32 pid;          \
@@ -172,16 +173,6 @@ typedef struct {
 
 typedef struct
 {
-    u32 index;
-    additional_info_type_t type;
-    union {
-        file_info_t file_info;
-        char value[384];
-    } u;
-} additional_info_t;
-
-typedef struct
-{
     u32 new_pid;
     u32 fork_flags;
 } process_fork_info_t;
@@ -191,21 +182,27 @@ typedef struct
 
 } netconn_info_t;
 
+typedef struct 
+{
+    COMMON_FIELDS;
+    u32 luid;
+    u32 euid;
+    u32 egid;
+    u8 comm[16];
+    union {
+        process_fork_info_t fork_info;
+        netconn_info_t netconn_info;
+    } u;
+} syscall_info_t, *psyscall_info_t;
+
 typedef struct
 {
+    u64 id;
     u32 done;
+    telemetry_event_type_t telemetry_type;
     union {
-        struct {
-            COMMON_FIELDS;
-            u32 luid;
-            u32 euid;
-            u32 egid;
-            u8 comm[16];
-            union {
-                process_fork_info_t fork_info;
-                netconn_info_t netconn_info;
-            } u;
-        };
-        additional_info_t additional_info;
+        syscall_info_t syscall_info; 
+        file_info_t file_info;
+        char value[384];
     } u;
 } telemetry_event_t, *ptelemetry_event_t;

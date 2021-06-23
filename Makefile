@@ -1,3 +1,5 @@
+SHELL=/bin/bash -o pipefail
+
 ARCH ?= x86_64
 OBJDIR ?= build/$(ARCH)
 CC = clang-6.0
