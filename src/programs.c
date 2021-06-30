@@ -133,6 +133,15 @@ struct bpf_map_def SEC("maps/telemetry_events") telemetry_events = {
     .namespace = "",
 };
 
+struct bpf_map_def SEC("maps/telemetry_ids") telemetry_ids = {
+    .type = BPF_MAP_TYPE_HASH,
+    .key_size = sizeof(u32),
+    .value_size = sizeof(u64),
+    .max_entries = 1024,
+    .pinning = 0,
+    .namespace = "",
+};
+
 static __always_inline syscall_pattern_type_t ptrace_syscall_pattern(u32 request)
 {
     switch (request)
@@ -233,6 +242,9 @@ static __always_inline syscall_pattern_type_t ptrace_syscall_pattern(u32 request
     E->u.syscall_info.egid = egid;             \
     E->u.syscall_info.mono_ns = mono_ns;       \
     bpf_get_current_comm(E->u.syscall_info.comm, sizeof(E->u.syscall_info.comm));
+
+#define FILL_TELEMETRY_SYSCALL_RET(E, SP) \
+
 
 SEC("kprobe/sys_ptrace_write")
 int BPF_KPROBE_SYSCALL(kprobe__sys_ptrace_write,
@@ -698,27 +710,46 @@ static __always_inline void clear_telemetry_events()
     bpf_map_update_elem(&telemetry_index, &key, &index, BPF_ANY);
 }
 
-static __always_inline ptelemetry_event_t push_telemetry_event(u64 id)
+static __always_inline int push_telemetry_event(ptelemetry_event_t ev)
 {
     u32 key = 0;
     u32 *pcurrent_index = bpf_map_lookup_elem(&telemetry_index, &key);
     if (NULL == pcurrent_index)
     {
-        return NULL;
+        return -1;
     }
 
-    ptelemetry_event_t ev = bpf_map_lookup_elem(&telemetry_stack, pcurrent_index);
-    if (ev)
+    int ret = bpf_map_update_elem(&telemetry_stack, pcurrent_index, ev, BPF_ANY);
+    if (ret < 0)
     {
-        ev->id = id;
+        return ret;
     }
 
     // Update the index
     (*pcurrent_index) += 1;
-    bpf_map_update_elem(&telemetry_index, &key, pcurrent_index, BPF_ANY);
+    ret = bpf_map_update_elem(&telemetry_index, &key, pcurrent_index, BPF_ANY);
+    if (ret < 0 )
+    {
+        return ret;
+    }
 
-    return ev;
+    return 0;
 }
+
+#define FLUSH_LOOP                                                          \
+    if (ii < *pcurrent_index) {                                             \
+        ptelemetry_event_t ev = bpf_map_lookup_elem(&telemetry_stack, &ii); \
+        if (ev) {                                                           \
+            bpf_perf_event_output(ctx,                                      \
+                &telemetry_events,                                          \
+                bpf_get_smp_processor_id(),                                 \
+                ev,                                                         \
+                sizeof(*ev)                                                 \
+            );                                                              \
+        }                                                                   \
+        ii++;                                                               \
+    }
+
 
 static __always_inline void flush_telemetry_events(struct pt_regs *ctx)
 {
@@ -729,55 +760,137 @@ static __always_inline void flush_telemetry_events(struct pt_regs *ctx)
         return;
     }
 
-#pragma unroll
-    for (u32 ii = 0; ii < MAX_TELEMETRY_STACK_ENTRIES && ii < *pcurrent_index; ++ii)
-    {
-        ptelemetry_event_t ev = bpf_map_lookup_elem(&telemetry_stack, &ii);
-        if (NULL == ev)
-        {
-            continue;
-        }
-
-        if (ii == (*pcurrent_index - 1))
-        {
-            ev->done = TRUE;
-        }
-
-        bpf_perf_event_output(ctx,
-                              &telemetry_events,
-                              bpf_get_smp_processor_id(),
-                              ev,
-                              sizeof(*ev));
-    }
-
+    u32 ii = 0;
+    FLUSH_LOOP
+    FLUSH_LOOP
+    FLUSH_LOOP
+    FLUSH_LOOP
+    FLUSH_LOOP
+    FLUSH_LOOP
+    FLUSH_LOOP
+    FLUSH_LOOP
+    FLUSH_LOOP
+    FLUSH_LOOP
+    FLUSH_LOOP
+    FLUSH_LOOP
+    FLUSH_LOOP
+    FLUSH_LOOP
+    FLUSH_LOOP
+    FLUSH_LOOP
+    FLUSH_LOOP
+    FLUSH_LOOP
+    FLUSH_LOOP
+    FLUSH_LOOP
+    FLUSH_LOOP
+    FLUSH_LOOP
+    FLUSH_LOOP
+    FLUSH_LOOP
+    FLUSH_LOOP
+    FLUSH_LOOP
+    FLUSH_LOOP
+    FLUSH_LOOP
+    FLUSH_LOOP
+    FLUSH_LOOP
+    FLUSH_LOOP
+    FLUSH_LOOP
+    FLUSH_LOOP
     clear_telemetry_events();
 }
+
+#define READ_LOOP(PTR, T)                                                       \
+    ev->id = id;                                                                \
+    ev->done = FALSE;                                                           \
+    ev->telemetry_type = T;                                                     \
+    ev->u.v.truncated = FALSE;                                                  \
+    ptr = 0;                                                                    \
+    ret = bpf_probe_read(&ptr, sizeof(u64), (void*) PTR + (ii * sizeof(u64)));  \
+    if (ret < 0)                                                                \
+    {                                                                           \
+        goto Exit;                                                              \
+    }                                                                           \
+    else if (ptr == 0)                                                          \
+    {                                                                           \
+        goto Exit;                                                              \
+    }                                                                           \
+    else                                                                        \
+    {                                                                           \
+        count = bpf_probe_read_str(&ev->u.v.value, VALUE_SIZE, (void *) ptr);   \
+        if (count == VALUE_SIZE) {                                              \
+            ev->u.v.truncated = TRUE;                                           \
+        }                                                                       \
+    }                                                                           \
+    if (push_telemetry_event(ev) < 0)                                           \
+    {                                                                           \
+        goto Exit;                                                              \
+    }                                                                           \
+    ii++;
+
 
 static __always_inline int enter_exec(syscall_pattern_type_t sp, int fd,
                                       const char __user *filename,
                                       const char __user *const __user *argv,
                                       const char __user *const __user *envp,
-                                      int flags)
+                                      int flags, struct pt_regs *ctx)
 {
-    clear_telemetry_events();
-
     u64 id = bpf_get_prandom_u32();
-    ptelemetry_event_t ev = push_telemetry_event(id);
-    if (NULL == ev)
-    {
-        goto Exit;
-    }
+    ptelemetry_event_t ev = &(telemetry_event_t) {
+            .id = id,
+            .done = FALSE,
+            .telemetry_type = 0,
+            .u.v = {
+                .value[0] = '\0',
+                .truncated = FALSE,
+            },
+    };
 
     FILL_TELEMETRY_SYSCALL_EVENT(ev, sp);
+    bpf_map_update_elem(&telemetry_ids, &pid, &id, BPF_ANY);
 
-    ptelemetry_event_t filename_ev = push_telemetry_event(id);
-    if (NULL == ev)
+    if (push_telemetry_event(ev) < 0)
     {
         goto Exit;
     }
 
-    filename_ev->type = TE_EXE_PATH;
-    bpf_probe_read_str(&filename_ev->u.value, sizeof(filename_ev->u.value), filename);
+    // explicit null check to satisfy the verifier
+    if (filename)
+    {
+        ev->id = id;
+        ev->done = FALSE;
+        ev->telemetry_type = TE_EXE_PATH;
+        ev->u.v.truncated = FALSE;
+        long count = 0;
+        count = bpf_probe_read_str(&ev->u.v.value, VALUE_SIZE, (void*) filename);
+        if (count == VALUE_SIZE) {
+            ev->u.v.truncated = TRUE;
+        }
+        push_telemetry_event(ev);
+    }
+    else
+        goto Exit;
+
+    // get command line stuff
+    long count = 0;
+    u32 ii = 0;
+    u64 ptr = 0;
+    u64 ret = 0;
+    READ_LOOP(argv, TE_COMMAND_LINE)
+    READ_LOOP(argv, TE_COMMAND_LINE)
+    READ_LOOP(argv, TE_COMMAND_LINE)
+    READ_LOOP(argv, TE_COMMAND_LINE)
+    READ_LOOP(argv, TE_COMMAND_LINE)
+    READ_LOOP(argv, TE_COMMAND_LINE)
+    READ_LOOP(argv, TE_COMMAND_LINE)
+    READ_LOOP(argv, TE_COMMAND_LINE)
+
+    // get env stuff
+    count = 0;
+    ii = 0;
+    ptr = 0;
+    ret = 0;
+    READ_LOOP(envp, TE_ENVIRONMENT)
+    READ_LOOP(envp, TE_ENVIRONMENT)
+    READ_LOOP(envp, TE_ENVIRONMENT)
+    READ_LOOP(envp, TE_ENVIRONMENT)
 
 Exit:
     return 0;
@@ -790,7 +903,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execveat,
                        const char __user *const __user *envp,
                        int flags)
 {
-    return enter_exec(SP_EXECVEAT, fd, filename, argv, envp, flags);
+    return enter_exec(SP_EXECVEAT, fd, filename, argv, envp, flags, ctx);
 }
 
 SEC("kprobe/sys_execve")
@@ -800,22 +913,33 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execve,
                        const char __user *const __user *envp)
 {
 
-    return enter_exec(SP_EXECVE, AT_FDCWD, filename, argv, envp, 0);
+    return enter_exec(SP_EXECVE, AT_FDCWD, filename, argv, envp, 0, ctx);
 }
 
 static __always_inline int exit_exec(struct pt_regs *__ctx)
 {
-    struct pt_regs ctx = {};
-    bpf_probe_read(&ctx, sizeof(ctx), (void *)PT_REGS_PARM1(__ctx));
-
-    if (0 == PT_REGS_RC(&ctx))
-    {
-        flush_telemetry_events(__ctx);
-    }
+    ptelemetry_event_t ev = &(telemetry_event_t) {
+            .id = 0,
+            .done = TRUE,
+            .telemetry_type = 0,
+            .u.v = {
+                    .value[0] = '\0',
+                    .truncated = FALSE,
+            },
+    };
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+    u32 pid = pid_tgid >> 32;
+    u64 *id = bpf_map_lookup_elem(&telemetry_ids, &pid);
+    if (id)
+        ev->id = *id;
     else
-    {
-        clear_telemetry_events();
-    }
+        goto Flush;
+    ev->telemetry_type = TE_RETCODE;
+    ev->u.retcode = (u32)PT_REGS_RC(__ctx);
+    push_telemetry_event(ev);
+
+Flush:
+    flush_telemetry_events(__ctx);
 
     return 0;
 }
@@ -830,6 +954,79 @@ SEC("kretprobe/ret_sys_execveat")
 int kretprobe__ret_sys_execveat(struct pt_regs *ctx)
 {
     return exit_exec(ctx);
+}
+
+SEC("kprobe/sys_clone")
+int kprobe__sys_clone(struct pt_regs *ctx)
+{
+    return 0;
+}
+
+SEC("kprobe/sys_fork")
+int kprobe__sys_fork(struct pt_regs *ctx)
+{
+    return 0;
+}
+
+SEC("kprobe/sys_vfork")
+int kprobe__sys_vfork(struct pt_regs *ctx)
+{
+    return 0;
+}
+
+SEC("kretprobe/ret_sys_clone")
+int kretprobe__ret_sys_clone(struct pt_regs *ctx)
+{
+    return 0;
+}
+
+SEC("kretprobe/ret_sys_fork")
+int kretprobe__ret_sys_fork(struct pt_regs *ctx)
+{
+    return 0;
+}
+
+SEC("kretprobe/ret_sys_vfork")
+int kretprobe__ret_sys_vfork(struct pt_regs *ctx)
+{
+    return 0;
+}
+
+SEC("kprobe/sys_unshare")
+int kprobe__sys_unshare(struct pt_regs *ctx)
+{
+    return 0;
+}
+
+SEC("kretprobe/ret_sys_unshare")
+int kretprobe__ret_sys_unshare(struct pt_regs *ctx)
+{
+    return 0;
+}
+
+
+SEC("kprobe/sys_exit")
+int kprobe__sys_exit(struct pt_regs *ctx)
+{
+    return 0;
+}
+
+SEC("kprobe/sys_exit_group")
+int kprobe__sys_exit_group(struct pt_regs *ctx)
+{
+    return 0;
+}
+
+SEC("kretprobe/ret_sys_exit")
+int kretprobe__ret_sys_exit(struct pt_regs *ctx)
+{
+    return 0;
+}
+
+SEC("kretprobe/ret_sys_exit_group")
+int kretprobe__ret_sys_exit_group(struct pt_regs *ctx)
+{
+    return 0;
 }
 
 char _license[] SEC("license") = "GPL";
