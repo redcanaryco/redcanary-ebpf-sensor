@@ -142,6 +142,15 @@ struct bpf_map_def SEC("maps/telemetry_ids") telemetry_ids = {
     .namespace = "",
 };
 
+struct bpf_map_def SEC("maps/offsets") offsets = {
+        .type = BPF_MAP_TYPE_HASH,
+        .key_size = sizeof(u64),
+        .value_size = sizeof(u64),
+        .max_entries = 1024,
+        .pinning = 0,
+        .namespace = "",
+};
+
 static __always_inline syscall_pattern_type_t ptrace_syscall_pattern(u32 request)
 {
     switch (request)
@@ -830,20 +839,25 @@ static __always_inline int enter_exec(syscall_pattern_type_t sp, int fd,
                                       const char __user *filename,
                                       const char __user *const __user *argv,
                                       const char __user *const __user *envp,
-                                      int flags, struct pt_regs *ctx)
+                                      int flags, struct pt_regs *ctx, u32 ppid,
+                                      u32 luid)
 {
-    u64 id = bpf_get_prandom_u32();
-    ptelemetry_event_t ev = &(telemetry_event_t) {
-            .id = id,
-            .done = FALSE,
-            .telemetry_type = 0,
-            .u.v = {
-                .value[0] = '\0',
-                .truncated = FALSE,
-            },
-    };
+    u64 id = 0; // reuse ID to save space
+    ptelemetry_event_t ev = bpf_map_lookup_elem(&telemetry_stack, (u32 *) &id);
+    if (!ev) // this should never happen, but the verifier complains otherwise
+    {
+        goto Exit;
+    }
+    id = bpf_get_prandom_u32();
+    ev->id = id;
+    ev->done = FALSE;
+    ev->telemetry_type = 0,
+    ev->u.v.value[0] = '\0';
+    ev->u.v.truncated = FALSE;
 
     FILL_TELEMETRY_SYSCALL_EVENT(ev, sp);
+    ev->u.syscall_info.ppid = ppid;
+    ev->u.syscall_info.luid = luid;
     bpf_map_update_elem(&telemetry_ids, &pid, &id, BPF_ANY);
 
     if (push_telemetry_event(ev) < 0)
@@ -876,11 +890,6 @@ static __always_inline int enter_exec(syscall_pattern_type_t sp, int fd,
     READ_LOOP(argv, TE_COMMAND_LINE)
     READ_LOOP(argv, TE_COMMAND_LINE)
     READ_LOOP(argv, TE_COMMAND_LINE)
-    READ_LOOP(argv, TE_COMMAND_LINE)
-    READ_LOOP(argv, TE_COMMAND_LINE)
-    READ_LOOP(argv, TE_COMMAND_LINE)
-    READ_LOOP(argv, TE_COMMAND_LINE)
-    READ_LOOP(argv, TE_COMMAND_LINE)
 
     // get env stuff
     count = 0;
@@ -890,11 +899,65 @@ static __always_inline int enter_exec(syscall_pattern_type_t sp, int fd,
     READ_LOOP(envp, TE_ENVIRONMENT)
     READ_LOOP(envp, TE_ENVIRONMENT)
     READ_LOOP(envp, TE_ENVIRONMENT)
-    READ_LOOP(envp, TE_ENVIRONMENT)
 
 Exit:
     return 0;
 }
+
+SEC("kprobe/sys_execveat_4_8")
+int BPF_KPROBE_SYSCALL(kprobe__sys_execveat_4_8,
+                       int fd, const char __user *filename,
+                       const char __user *const __user *argv,
+                       const char __user *const __user *envp,
+                       int flags)
+{
+    u32 ppid = -1;
+    u32 luid = -1;
+    return enter_exec(SP_EXECVEAT, fd, filename, argv, envp, flags, ctx, ppid, luid);
+}
+
+SEC("kprobe/sys_execve_4_8")
+int BPF_KPROBE_SYSCALL(kprobe__sys_execve_4_8,
+                       const char __user *filename,
+                       const char __user *const __user *argv,
+                       const char __user *const __user *envp)
+{
+    u32 ppid = -1;
+    u32 luid = -1;
+
+    // if "loaded" doesn't exist in the map, we get NULL back and won't read from offsets
+    // when offsets are loaded into the offsets map, "loaded" should be given any value
+    u64 loaded_str = 0xec6642829d632573; // CRC64 of "loaded"
+    u64 *loaded = bpf_map_lookup_elem(&offsets, &loaded_str);
+
+    // since we're using offsets to read from the structs, we don't need to bother with
+    // understanding their structure
+    void *ts = (void *)bpf_get_current_task();
+    void *pts = NULL;
+    if (ts && loaded) {
+        // CRC64 of task_struct->real_parent
+        u64 real_parent_offset_name = 0x940b92aaad4c5437;
+        // CRC64 of task_struct->pid
+        u64 ppid_offset_name = 0xc713ffcffcd1cc3c;
+        // CRC64 of task_struct->loginuid
+        u64 luid_offset_name = 0x9951a3e4f7757060;
+        u64 *real_parent_offset = bpf_map_lookup_elem(&offsets, &real_parent_offset_name);
+        u64 *ppid_offset = bpf_map_lookup_elem(&offsets, &ppid_offset_name);
+        u64 *luid_offset = bpf_map_lookup_elem(&offsets, &luid_offset_name);
+
+        if (real_parent_offset && ppid_offset && luid_offset)
+        {
+            bpf_probe_read(&pts, sizeof(pts), ts + *real_parent_offset);
+            if (pts)
+            {
+                bpf_probe_read(&ppid, sizeof(ppid), pts + *ppid_offset);
+            }
+            bpf_probe_read(&luid, sizeof(luid), ts + *luid_offset);
+        }
+    }
+    return enter_exec(SP_EXECVE, AT_FDCWD, filename, argv, envp, 0, ctx, ppid, luid);
+}
+
 
 SEC("kprobe/sys_execveat")
 int BPF_KPROBE_SYSCALL(kprobe__sys_execveat,
@@ -903,7 +966,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execveat,
                        const char __user *const __user *envp,
                        int flags)
 {
-    return enter_exec(SP_EXECVEAT, fd, filename, argv, envp, flags, ctx);
+    return enter_exec(SP_EXECVEAT, fd, filename, argv, envp, flags, ctx, -1, -1);
 }
 
 SEC("kprobe/sys_execve")
@@ -912,9 +975,9 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execve,
                        const char __user *const __user *argv,
                        const char __user *const __user *envp)
 {
-
-    return enter_exec(SP_EXECVE, AT_FDCWD, filename, argv, envp, 0, ctx);
+    return enter_exec(SP_EXECVEAT, AT_FDCWD, filename, argv, envp, 0, ctx, -1, -1);
 }
+
 
 static __always_inline int exit_exec(struct pt_regs *__ctx)
 {

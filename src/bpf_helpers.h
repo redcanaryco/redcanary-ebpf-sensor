@@ -229,6 +229,8 @@ static int (*bpf_probe_read_user_str)(void *dst, __u32 size, const void *unsafe_
     (void *)BPF_EXT_FUNC_probe_read_user_str;
 static int (*bpf_probe_read_kernel_str)(void *dst, __u32 size, const void *unsafe_ptr) =
     (void *)BPF_EXT_FUNC_probe_read_kernel_str;
+static unsigned long long (*bpf_get_current_task)(void) =
+    (void *)BPF_EXT_FUNC_get_current_task;
 
 /* llvm builtin functions that eBPF C program may use to
  * emit BPF_LD_ABS and BPF_LD_IND instructions
