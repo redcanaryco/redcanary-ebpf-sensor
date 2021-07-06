@@ -3,14 +3,14 @@
 #include <linux/kconfig.h>
 #include <linux/ptrace.h>
 #include <linux/version.h>
-#include <linux/bpf.h>
+#include <uapi/linux/bpf.h>
 #include <linux/uio.h>
 #include <linux/fcntl.h>
 
 #include "bpf_helpers.h"
 #include "types.h"
 
-#define MAX_TELEMETRY_STACK_ENTRIES 32
+#define MAX_TELEMETRY_STACK_ENTRIES 128
 
 typedef struct
 {
@@ -140,6 +140,15 @@ struct bpf_map_def SEC("maps/telemetry_ids") telemetry_ids = {
     .max_entries = 1024,
     .pinning = 0,
     .namespace = "",
+};
+
+struct bpf_map_def SEC("maps/tail_call_table") tail_call_table  = {
+        .type = BPF_MAP_TYPE_PROG_ARRAY,
+        .key_size = sizeof(u32),
+        .value_size = sizeof(u32),
+        .max_entries = 32,
+        .pinning = 0,
+        .namespace = "",
 };
 
 struct bpf_map_def SEC("maps/offsets") offsets = {
@@ -719,35 +728,36 @@ static __always_inline void clear_telemetry_events()
     bpf_map_update_elem(&telemetry_index, &key, &index, BPF_ANY);
 }
 
-static __always_inline int push_telemetry_event(ptelemetry_event_t ev)
+static __always_inline ptelemetry_event_t push_telemetry_event(ptelemetry_event_t ev)
 {
     u32 key = 0;
     u32 *pcurrent_index = bpf_map_lookup_elem(&telemetry_index, &key);
     if (NULL == pcurrent_index)
     {
-        return -1;
+        return 0;
     }
 
     int ret = bpf_map_update_elem(&telemetry_stack, pcurrent_index, ev, BPF_ANY);
-    if (ret < 0)
-    {
-        return ret;
-    }
+    //if (ret < 0)
+    //{
+    //    return ret;
+    //}
 
     // Update the index
     (*pcurrent_index) += 1;
     ret = bpf_map_update_elem(&telemetry_index, &key, pcurrent_index, BPF_ANY);
     if (ret < 0 )
     {
-        return ret;
+        return 0;
     }
 
-    return 0;
+    return bpf_map_lookup_elem(&telemetry_stack, pcurrent_index);
+
 }
 
 #define FLUSH_LOOP                                                          \
     if (ii < *pcurrent_index) {                                             \
-        ptelemetry_event_t ev = bpf_map_lookup_elem(&telemetry_stack, &ii); \
+        ev = bpf_map_lookup_elem(&telemetry_stack, &ii); \
         if (ev) {                                                           \
             bpf_perf_event_output(ctx,                                      \
                 &telemetry_events,                                          \
@@ -755,8 +765,11 @@ static __always_inline int push_telemetry_event(ptelemetry_event_t ev)
                 ev,                                                         \
                 sizeof(*ev)                                                 \
             );                                                              \
+            ii++;                                                           \
         }                                                                   \
-        ii++;                                                               \
+        else                                                                \
+        {                                                                   \
+        }\
     }
 
 
@@ -770,6 +783,7 @@ static __always_inline void flush_telemetry_events(struct pt_regs *ctx)
     }
 
     u32 ii = 0;
+    ptelemetry_event_t ev = NULL;
     FLUSH_LOOP
     FLUSH_LOOP
     FLUSH_LOOP
@@ -803,7 +817,7 @@ static __always_inline void flush_telemetry_events(struct pt_regs *ctx)
     FLUSH_LOOP
     FLUSH_LOOP
     FLUSH_LOOP
-    clear_telemetry_events();
+
 }
 
 #define READ_LOOP(PTR, T)                                                       \
@@ -815,11 +829,11 @@ static __always_inline void flush_telemetry_events(struct pt_regs *ctx)
     ret = bpf_probe_read(&ptr, sizeof(u64), (void*) PTR + (ii * sizeof(u64)));  \
     if (ret < 0)                                                                \
     {                                                                           \
-        goto Exit;                                                              \
+        goto Next;                                                              \
     }                                                                           \
     else if (ptr == 0)                                                          \
     {                                                                           \
-        goto Exit;                                                              \
+        goto Next;                                                              \
     }                                                                           \
     else                                                                        \
     {                                                                           \
@@ -828,11 +842,12 @@ static __always_inline void flush_telemetry_events(struct pt_regs *ctx)
             ev->u.v.truncated = TRUE;                                           \
         }                                                                       \
     }                                                                           \
-    if (push_telemetry_event(ev) < 0)                                           \
+    if (!(ev = push_telemetry_event(ev)))                                       \
     {                                                                           \
         goto Exit;                                                              \
     }                                                                           \
     ii++;
+
 
 
 static __always_inline int enter_exec(syscall_pattern_type_t sp, int fd,
@@ -858,12 +873,13 @@ static __always_inline int enter_exec(syscall_pattern_type_t sp, int fd,
     FILL_TELEMETRY_SYSCALL_EVENT(ev, sp);
     ev->u.syscall_info.ppid = ppid;
     ev->u.syscall_info.luid = luid;
-    bpf_map_update_elem(&telemetry_ids, &pid, &id, BPF_ANY);
-
-    if (push_telemetry_event(ev) < 0)
+    if (!(ev = push_telemetry_event(ev)))
     {
         goto Exit;
     }
+
+    bpf_map_update_elem(&telemetry_ids, &pid, &id, BPF_ANY);
+
 
     // explicit null check to satisfy the verifier
     if (filename)
@@ -882,7 +898,44 @@ static __always_inline int enter_exec(syscall_pattern_type_t sp, int fd,
     else
         goto Exit;
 
-    // get command line stuff
+    bpf_tail_call(ctx, &tail_call_table, 0);
+
+    bpf_printk("fallthrough\n");
+
+Exit:
+    bpf_printk("exit\n");
+    return 0;
+}
+
+
+
+SEC("kprobe/sys_exec_tc_args")
+int BPF_KPROBE_SYSCALL(kprobe__sys_exec_tc_args,
+                       const char __user *filename,
+                       const char __user *const __user *argv,
+                       const char __user *const __user *envp)
+{
+    bpf_printk("tc_argv\n");
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+    u32 pid = pid_tgid >> 32;
+    u64 *idp = bpf_map_lookup_elem(&telemetry_ids, &pid);
+    u64 id = 0;
+    u32 *pcurrent_index = bpf_map_lookup_elem(&telemetry_index, &id);
+    if (!pcurrent_index)
+    {
+        return 0;
+    }
+    ptelemetry_event_t ev = bpf_map_lookup_elem(&telemetry_stack, pcurrent_index);
+    if (!ev) // this should never happen, but the verifier complains otherwise
+    {
+        goto Exit;
+    }
+    if (idp)
+        id = *idp;
+    else
+        goto Exit;
+
+
     long count = 0;
     u32 ii = 0;
     u64 ptr = 0;
@@ -890,16 +943,79 @@ static __always_inline int enter_exec(syscall_pattern_type_t sp, int fd,
     READ_LOOP(argv, TE_COMMAND_LINE)
     READ_LOOP(argv, TE_COMMAND_LINE)
     READ_LOOP(argv, TE_COMMAND_LINE)
+    READ_LOOP(argv, TE_COMMAND_LINE)
+    READ_LOOP(argv, TE_COMMAND_LINE)
+    READ_LOOP(argv, TE_COMMAND_LINE)
+    READ_LOOP(argv, TE_COMMAND_LINE)
+    READ_LOOP(argv, TE_COMMAND_LINE)
+    READ_LOOP(argv, TE_COMMAND_LINE)
+    READ_LOOP(argv, TE_COMMAND_LINE)
+    READ_LOOP(argv, TE_COMMAND_LINE)
+    READ_LOOP(argv, TE_COMMAND_LINE)
+    READ_LOOP(argv, TE_COMMAND_LINE)
+    READ_LOOP(argv, TE_COMMAND_LINE)
+    READ_LOOP(argv, TE_COMMAND_LINE)
+    READ_LOOP(argv, TE_COMMAND_LINE)
 
-    // get env stuff
-    count = 0;
-    ii = 0;
-    ptr = 0;
-    ret = 0;
+    bpf_tail_call(ctx, &tail_call_table, 0);
+
+Next:
+    bpf_tail_call(ctx, &tail_call_table, 1);
+
+Exit:
+    return 0;
+}
+
+SEC("kprobe/sys_exec_tc_envp")
+int BPF_KPROBE_SYSCALL(kprobe__sys_exec_tc_envp,
+                       const char __user *filename,
+                       const char __user *const __user *argv,
+                       const char __user *const __user *envp)
+{
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+    u32 pid = pid_tgid >> 32;
+    u64 *idp = bpf_map_lookup_elem(&telemetry_ids, &pid);
+    u64 id = 0;
+    u32 *pcurrent_index = bpf_map_lookup_elem(&telemetry_index, &id);
+    if (!pcurrent_index)
+    {
+    return 0;
+    }
+    ptelemetry_event_t ev = bpf_map_lookup_elem(&telemetry_stack, pcurrent_index);
+    if (!ev) // this should never happen, but the verifier complains otherwise
+    {
+        goto Exit;
+    }
+    if (idp)
+        id = *idp;
+    else
+        goto Exit;
+
+
+    long count = 0;
+    u32 ii = 0;
+    u64 ptr = 0;
+    u64 ret = 0;
+    READ_LOOP(envp, TE_ENVIRONMENT)
+    READ_LOOP(envp, TE_ENVIRONMENT)
+    READ_LOOP(envp, TE_ENVIRONMENT)
+    READ_LOOP(envp, TE_ENVIRONMENT)
+    READ_LOOP(envp, TE_ENVIRONMENT)
+    READ_LOOP(envp, TE_ENVIRONMENT)
+    READ_LOOP(envp, TE_ENVIRONMENT)
+    READ_LOOP(envp, TE_ENVIRONMENT)
+    READ_LOOP(envp, TE_ENVIRONMENT)
+    READ_LOOP(envp, TE_ENVIRONMENT)
+    READ_LOOP(envp, TE_ENVIRONMENT)
+    READ_LOOP(envp, TE_ENVIRONMENT)
+    READ_LOOP(envp, TE_ENVIRONMENT)
     READ_LOOP(envp, TE_ENVIRONMENT)
     READ_LOOP(envp, TE_ENVIRONMENT)
     READ_LOOP(envp, TE_ENVIRONMENT)
 
+    bpf_tail_call(ctx, &tail_call_table, 1);
+
+Next:
 Exit:
     return 0;
 }
@@ -981,28 +1097,45 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execve,
 
 static __always_inline int exit_exec(struct pt_regs *__ctx)
 {
-    ptelemetry_event_t ev = &(telemetry_event_t) {
-            .id = 0,
-            .done = TRUE,
-            .telemetry_type = 0,
-            .u.v = {
-                    .value[0] = '\0',
-                    .truncated = FALSE,
-            },
-    };
     u64 pid_tgid = bpf_get_current_pid_tgid();
     u32 pid = pid_tgid >> 32;
     u64 *id = bpf_map_lookup_elem(&telemetry_ids, &pid);
     if (id)
+    {
+
+        ptelemetry_event_t ev = &(telemetry_event_t) {
+                .id = 0,
+                .done = TRUE,
+                .telemetry_type = 0,
+                .u.v = {
+                        .value[0] = '\0',
+                        .truncated = FALSE,
+                },
+        };
         ev->id = *id;
+        bpf_map_delete_elem(&telemetry_ids, &pid);
+
+        ev->telemetry_type = TE_RETCODE;
+        ev->u.retcode = (u32)PT_REGS_RC(__ctx);
+        if (!(ev = push_telemetry_event(ev)))
+        {
+            goto Flush;
+        }
+
+    }
     else
         goto Flush;
-    ev->telemetry_type = TE_RETCODE;
-    ev->u.retcode = (u32)PT_REGS_RC(__ctx);
-    push_telemetry_event(ev);
 
 Flush:
     flush_telemetry_events(__ctx);
+
+
+    bpf_tail_call(__ctx, &tail_call_table, 2);
+
+//Exit:
+
+    clear_telemetry_events();
+    bpf_printk("clear!");
 
     return 0;
 }
