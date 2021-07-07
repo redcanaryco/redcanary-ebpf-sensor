@@ -124,11 +124,20 @@ struct bpf_map_def SEC("maps/telemetry_index") telemetry_index = {
     .namespace = "",
 };
 
+struct bpf_map_def SEC("maps/read_flush_index") read_flush_index = {
+        .type = BPF_MAP_TYPE_PERCPU_ARRAY,
+        .key_size = sizeof(u32),
+        .value_size = sizeof(u32),
+        .max_entries = 1,
+        .pinning = 0,
+        .namespace = "",
+};
+
 struct bpf_map_def SEC("maps/telemetry_events") telemetry_events = {
     .type = BPF_MAP_TYPE_PERF_EVENT_ARRAY,
     .key_size = sizeof(u32),
     .value_size = sizeof(u32),
-    .max_entries = 4096,
+    .max_entries = 1024 * 16,
     .pinning = 0,
     .namespace = "",
 };
@@ -726,6 +735,7 @@ static __always_inline void clear_telemetry_events()
     u32 key = 0;
     u32 index = 0;
     bpf_map_update_elem(&telemetry_index, &key, &index, BPF_ANY);
+    bpf_map_update_elem(&read_flush_index, &key, &index, BPF_ANY);
 }
 
 static __always_inline ptelemetry_event_t push_telemetry_event(ptelemetry_event_t ev)
@@ -738,10 +748,10 @@ static __always_inline ptelemetry_event_t push_telemetry_event(ptelemetry_event_
     }
 
     int ret = bpf_map_update_elem(&telemetry_stack, pcurrent_index, ev, BPF_ANY);
-    //if (ret < 0)
-    //{
-    //    return ret;
-    //}
+    if (ret < 0)
+    {
+        return 0;
+    }
 
     // Update the index
     (*pcurrent_index) += 1;
@@ -756,8 +766,8 @@ static __always_inline ptelemetry_event_t push_telemetry_event(ptelemetry_event_
 }
 
 #define FLUSH_LOOP                                                          \
-    if (ii < *pcurrent_index) {                                             \
-        ev = bpf_map_lookup_elem(&telemetry_stack, &ii); \
+    if (*ii < *pcurrent_index) {                                            \
+        ev = bpf_map_lookup_elem(&telemetry_stack, ii);                     \
         if (ev) {                                                           \
             bpf_perf_event_output(ctx,                                      \
                 &telemetry_events,                                          \
@@ -765,7 +775,7 @@ static __always_inline ptelemetry_event_t push_telemetry_event(ptelemetry_event_
                 ev,                                                         \
                 sizeof(*ev)                                                 \
             );                                                              \
-            ii++;                                                           \
+            (*ii)++;                                                        \
         }                                                                   \
         else                                                                \
         {                                                                   \
@@ -782,7 +792,13 @@ static __always_inline void flush_telemetry_events(struct pt_regs *ctx)
         return;
     }
 
-    u32 ii = 0;
+    u32 *ii = bpf_map_lookup_elem(&read_flush_index, &key);
+    if (NULL == ii)
+    {
+        bpf_map_update_elem(&read_flush_index, &key, &key, BPF_ANY);
+        return;
+    }
+
     ptelemetry_event_t ev = NULL;
     FLUSH_LOOP
     FLUSH_LOOP
@@ -817,7 +833,7 @@ static __always_inline void flush_telemetry_events(struct pt_regs *ctx)
     FLUSH_LOOP
     FLUSH_LOOP
     FLUSH_LOOP
-
+    bpf_map_update_elem(&read_flush_index, &key, ii, BPF_ANY);
 }
 
 #define READ_LOOP(PTR, T)                                                       \
@@ -831,7 +847,7 @@ static __always_inline void flush_telemetry_events(struct pt_regs *ctx)
     {                                                                           \
         goto Next;                                                              \
     }                                                                           \
-    else if (ptr == 0)                                                          \
+    else if ((void *) ptr == NULL)                                              \
     {                                                                           \
         goto Next;                                                              \
     }                                                                           \
@@ -840,6 +856,9 @@ static __always_inline void flush_telemetry_events(struct pt_regs *ctx)
         count = bpf_probe_read_str(&ev->u.v.value, VALUE_SIZE, (void *) ptr);   \
         if (count == VALUE_SIZE) {                                              \
             ev->u.v.truncated = TRUE;                                           \
+        }                                                                       \
+        if (count <= 0) {                                                       \
+            goto Next;                                                          \
         }                                                                       \
     }                                                                           \
     if (!(ev = push_telemetry_event(ev)))                                       \
@@ -930,14 +949,21 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_exec_tc_args,
     {
         goto Exit;
     }
+
+    u32 *pii = bpf_map_lookup_elem(&read_flush_index, &id);
+    if (NULL == pii)
+    {
+        bpf_map_update_elem(&read_flush_index, &id, &id, BPF_ANY);
+        goto Tail;
+    }
+
     if (idp)
         id = *idp;
     else
         goto Exit;
 
-
     long count = 0;
-    u32 ii = 0;
+    u32 ii = *pii;
     u64 ptr = 0;
     u64 ret = 0;
     READ_LOOP(argv, TE_COMMAND_LINE)
@@ -957,9 +983,15 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_exec_tc_args,
     READ_LOOP(argv, TE_COMMAND_LINE)
     READ_LOOP(argv, TE_COMMAND_LINE)
 
+    u32 index = 0;
+    bpf_map_update_elem(&read_flush_index, &index, &ii, BPF_ANY);
+
+Tail:
     bpf_tail_call(ctx, &tail_call_table, 0);
 
-Next:
+Next:;
+    u32 reset = 0;
+    bpf_map_update_elem(&read_flush_index, &reset, &reset, BPF_ANY);
     bpf_tail_call(ctx, &tail_call_table, 1);
 
 Exit:
@@ -979,21 +1011,27 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_exec_tc_envp,
     u32 *pcurrent_index = bpf_map_lookup_elem(&telemetry_index, &id);
     if (!pcurrent_index)
     {
-    return 0;
+        return 0;
     }
     ptelemetry_event_t ev = bpf_map_lookup_elem(&telemetry_stack, pcurrent_index);
     if (!ev) // this should never happen, but the verifier complains otherwise
     {
         goto Exit;
     }
+    u32 *pii = bpf_map_lookup_elem(&read_flush_index, &id);
+    if (NULL == pii)
+    {
+        bpf_map_update_elem(&read_flush_index, &id, &id, BPF_ANY);
+        goto Tail;
+    }
+
     if (idp)
         id = *idp;
     else
         goto Exit;
 
-
     long count = 0;
-    u32 ii = 0;
+    u32 ii = *pii;
     u64 ptr = 0;
     u64 ret = 0;
     READ_LOOP(envp, TE_ENVIRONMENT)
@@ -1013,10 +1051,17 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_exec_tc_envp,
     READ_LOOP(envp, TE_ENVIRONMENT)
     READ_LOOP(envp, TE_ENVIRONMENT)
 
+    u32 index = 0;
+    bpf_map_update_elem(&read_flush_index, &index, &ii, BPF_ANY);
+
+
+Tail:
     bpf_tail_call(ctx, &tail_call_table, 1);
 
 Next:
-Exit:
+Exit:;
+    u32 reset = 0;
+    bpf_map_update_elem(&read_flush_index, &reset, &reset, BPF_ANY);
     return 0;
 }
 
@@ -1043,32 +1088,35 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execve_4_8,
 
     // if "loaded" doesn't exist in the map, we get NULL back and won't read from offsets
     // when offsets are loaded into the offsets map, "loaded" should be given any value
-    u64 loaded_str = 0xec6642829d632573; // CRC64 of "loaded"
-    u64 *loaded = bpf_map_lookup_elem(&offsets, &loaded_str);
+    //u64 loaded_str = 0xec6642829d632573; // CRC64 of "loaded"
+    //u64 *loaded = bpf_map_lookup_elem(&offsets, &loaded_str);
 
     // since we're using offsets to read from the structs, we don't need to bother with
     // understanding their structure
     void *ts = (void *)bpf_get_current_task();
     void *pts = NULL;
-    if (ts && loaded) {
+    if (ts) /*&& loaded)*/ {
         // CRC64 of task_struct->real_parent
-        u64 real_parent_offset_name = 0x940b92aaad4c5437;
+        //u64 real_parent_offset_name = 0x940b92aaad4c5437;
         // CRC64 of task_struct->pid
-        u64 ppid_offset_name = 0xc713ffcffcd1cc3c;
+        //u64 ppid_offset_name = 0xc713ffcffcd1cc3c;
         // CRC64 of task_struct->loginuid
-        u64 luid_offset_name = 0x9951a3e4f7757060;
-        u64 *real_parent_offset = bpf_map_lookup_elem(&offsets, &real_parent_offset_name);
-        u64 *ppid_offset = bpf_map_lookup_elem(&offsets, &ppid_offset_name);
-        u64 *luid_offset = bpf_map_lookup_elem(&offsets, &luid_offset_name);
+        //u64 luid_offset_name = 0x9951a3e4f7757060;
+        //u64 *real_parent_offset = bpf_map_lookup_elem(&offsets, &real_parent_offset_name);
+        //u64 *ppid_offset = bpf_map_lookup_elem(&offsets, &ppid_offset_name);
+        //u64 *luid_offset = bpf_map_lookup_elem(&offsets, &luid_offset_name);
+        u64 real_parent_offset = 2256;
+        u64 ppid_offset = 2240;
+        u64 luid_offset = 2872;
 
         if (real_parent_offset && ppid_offset && luid_offset)
         {
-            bpf_probe_read(&pts, sizeof(pts), ts + *real_parent_offset);
+            bpf_probe_read(&pts, sizeof(pts), ts + real_parent_offset);
             if (pts)
             {
-                bpf_probe_read(&ppid, sizeof(ppid), pts + *ppid_offset);
+                bpf_probe_read(&ppid, sizeof(ppid), pts + ppid_offset);
             }
-            bpf_probe_read(&luid, sizeof(luid), ts + *luid_offset);
+            bpf_probe_read(&luid, sizeof(luid), ts + luid_offset);
         }
     }
     return enter_exec(SP_EXECVE, AT_FDCWD, filename, argv, envp, 0, ctx, ppid, luid);
@@ -1128,7 +1176,6 @@ static __always_inline int exit_exec(struct pt_regs *__ctx)
 
 Flush:
     flush_telemetry_events(__ctx);
-
 
     bpf_tail_call(__ctx, &tail_call_table, 2);
 
