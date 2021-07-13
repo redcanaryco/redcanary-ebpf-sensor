@@ -11,6 +11,9 @@
 #include "types.h"
 
 #define MAX_TELEMETRY_STACK_ENTRIES 128
+#define CLONE_ARGS_SIZE_VER0 64 /* sizeof first published struct */
+#define CLONE_ARGS_SIZE_VER1 80 /* sizeof second published struct */
+#define CLONE_ARGS_SIZE_VER2 88 /* sizeof third published struct */
 
 typedef struct
 {
@@ -133,6 +136,24 @@ struct bpf_map_def SEC("maps/read_flush_index") read_flush_index = {
         .namespace = "",
 };
 
+struct bpf_map_def SEC("maps/clone_info_store") clone_info_store = {
+        .type = BPF_MAP_TYPE_PERCPU_ARRAY,
+        .key_size = sizeof(u32),
+        .value_size = sizeof(clone_info_t),
+        .max_entries = 1,
+        .pinning = 0,
+        .namespace = "",
+};
+
+struct bpf_map_def SEC("maps/clone3_info_store") clone3_info_store = {
+        .type = BPF_MAP_TYPE_PERCPU_ARRAY,
+        .key_size = sizeof(u32),
+        .value_size = sizeof(clone3_info_t),
+        .max_entries = 1,
+        .pinning = 0,
+        .namespace = "",
+};
+
 struct bpf_map_def SEC("maps/telemetry_events") telemetry_events = {
     .type = BPF_MAP_TYPE_PERF_EVENT_ARRAY,
     .key_size = sizeof(u32),
@@ -163,8 +184,8 @@ struct bpf_map_def SEC("maps/tail_call_table") tail_call_table  = {
 struct bpf_map_def SEC("maps/offsets") offsets = {
         .type = BPF_MAP_TYPE_HASH,
         .key_size = sizeof(u64),
-        .value_size = sizeof(u64),
-        .max_entries = 1024,
+        .value_size = sizeof(u32),
+        .max_entries = 4096,
         .pinning = 0,
         .namespace = "",
 };
@@ -268,9 +289,44 @@ static __always_inline syscall_pattern_type_t ptrace_syscall_pattern(u32 request
     E->u.syscall_info.euid = euid;             \
     E->u.syscall_info.egid = egid;             \
     E->u.syscall_info.mono_ns = mono_ns;       \
+    E->u.syscall_info.syscall_pattern = SP;    \
     bpf_get_current_comm(E->u.syscall_info.comm, sizeof(E->u.syscall_info.comm));
 
 #define FILL_TELEMETRY_SYSCALL_RET(E, SP) \
+
+
+#define GET_OFFSETS_4_8 \
+    /* if "loaded" doesn't exist in the map, we get NULL back and won't read from offsets                           \
+     * when offsets are loaded into the offsets map, "loaded" should be given any value                             \
+     */                                                                                                             \
+    u64 loaded_str = 0xec6642829d632573; /* CRC64 of "loaded"  */                                                   \
+    u64 *loaded = bpf_map_lookup_elem(&offsets, &loaded_str);                                                       \
+    /* since we're using offsets to read from the structs, we don't need to bother with                             \
+     * understanding their structure                                                                                \
+     */                                                                                                             \
+    void *ts = (void *)bpf_get_current_task();                                                                      \
+    void *pts = NULL;                                                                                               \
+    if (ts && loaded) {                                                                                             \
+        /* CRC64 of task_struct->real_parent */                                                                     \
+        u64 real_parent_offset_name = 0x940b92aaad4c5437;                                                           \
+        /* CRC64 of task_struct->pid */                                                                             \
+        u64 ppid_offset_name = 0xc713ffcffcd1cc3c;                                                                  \
+        /* CRC64 of task_struct->loginuid */                                                                        \
+        u64 luid_offset_name = 0x9951a3e4f7757060;                                                                  \
+        u32 *real_parent_offset = bpf_map_lookup_elem(&offsets, &real_parent_offset_name);                          \
+        u32 *ppid_offset = bpf_map_lookup_elem(&offsets, &ppid_offset_name);                                        \
+        u32 *luid_offset = bpf_map_lookup_elem(&offsets, &luid_offset_name);                                        \
+        if (real_parent_offset && ppid_offset && luid_offset)                                                       \
+        {                                                                                                           \
+            bpf_printk("real_parent: %d; pid: %d; luid: %d\n", *real_parent_offset, *ppid_offset, &luid_offset);    \
+            bpf_probe_read(&pts, sizeof(pts), ts + *real_parent_offset);                                            \
+            if (pts)                                                                                                \
+            {                                                                                                       \
+                bpf_probe_read(&ppid, sizeof(ppid), pts + *ppid_offset);                                            \
+            }                                                                                                       \
+            bpf_probe_read(&luid, sizeof(luid), ts + *luid_offset);                                                 \
+        }                                                                                                           \
+    }
 
 
 SEC("kprobe/sys_ptrace_write")
@@ -747,6 +803,7 @@ static __always_inline ptelemetry_event_t push_telemetry_event(ptelemetry_event_
         return 0;
     }
 
+    bpf_printk("pushing event to %d\n", *pcurrent_index);
     int ret = bpf_map_update_elem(&telemetry_stack, pcurrent_index, ev, BPF_ANY);
     if (ret < 0)
     {
@@ -769,6 +826,7 @@ static __always_inline ptelemetry_event_t push_telemetry_event(ptelemetry_event_
     if (*ii < *pcurrent_index) {                                            \
         ev = bpf_map_lookup_elem(&telemetry_stack, ii);                     \
         if (ev) {                                                           \
+            bpf_printk("flushing %d\n", *ii);                               \
             bpf_perf_event_output(ctx,                                      \
                 &telemetry_events,                                          \
                 bpf_get_smp_processor_id(),                                 \
@@ -849,15 +907,20 @@ static __always_inline void flush_telemetry_events(struct pt_regs *ctx)
     }                                                                           \
     else if ((void *) ptr == NULL)                                              \
     {                                                                           \
+        bpf_printk("next!\n");                                                  \
         goto Next;                                                              \
     }                                                                           \
     else                                                                        \
     {                                                                           \
+        bpf_printk("ptr: %d\n", ptr);                                           \
         count = bpf_probe_read_str(&ev->u.v.value, VALUE_SIZE, (void *) ptr);   \
         if (count == VALUE_SIZE) {                                              \
+            bpf_printk("truncated\n");                                          \
             ev->u.v.truncated = TRUE;                                           \
         }                                                                       \
+        bpf_printk("count: %d\n", count);                                       \
         if (count <= 0) {                                                       \
+            bpf_printk("c0 next!\n");                                           \
             goto Next;                                                          \
         }                                                                       \
     }                                                                           \
@@ -926,7 +989,9 @@ Exit:
     return 0;
 }
 
+// TODO: inline func for getting ppid, luid, and other task struct schtuff
 
+// process start - everything but a0, exit
 
 SEC("kprobe/sys_exec_tc_args")
 int BPF_KPROBE_SYSCALL(kprobe__sys_exec_tc_args,
@@ -1004,6 +1069,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_exec_tc_envp,
                        const char __user *const __user *argv,
                        const char __user *const __user *envp)
 {
+    bpf_printk("tc_envp\n");
     u64 pid_tgid = bpf_get_current_pid_tgid();
     u32 pid = pid_tgid >> 32;
     u64 *idp = bpf_map_lookup_elem(&telemetry_ids, &pid);
@@ -1074,8 +1140,10 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execveat_4_8,
 {
     u32 ppid = -1;
     u32 luid = -1;
+    GET_OFFSETS_4_8;
     return enter_exec(SP_EXECVEAT, fd, filename, argv, envp, flags, ctx, ppid, luid);
 }
+
 
 SEC("kprobe/sys_execve_4_8")
 int BPF_KPROBE_SYSCALL(kprobe__sys_execve_4_8,
@@ -1085,40 +1153,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execve_4_8,
 {
     u32 ppid = -1;
     u32 luid = -1;
-
-    // if "loaded" doesn't exist in the map, we get NULL back and won't read from offsets
-    // when offsets are loaded into the offsets map, "loaded" should be given any value
-    //u64 loaded_str = 0xec6642829d632573; // CRC64 of "loaded"
-    //u64 *loaded = bpf_map_lookup_elem(&offsets, &loaded_str);
-
-    // since we're using offsets to read from the structs, we don't need to bother with
-    // understanding their structure
-    void *ts = (void *)bpf_get_current_task();
-    void *pts = NULL;
-    if (ts) /*&& loaded)*/ {
-        // CRC64 of task_struct->real_parent
-        //u64 real_parent_offset_name = 0x940b92aaad4c5437;
-        // CRC64 of task_struct->pid
-        //u64 ppid_offset_name = 0xc713ffcffcd1cc3c;
-        // CRC64 of task_struct->loginuid
-        //u64 luid_offset_name = 0x9951a3e4f7757060;
-        //u64 *real_parent_offset = bpf_map_lookup_elem(&offsets, &real_parent_offset_name);
-        //u64 *ppid_offset = bpf_map_lookup_elem(&offsets, &ppid_offset_name);
-        //u64 *luid_offset = bpf_map_lookup_elem(&offsets, &luid_offset_name);
-        u64 real_parent_offset = 2256;
-        u64 ppid_offset = 2240;
-        u64 luid_offset = 2872;
-
-        if (real_parent_offset && ppid_offset && luid_offset)
-        {
-            bpf_probe_read(&pts, sizeof(pts), ts + real_parent_offset);
-            if (pts)
-            {
-                bpf_probe_read(&ppid, sizeof(ppid), pts + ppid_offset);
-            }
-            bpf_probe_read(&luid, sizeof(luid), ts + luid_offset);
-        }
-    }
+    GET_OFFSETS_4_8;
     return enter_exec(SP_EXECVE, AT_FDCWD, filename, argv, envp, 0, ctx, ppid, luid);
 }
 
@@ -1139,7 +1174,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execve,
                        const char __user *const __user *argv,
                        const char __user *const __user *envp)
 {
-    return enter_exec(SP_EXECVEAT, AT_FDCWD, filename, argv, envp, 0, ctx, -1, -1);
+    return enter_exec(SP_EXECVE, AT_FDCWD, filename, argv, envp, 0, ctx, -1, -1);
 }
 
 
@@ -1150,7 +1185,7 @@ static __always_inline int exit_exec(struct pt_regs *__ctx)
     u64 *id = bpf_map_lookup_elem(&telemetry_ids, &pid);
     if (id)
     {
-
+        bpf_printk("set id\n");
         ptelemetry_event_t ev = &(telemetry_event_t) {
                 .id = 0,
                 .done = TRUE,
@@ -1176,13 +1211,13 @@ static __always_inline int exit_exec(struct pt_regs *__ctx)
 
 Flush:
     flush_telemetry_events(__ctx);
-
+    bpf_printk("flush tc\n");
     bpf_tail_call(__ctx, &tail_call_table, 2);
 
 //Exit:
 
     clear_telemetry_events();
-    bpf_printk("clear!");
+    bpf_printk("clear!\n");
 
     return 0;
 }
@@ -1199,77 +1234,548 @@ int kretprobe__ret_sys_execveat(struct pt_regs *ctx)
     return exit_exec(ctx);
 }
 
-SEC("kprobe/sys_clone")
-int kprobe__sys_clone(struct pt_regs *ctx)
+
+static __always_inline int enter_clone(syscall_pattern_type_t sp, unsigned long flags,
+                                       void __user *stack, int __user *parent_tid,
+                                       int __user *child_tid, unsigned long tls,
+                                       struct pt_regs *ctx, u32 ppid, u32 luid)
 {
+    u64 id = 0; // reuse ID to save space
+    ptelemetry_event_t ev = bpf_map_lookup_elem(&telemetry_stack, (u32 *) &id);
+    if (!ev) // this should never happen, but the verifier complains otherwise
+    {
+        return -1;
+    }
+    id = bpf_get_prandom_u32();
+    ev->id = id;
+    ev->done = FALSE;
+    ev->telemetry_type = 0,
+    ev->u.v.value[0] = '\0';
+    ev->u.v.truncated = FALSE;
+
+    FILL_TELEMETRY_SYSCALL_EVENT(ev, sp);
+    ev->u.syscall_info.ppid = ppid;
+    ev->u.syscall_info.luid = luid;
+    if (!(ev = push_telemetry_event(ev)))
+        return -1;
+
+    clone_info_t clone_info = {
+            .flags = flags,
+            .stack = (u64) stack,
+            .parent_tid = -1,
+            .child_tid = -1,
+            .tls = tls,
+            .p_ptr = (u64) parent_tid,
+            .c_ptr = (u64) child_tid,
+    };
+
+    u32 key = 0;
+    bpf_map_update_elem(&clone_info_store, &key, &clone_info, BPF_ANY);
+
+    bpf_map_update_elem(&telemetry_ids, &pid, &id, BPF_ANY);
+
     return 0;
 }
 
-SEC("kprobe/sys_fork")
-int kprobe__sys_fork(struct pt_regs *ctx)
+static __always_inline int exit_clone(struct pt_regs *ctx)
 {
+
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+    u32 pid = pid_tgid >> 32;
+    u64 *id = bpf_map_lookup_elem(&telemetry_ids, &pid);
+    if (id)
+    {
+        bpf_printk("set id\n");
+        ptelemetry_event_t ev = &(telemetry_event_t) {
+                .id = 0,
+                .done = TRUE,
+                .telemetry_type = 0,
+                .u.v = {
+                        .value[0] = '\0',
+                        .truncated = FALSE,
+                },
+        };
+
+        ev->id = *id;
+        ev->done = FALSE;
+        ev->telemetry_type = TE_CLONE_INFO;
+        u32 key = 0;
+        pclone_info_t pclone_info = bpf_map_lookup_elem(&clone_info_store, &key);
+
+        if (!pclone_info)
+            goto Flush;
+
+        clone_info_t clone_info = {
+                .flags = pclone_info->flags,
+                .stack = (u64) pclone_info->stack,
+                .parent_tid = -1,
+                .child_tid = -1,
+                .tls = pclone_info->tls,
+                .p_ptr = pclone_info->p_ptr,
+                .c_ptr = pclone_info->c_ptr,
+        };
+
+        bpf_probe_read(&clone_info.parent_tid, sizeof(u32), (void*) pclone_info->p_ptr);
+        bpf_probe_read(&clone_info.child_tid, sizeof(u32), (void*) pclone_info->c_ptr);
+        ev->u.clone_info = clone_info;
+        if (!(ev = push_telemetry_event(ev)))
+            return -1;
+
+        ev->id = *id;
+        bpf_map_delete_elem(&telemetry_ids, &pid);
+        ev->done = TRUE;
+        ev->telemetry_type = TE_RETCODE;
+        ev->u.retcode = (u32)PT_REGS_RC(ctx);
+        if (!(ev = push_telemetry_event(ev)))
+        {
+            goto Flush;
+        }
+
+    }
+    else
+        goto Flush;
+
+Flush:
+    flush_telemetry_events(ctx);
+    bpf_printk("flush tc\n");
+    bpf_tail_call(ctx, &tail_call_table, 3);
+
+//Exit:
+
+    clear_telemetry_events();
+    bpf_printk("clear!\n");
+
     return 0;
+}
+
+
+SEC("kprobe/sys_clone_4_8")
+#if defined(__TARGET_ARCH_x86)
+int BPF_KPROBE_SYSCALL(kprobe__sys_clone_4_8, unsigned long flags, void __user *stack,
+                       int __user *parent_tid, int __user *child_tid, unsigned long tls)
+#elif defined(__TARGET_ARCH_arm64)
+int BPF_KPROBE_SYSCALL(kprobe__sys_clone_4_8, unsigned long flags, void __user *stack,
+                       int __user *parent_tid, unsigned long tls, int __user *child_tid)
+#endif
+{
+    u32 ppid = -1;
+    u32 luid = -1;
+    GET_OFFSETS_4_8;
+    return enter_clone(SP_CLONE, flags, stack, parent_tid, child_tid, tls, ctx, ppid, luid);
+}
+
+
+SEC("kprobe/sys_clone")
+#if defined(__TARGET_ARCH_x86)
+int BPF_KPROBE_SYSCALL(kprobe__sys_clone, unsigned long flags, void *stack,
+                       int *parent_tid, int *child_tid, unsigned long tls)
+#elif defined(__TARGET_ARCH_arm64)
+int BPF_KPROBE_SYSCALL(kprobe__sys_clone, unsigned long flags, void *stack,
+                       int *parent_tid, unsigned long tls, int *child_tid)
+#endif
+{
+    return enter_clone(SP_CLONE, flags, stack, parent_tid, child_tid, tls, ctx, -1, -1);
+}
+
+
+static __always_inline int enter_clone3(syscall_pattern_type_t sp, struct clone_args __user *uargs,
+                                        size_t size, struct pt_regs *ctx, u32 ppid, u32 luid)
+{
+
+    u64 id = 0; // reuse ID to save space
+    ptelemetry_event_t ev = bpf_map_lookup_elem(&telemetry_stack, (u32 *) &id);
+    if (!ev) // this should never happen, but the verifier complains otherwise
+    {
+        return -1;
+    }
+    id = bpf_get_prandom_u32();
+    ev->id = id;
+    ev->done = FALSE;
+    ev->telemetry_type = 0,
+    ev->u.v.value[0] = '\0';
+    ev->u.v.truncated = FALSE;
+
+    FILL_TELEMETRY_SYSCALL_EVENT(ev, sp);
+    ev->u.syscall_info.ppid = ppid;
+    ev->u.syscall_info.luid = luid;
+    if (!(ev = push_telemetry_event(ev)))
+        return -1;
+    bpf_map_update_elem(&telemetry_ids, &pid, &id, BPF_ANY);
+
+    clone3_info_t clone3_info = {0};
+    clone3_info.size = (u64) size;
+
+    bpf_probe_read(&clone3_info.flags, sizeof(u64), &uargs->flags);
+    bpf_probe_read(&clone3_info.c_ptr, sizeof(u64), &uargs->child_tid);
+    bpf_probe_read(&clone3_info.p_ptr, sizeof(u64), &uargs->parent_tid);
+    bpf_probe_read(&clone3_info.stack, sizeof(u64), &uargs->stack);
+    bpf_probe_read(&clone3_info.tls, sizeof(u64), &uargs->tls);
+    if (size >= CLONE_ARGS_SIZE_VER1)
+    {
+        bpf_probe_read(&clone3_info.set_tid, sizeof(u64), &uargs->set_tid);
+        bpf_probe_read(&clone3_info.set_tid_size, sizeof(u64), &uargs->set_tid_size);
+    }
+    if (size >= CLONE_ARGS_SIZE_VER2)
+    {
+        bpf_probe_read(&clone3_info.cgroup, sizeof(u64), &uargs->cgroup);
+    }
+
+    u32 key = 0;
+    bpf_map_update_elem(&clone3_info_store, &key, &clone3_info, BPF_ANY);
+
+    return 0;
+}
+
+static __always_inline int exit_clone3(struct pt_regs *ctx)
+{
+
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+    u32 pid = pid_tgid >> 32;
+    u64 *id = bpf_map_lookup_elem(&telemetry_ids, &pid);
+    if (id)
+    {
+        bpf_printk("set id\n");
+        ptelemetry_event_t ev = &(telemetry_event_t) {
+                .id = 0,
+                .done = TRUE,
+                .telemetry_type = 0,
+                .u.v = {
+                        .value[0] = '\0',
+                        .truncated = FALSE,
+                },
+        };
+
+        ev->id = *id;
+        ev->done = FALSE;
+        ev->telemetry_type = TE_CLONE3_INFO;
+        u32 key = 0;
+        pclone3_info_t pclone3_info = bpf_map_lookup_elem(&clone3_info_store, &key);
+
+        if (!pclone3_info)
+            goto Flush;
+
+        clone3_info_t clone_info = {0};
+
+        clone_info.flags = pclone3_info->flags;
+        clone_info.stack = (u64) pclone3_info->stack;
+        clone_info.parent_tid = -1;
+        clone_info.child_tid = -1;
+        clone_info.tls = pclone3_info->tls;
+        clone_info.size = pclone3_info->size;
+        clone_info.p_ptr = pclone3_info->p_ptr;
+        clone_info.c_ptr = pclone3_info->c_ptr;
+        if (pclone3_info->size >= CLONE_ARGS_SIZE_VER1)
+        {
+            clone_info.set_tid = pclone3_info->set_tid;
+            clone_info.set_tid_size = pclone3_info->set_tid_size;
+        }
+        if (pclone3_info->size >= CLONE_ARGS_SIZE_VER2)
+        {
+            clone_info.cgroup = pclone3_info->cgroup;
+        }
+
+        bpf_probe_read(&clone_info.parent_tid, sizeof(u32), (void*) clone_info.p_ptr);
+        bpf_probe_read(&clone_info.child_tid, sizeof(u32), (void*) clone_info.c_ptr);
+        ev->u.clone3_info = clone_info;
+        if (!(ev = push_telemetry_event(ev)))
+            return -1;
+
+        ev->id = *id;
+        bpf_map_delete_elem(&telemetry_ids, &pid);
+        ev->done = TRUE;
+        ev->telemetry_type = TE_RETCODE;
+        ev->u.retcode = (u32)PT_REGS_RC(ctx);
+        if (!(ev = push_telemetry_event(ev)))
+        {
+            goto Flush;
+        }
+
+    }
+    else
+        goto Flush;
+
+    Flush:
+    flush_telemetry_events(ctx);
+    bpf_printk("flush tc\n");
+    bpf_tail_call(ctx, &tail_call_table, 4);
+
+//Exit:
+
+    clear_telemetry_events();
+    bpf_printk("clear!\n");
+
+    return 0;
+}
+
+SEC("kprobe/sys_clone3")
+int BPF_KPROBE_SYSCALL(kprobe__sys_clone3, struct clone_args __user *uargs, size_t size)
+{
+    // clone3 was added in 5.3, so this should always be available if clone3 is attachable
+    u32 ppid = -1;
+    u32 luid = -1;
+    GET_OFFSETS_4_8;
+    return enter_clone3(SP_CLONE3, uargs, size, ctx, ppid, luid);
+}
+
+SEC("kretprobe/ret_sys_clone3")
+int kretprobe__ret_sys_clone3(struct pt_regs *ctx)
+{
+    return exit_clone3(ctx);
+}
+
+
+SEC("kprobe/sys_fork")
+int BPF_KPROBE_SYSCALL(kprobe__sys_fork)
+{
+    return enter_clone(SP_FORK, 0, NULL, NULL, NULL, 0, ctx, -1, -1);
 }
 
 SEC("kprobe/sys_vfork")
-int kprobe__sys_vfork(struct pt_regs *ctx)
+int BPF_KPROBE_SYSCALL(kprobe__sys_vfork)
 {
-    return 0;
+    return enter_clone(SP_VFORK, 0, NULL, NULL, NULL, 0, ctx, -1, -1);
+}
+
+SEC("kprobe/sys_fork_4_8")
+int BPF_KPROBE_SYSCALL(kprobe__sys_fork_4_8)
+{
+    u32 ppid = -1;
+    u32 luid = -1;
+    GET_OFFSETS_4_8;
+    return enter_clone(SP_FORK, 0, NULL, NULL, NULL, 0, ctx, ppid, luid);
+}
+
+SEC("kprobe/sys_vfork_4_8")
+int BPF_KPROBE_SYSCALL(kprobe__sys_vfork_4_8)
+{
+    u32 ppid = -1;
+    u32 luid = -1;
+    GET_OFFSETS_4_8;
+    return enter_clone(SP_VFORK, 0, NULL, NULL, NULL, 0, ctx, ppid, luid);
 }
 
 SEC("kretprobe/ret_sys_clone")
 int kretprobe__ret_sys_clone(struct pt_regs *ctx)
 {
-    return 0;
+    return exit_clone(ctx);
 }
 
 SEC("kretprobe/ret_sys_fork")
 int kretprobe__ret_sys_fork(struct pt_regs *ctx)
 {
-    return 0;
+    return exit_clone(ctx);
 }
 
 SEC("kretprobe/ret_sys_vfork")
 int kretprobe__ret_sys_vfork(struct pt_regs *ctx)
 {
+    return exit_clone(ctx);
+}
+
+static __always_inline int enter_unshare(syscall_pattern_type_t sp, int flags,
+                                         struct pt_regs *ctx, u32 ppid, u32 luid)
+{
+    u64 id = 0; // reuse ID to save space
+    ptelemetry_event_t ev = bpf_map_lookup_elem(&telemetry_stack, (u32 *) &id);
+    if (!ev) // this should never happen, but the verifier complains otherwise
+    {
+        return -1;
+    }
+    id = bpf_get_prandom_u32();
+    ev->id = id;
+    ev->done = FALSE;
+    ev->telemetry_type = 0,
+    ev->u.v.value[0] = '\0';
+    ev->u.v.truncated = FALSE;
+
+    FILL_TELEMETRY_SYSCALL_EVENT(ev, sp);
+    ev->u.syscall_info.ppid = ppid;
+    ev->u.syscall_info.luid = luid;
+    if (!(ev = push_telemetry_event(ev)))
+        return -1;
+    bpf_map_update_elem(&telemetry_ids, &pid, &id, BPF_ANY);
+
     return 0;
 }
 
-SEC("kprobe/sys_unshare")
-int kprobe__sys_unshare(struct pt_regs *ctx)
+static __always_inline int exit_unshare(struct pt_regs *ctx)
 {
+
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+    u32 pid = pid_tgid >> 32;
+    u64 *id = bpf_map_lookup_elem(&telemetry_ids, &pid);
+    if (id)
+    {
+        bpf_printk("set id\n");
+        ptelemetry_event_t ev = &(telemetry_event_t) {
+                .id = 0,
+                .done = TRUE,
+                .telemetry_type = 0,
+                .u.v = {
+                        .value[0] = '\0',
+                        .truncated = FALSE,
+                },
+        };
+        ev->id = *id;
+        bpf_map_delete_elem(&telemetry_ids, &pid);
+
+        ev->telemetry_type = TE_RETCODE;
+        ev->u.retcode = (u32)PT_REGS_RC(ctx);
+        if (!(ev = push_telemetry_event(ev)))
+        {
+            goto Flush;
+        }
+
+    }
+    else
+        goto Flush;
+
+    Flush:
+    flush_telemetry_events(ctx);
+    bpf_printk("flush tc\n");
+    bpf_tail_call(ctx, &tail_call_table, 3);
+
+//Exit:
+
+    clear_telemetry_events();
+    bpf_printk("clear!\n");
+
     return 0;
+}
+
+SEC("kprobe/sys_unshare_4_8")
+int BPF_KPROBE_SYSCALL(kprobe__sys_unshare_4_8, int flags)
+{
+    u32 ppid = -1;
+    u32 luid = -1;
+    GET_OFFSETS_4_8;
+    return enter_unshare(SP_UNSHARE, flags, ctx, ppid, luid);
+}
+
+SEC("kprobe/sys_unshare")
+int BPF_KPROBE_SYSCALL(kprobe__sys_unshare, int flags)
+{
+    return enter_unshare(SP_UNSHARE, flags, ctx, -1, -1);
 }
 
 SEC("kretprobe/ret_sys_unshare")
 int kretprobe__ret_sys_unshare(struct pt_regs *ctx)
 {
-    return 0;
+    return exit_unshare(ctx);
 }
 
 
-SEC("kprobe/sys_exit")
-int kprobe__sys_exit(struct pt_regs *ctx)
+static __always_inline int enter_exit(syscall_pattern_type_t sp, int status,
+                                         struct pt_regs *ctx, u32 ppid, u32 luid)
 {
+    u64 id = 0; // reuse ID to save space
+    ptelemetry_event_t ev = bpf_map_lookup_elem(&telemetry_stack, (u32 *) &id);
+    if (!ev) // this should never happen, but the verifier complains otherwise
+    {
+        return -1;
+    }
+    id = bpf_get_prandom_u32();
+    ev->id = id;
+    ev->done = FALSE;
+    ev->telemetry_type = 0,
+            ev->u.v.value[0] = '\0';
+    ev->u.v.truncated = FALSE;
+
+    FILL_TELEMETRY_SYSCALL_EVENT(ev, sp);
+    ev->u.syscall_info.ppid = ppid;
+    ev->u.syscall_info.luid = luid;
+    if (!(ev = push_telemetry_event(ev)))
+        return -1;
+    bpf_map_update_elem(&telemetry_ids, &pid, &id, BPF_ANY);
+
     return 0;
+}
+
+static __always_inline int exit_exit(struct pt_regs *ctx)
+{
+
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+    u32 pid = pid_tgid >> 32;
+    u64 *id = bpf_map_lookup_elem(&telemetry_ids, &pid);
+    if (id)
+    {
+        bpf_printk("set id\n");
+        ptelemetry_event_t ev = &(telemetry_event_t) {
+                .id = 0,
+                .done = TRUE,
+                .telemetry_type = 0,
+                .u.v = {
+                        .value[0] = '\0',
+                        .truncated = FALSE,
+                },
+        };
+        ev->id = *id;
+        bpf_map_delete_elem(&telemetry_ids, &pid);
+
+        ev->telemetry_type = TE_RETCODE;
+        ev->u.retcode = (u32)PT_REGS_RC(ctx);
+        if (!(ev = push_telemetry_event(ev)))
+        {
+            goto Flush;
+        }
+
+    }
+    else
+        goto Flush;
+
+    Flush:
+    flush_telemetry_events(ctx);
+    bpf_printk("flush tc\n");
+    bpf_tail_call(ctx, &tail_call_table, 3);
+
+//Exit:
+
+    clear_telemetry_events();
+    bpf_printk("clear!\n");
+
+    return 0;
+}
+
+SEC("kprobe/sys_exit_4_8")
+int BPF_KPROBE_SYSCALL(kprobe__sys_exit_4_8, int status)
+{
+    u32 ppid = -1;
+    u32 luid = -1;
+    GET_OFFSETS_4_8;
+    return enter_exit(SP_EXIT, status, ctx, ppid, luid);
+}
+
+SEC("kprobe/sys_exit")
+int BPF_KPROBE_SYSCALL(kprobe__sys_exit, int status)
+{
+    return enter_exit(SP_EXIT, status, ctx, -1, -1);
+}
+
+SEC("kprobe/sys_exit_group_4_8")
+int BPF_KPROBE_SYSCALL(kprobe__sys_exit_group_4_8, int status)
+{
+    u32 ppid = -1;
+    u32 luid = -1;
+    GET_OFFSETS_4_8;
+    return enter_exit(SP_EXIT, status, ctx, ppid, luid);
 }
 
 SEC("kprobe/sys_exit_group")
-int kprobe__sys_exit_group(struct pt_regs *ctx)
+int BPF_KPROBE_SYSCALL(kprobe__sys_exit_group, int status)
 {
-    return 0;
+    return enter_exit(SP_EXIT, status, ctx, -1, -1);
 }
 
 SEC("kretprobe/ret_sys_exit")
 int kretprobe__ret_sys_exit(struct pt_regs *ctx)
 {
-    return 0;
+    return exit_exit(ctx);
 }
 
 SEC("kretprobe/ret_sys_exit_group")
 int kretprobe__ret_sys_exit_group(struct pt_regs *ctx)
 {
-    return 0;
+    return exit_exit(ctx);
 }
 
 char _license[] SEC("license") = "GPL";

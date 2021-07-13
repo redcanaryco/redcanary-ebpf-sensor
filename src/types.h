@@ -53,6 +53,7 @@ typedef enum
     SP_EXITGROUP,
     SP_UNSHARE,
     SP_CLONE,
+    SP_CLONE3,
     SP_FORK,
     SP_VFORK,
     SP_EXECVE,
@@ -69,6 +70,8 @@ typedef enum
     TE_CURRENT_WORKING_DIRECTORY,
     TE_FILE_INFO,
     TE_RETCODE,
+    TE_CLONE_INFO,
+    TE_CLONE3_INFO,
 } telemetry_event_type_t;
 
 #define COMMON_FIELDS \
@@ -177,7 +180,7 @@ typedef struct {
 typedef struct
 {
     u32 new_pid;
-    u32 fork_flags;
+    u64 fork_flags;
 } process_fork_info_t;
 
 typedef struct
@@ -200,12 +203,43 @@ typedef struct
 
 typedef struct
 {
+    u64 flags;
+    u64 stack;
+    u32 parent_tid;
+    u32 child_tid;
+    u64 tls;
+    u64 p_ptr;
+    u64 c_ptr;
+} clone_info_t, *pclone_info_t;
+
+typedef struct
+{
+    u64 flags;
+    u64 pidfd;
+    u64 child_tid;
+    u64 parent_tid;
+    u64 exit_signal;
+    u64 stack;
+    u64 stack_size;
+    u64 tls;
+    u64 set_tid;
+    u64 set_tid_size;
+    u64 cgroup;
+    u64 c_ptr;
+    u64 p_ptr;
+    u64 size;
+} clone3_info_t, *pclone3_info_t;
+
+typedef struct
+{
     u64 id;
     u32 done;
     telemetry_event_type_t telemetry_type;
     union {
         syscall_info_t syscall_info; 
         file_info_t file_info;
+        clone_info_t clone_info;
+        clone3_info_t clone3_info;
         struct {
             char value[VALUE_SIZE];
             char truncated;
@@ -213,3 +247,20 @@ typedef struct
         u64 retcode;
     } u;
 } telemetry_event_t, *ptelemetry_event_t;
+
+// clone3 args are not available in sched.h until 5.3, and we build against 4.4
+struct clone_args {
+    __aligned_u64 flags;
+    __aligned_u64 pidfd;
+    __aligned_u64 child_tid;
+    __aligned_u64 parent_tid;
+    __aligned_u64 exit_signal;
+    __aligned_u64 stack;
+    __aligned_u64 stack_size;
+    __aligned_u64 tls;
+    // version 2
+    __aligned_u64 set_tid;
+    __aligned_u64 set_tid_size;
+    // version 3
+    __aligned_u64 cgroup;
+};
