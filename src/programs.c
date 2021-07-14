@@ -1593,6 +1593,14 @@ static __always_inline int enter_unshare(syscall_pattern_type_t sp, int flags,
     ev->u.syscall_info.luid = luid;
     if (!(ev = push_telemetry_event(ev)))
         return -1;
+
+    ev->id = id;
+    ev->done = FALSE;
+    ev->telemetry_type = TE_UNSHARE_FLAGS;
+    ev->u.unshare_flags = flags;
+    if (!(ev = push_telemetry_event(ev)))
+        return -1;
+
     bpf_map_update_elem(&telemetry_ids, &pid, &id, BPF_ANY);
 
     return 0;
@@ -1633,7 +1641,7 @@ static __always_inline int exit_unshare(struct pt_regs *ctx)
     Flush:
     flush_telemetry_events(ctx);
     bpf_printk("flush tc\n");
-    bpf_tail_call(ctx, &tail_call_table, 3);
+    bpf_tail_call(ctx, &tail_call_table, 5);
 
 //Exit:
 
@@ -1686,6 +1694,13 @@ static __always_inline int enter_exit(syscall_pattern_type_t sp, int status,
     ev->u.syscall_info.luid = luid;
     if (!(ev = push_telemetry_event(ev)))
         return -1;
+
+    ev->id = id;
+    ev->done = FALSE;
+    ev->telemetry_type = TE_EXIT_STATUS;
+    ev->u.exit_status = status;
+    if (!(ev = push_telemetry_event(ev)))
+        return -1;
     bpf_map_update_elem(&telemetry_ids, &pid, &id, BPF_ANY);
 
     return 0;
@@ -1726,7 +1741,7 @@ static __always_inline int exit_exit(struct pt_regs *ctx)
     Flush:
     flush_telemetry_events(ctx);
     bpf_printk("flush tc\n");
-    bpf_tail_call(ctx, &tail_call_table, 3);
+    bpf_tail_call(ctx, &tail_call_table, 6);
 
 //Exit:
 
@@ -1757,13 +1772,13 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_exit_group_4_8, int status)
     u32 ppid = -1;
     u32 luid = -1;
     GET_OFFSETS_4_8;
-    return enter_exit(SP_EXIT, status, ctx, ppid, luid);
+    return enter_exit(SP_EXITGROUP, status, ctx, ppid, luid);
 }
 
 SEC("kprobe/sys_exit_group")
 int BPF_KPROBE_SYSCALL(kprobe__sys_exit_group, int status)
 {
-    return enter_exit(SP_EXIT, status, ctx, -1, -1);
+    return enter_exit(SP_EXITGROUP, status, ctx, -1, -1);
 }
 
 SEC("kretprobe/ret_sys_exit")

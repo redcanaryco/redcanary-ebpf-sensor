@@ -72,6 +72,8 @@ typedef enum
     TE_RETCODE,
     TE_CLONE_INFO,
     TE_CLONE3_INFO,
+    TE_UNSHARE_FLAGS,
+    TE_EXIT_STATUS,
 } telemetry_event_type_t;
 
 #define COMMON_FIELDS \
@@ -240,6 +242,8 @@ typedef struct
         file_info_t file_info;
         clone_info_t clone_info;
         clone3_info_t clone3_info;
+        int unshare_flags;
+        int exit_status;
         struct {
             char value[VALUE_SIZE];
             char truncated;
