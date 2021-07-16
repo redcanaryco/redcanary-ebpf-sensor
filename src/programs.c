@@ -299,8 +299,8 @@ static __always_inline syscall_pattern_type_t ptrace_syscall_pattern(u32 request
     /* if "loaded" doesn't exist in the map, we get NULL back and won't read from offsets                           \
      * when offsets are loaded into the offsets map, "loaded" should be given any value                             \
      */                                                                                                             \
-    u64 loaded_str = 0xec6642829d632573; /* CRC64 of "loaded"  */                                                   \
-    u64 *loaded = bpf_map_lookup_elem(&offsets, &loaded_str);                                                       \
+    u64 loaded = 0xec6642829d632573; /* CRC64 of "loaded"  */                                                       \
+    loaded = (u64) bpf_map_lookup_elem(&offsets, &loaded); /* squeezing out as much stack as possible */            \
     /* since we're using offsets to read from the structs, we don't need to bother with                             \
      * understanding their structure                                                                                \
      */                                                                                                             \
@@ -308,23 +308,22 @@ static __always_inline syscall_pattern_type_t ptrace_syscall_pattern(u32 request
     void *pts = NULL;                                                                                               \
     if (ts && loaded) {                                                                                             \
         /* CRC64 of task_struct->real_parent */                                                                     \
-        u64 real_parent_offset_name = 0x940b92aaad4c5437;                                                           \
+        u64 real_parent_offset = 0x940b92aaad4c5437;                                                                \
         /* CRC64 of task_struct->pid */                                                                             \
-        u64 ppid_offset_name = 0xc713ffcffcd1cc3c;                                                                  \
+        u64 ppid_offset = 0xc713ffcffcd1cc3c;                                                                       \
         /* CRC64 of task_struct->loginuid */                                                                        \
-        u64 luid_offset_name = 0x9951a3e4f7757060;                                                                  \
-        u32 *real_parent_offset = bpf_map_lookup_elem(&offsets, &real_parent_offset_name);                          \
-        u32 *ppid_offset = bpf_map_lookup_elem(&offsets, &ppid_offset_name);                                        \
-        u32 *luid_offset = bpf_map_lookup_elem(&offsets, &luid_offset_name);                                        \
+        u64 luid_offset = 0x9951a3e4f7757060;                                                                       \
+        real_parent_offset = (u64) bpf_map_lookup_elem(&offsets, &real_parent_offset);                              \
+        ppid_offset = (u64) bpf_map_lookup_elem(&offsets, &ppid_offset);                                            \
+        luid_offset = (u64) bpf_map_lookup_elem(&offsets, &luid_offset);                                            \
         if (real_parent_offset && ppid_offset && luid_offset)                                                       \
         {                                                                                                           \
-            bpf_printk("real_parent: %d; pid: %d; luid: %d\n", *real_parent_offset, *ppid_offset, &luid_offset);    \
-            bpf_probe_read(&pts, sizeof(pts), ts + *real_parent_offset);                                            \
+            bpf_probe_read(&pts, sizeof(pts), ts + *(u32*)real_parent_offset);                                      \
             if (pts)                                                                                                \
             {                                                                                                       \
-                bpf_probe_read(&ppid, sizeof(ppid), pts + *ppid_offset);                                            \
+                bpf_probe_read(&ppid, sizeof(ppid), pts + *(u32*)ppid_offset);                                      \
             }                                                                                                       \
-            bpf_probe_read(&luid, sizeof(luid), ts + *luid_offset);                                                 \
+            bpf_probe_read(&luid, sizeof(luid), ts + *(u32*)luid_offset);                                           \
         }                                                                                                           \
     }
 
@@ -794,46 +793,54 @@ static __always_inline void clear_telemetry_events()
     bpf_map_update_elem(&read_flush_index, &key, &index, BPF_ANY);
 }
 
-static __always_inline ptelemetry_event_t push_telemetry_event(ptelemetry_event_t ev)
+static __always_inline void push_telemetry_event(ptelemetry_event_t ev)
 {
     u32 key = 0;
     u32 *pcurrent_index = bpf_map_lookup_elem(&telemetry_index, &key);
     if (NULL == pcurrent_index)
     {
-        return 0;
+        return;
     }
+    u32 idx = *pcurrent_index + 0;
 
-    bpf_printk("pushing event to %d\n", *pcurrent_index);
-    int ret = bpf_map_update_elem(&telemetry_stack, pcurrent_index, ev, BPF_ANY);
+    int ret = bpf_map_update_elem(&telemetry_stack, &idx, ev, BPF_ANY);
     if (ret < 0)
     {
-        return 0;
+        return;
     }
 
     // Update the index
-    (*pcurrent_index) += 1;
-    ret = bpf_map_update_elem(&telemetry_index, &key, pcurrent_index, BPF_ANY);
+    // this is fine:
+    idx = *pcurrent_index + 1;
+    // // This fails verification on 4.15 with `invalid register spill`
+    // idx += 1;
+    // // this fails too, same message
+    // idx = idx + 1;
+    ret = bpf_map_update_elem(&telemetry_index, &key, &idx, BPF_ANY);
     if (ret < 0 )
     {
-        return 0;
+        return;
     }
 
-    return bpf_map_lookup_elem(&telemetry_stack, pcurrent_index);
-
+    ptelemetry_event_t pev = bpf_map_lookup_elem(&telemetry_stack, &idx);
+    if (pev)
+    {
+        __builtin_memcpy(ev, pev, sizeof(telemetry_event_t));
+    }
+    return;
 }
 
 #define FLUSH_LOOP                                                          \
-    if (*ii < *pcurrent_index) {                                            \
-        ev = bpf_map_lookup_elem(&telemetry_stack, ii);                     \
+    if (ii < *pcurrent_index) {                                            \
+        ev = bpf_map_lookup_elem(&telemetry_stack, &ii);                     \
         if (ev) {                                                           \
-            bpf_printk("flushing %d\n", *ii);                               \
             bpf_perf_event_output(ctx,                                      \
                 &telemetry_events,                                          \
                 bpf_get_smp_processor_id(),                                 \
                 ev,                                                         \
                 sizeof(*ev)                                                 \
             );                                                              \
-            (*ii)++;                                                        \
+            ii++;                                                        \
         }                                                                   \
         else                                                                \
         {                                                                   \
@@ -850,13 +857,14 @@ static __always_inline void flush_telemetry_events(struct pt_regs *ctx)
         return;
     }
 
-    u32 *ii = bpf_map_lookup_elem(&read_flush_index, &key);
-    if (NULL == ii)
+    u32 *pii = bpf_map_lookup_elem(&read_flush_index, &key);
+    if (NULL == pii)
     {
         bpf_map_update_elem(&read_flush_index, &key, &key, BPF_ANY);
         return;
     }
 
+    u32 ii = *pii;
     ptelemetry_event_t ev = NULL;
     FLUSH_LOOP
     FLUSH_LOOP
@@ -891,7 +899,7 @@ static __always_inline void flush_telemetry_events(struct pt_regs *ctx)
     FLUSH_LOOP
     FLUSH_LOOP
     FLUSH_LOOP
-    bpf_map_update_elem(&read_flush_index, &key, ii, BPF_ANY);
+    bpf_map_update_elem(&read_flush_index, &key, &ii, BPF_ANY);
 }
 
 #define READ_LOOP(PTR, T)                                                       \
@@ -907,27 +915,19 @@ static __always_inline void flush_telemetry_events(struct pt_regs *ctx)
     }                                                                           \
     else if ((void *) ptr == NULL)                                              \
     {                                                                           \
-        bpf_printk("next!\n");                                                  \
         goto Next;                                                              \
     }                                                                           \
     else                                                                        \
     {                                                                           \
-        bpf_printk("ptr: %d\n", ptr);                                           \
         count = bpf_probe_read_str(&ev->u.v.value, VALUE_SIZE, (void *) ptr);   \
         if (count == VALUE_SIZE) {                                              \
-            bpf_printk("truncated\n");                                          \
             ev->u.v.truncated = TRUE;                                           \
         }                                                                       \
-        bpf_printk("count: %d\n", count);                                       \
         if (count <= 0) {                                                       \
-            bpf_printk("c0 next!\n");                                           \
             goto Next;                                                          \
         }                                                                       \
     }                                                                           \
-    if (!(ev = push_telemetry_event(ev)))                                       \
-    {                                                                           \
-        goto Exit;                                                              \
-    }                                                                           \
+    push_telemetry_event(ev);                                       \
     ii++;
 
 
@@ -940,11 +940,15 @@ static __always_inline int enter_exec(syscall_pattern_type_t sp, int fd,
                                       u32 luid)
 {
     u64 id = 0; // reuse ID to save space
-    ptelemetry_event_t ev = bpf_map_lookup_elem(&telemetry_stack, (u32 *) &id);
-    if (!ev) // this should never happen, but the verifier complains otherwise
+    ptelemetry_event_t pev = bpf_map_lookup_elem(&telemetry_stack, (u32 *) &id);
+    if (!pev) // this should never happen, but the verifier complains otherwise
     {
         goto Exit;
     }
+    telemetry_event_t sev = {0};
+    __builtin_memcpy(&sev, pev, sizeof(telemetry_event_t));
+    ptelemetry_event_t ev = &sev;
+
     id = bpf_get_prandom_u32();
     ev->id = id;
     ev->done = FALSE;
@@ -955,10 +959,7 @@ static __always_inline int enter_exec(syscall_pattern_type_t sp, int fd,
     FILL_TELEMETRY_SYSCALL_EVENT(ev, sp);
     ev->u.syscall_info.ppid = ppid;
     ev->u.syscall_info.luid = luid;
-    if (!(ev = push_telemetry_event(ev)))
-    {
-        goto Exit;
-    }
+    push_telemetry_event(ev);
 
     bpf_map_update_elem(&telemetry_ids, &pid, &id, BPF_ANY);
 
@@ -982,10 +983,8 @@ static __always_inline int enter_exec(syscall_pattern_type_t sp, int fd,
 
     bpf_tail_call(ctx, &tail_call_table, 0);
 
-    bpf_printk("fallthrough\n");
 
 Exit:
-    bpf_printk("exit\n");
     return 0;
 }
 
@@ -999,36 +998,43 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_exec_tc_args,
                        const char __user *const __user *argv,
                        const char __user *const __user *envp)
 {
-    bpf_printk("tc_argv\n");
     u64 pid_tgid = bpf_get_current_pid_tgid();
     u32 pid = pid_tgid >> 32;
     u64 *idp = bpf_map_lookup_elem(&telemetry_ids, &pid);
-    u64 id = 0;
-    u32 *pcurrent_index = bpf_map_lookup_elem(&telemetry_index, &id);
+    if (idp == NULL)
+    {
+        return 0;
+    }
+
+    u64 id = *idp;
+    u64 index = 0;
+    u32 *pcurrent_index = bpf_map_lookup_elem(&telemetry_index, &index);
     if (!pcurrent_index)
     {
         return 0;
     }
-    ptelemetry_event_t ev = bpf_map_lookup_elem(&telemetry_stack, pcurrent_index);
-    if (!ev) // this should never happen, but the verifier complains otherwise
+    u32 current_index = *pcurrent_index;
+    // this needs to go on _stack_
+    ptelemetry_event_t pev = bpf_map_lookup_elem(&telemetry_stack, &current_index);
+    if (!pev) // this should never happen, but the verifier complains otherwise
     {
         goto Exit;
     }
 
-    u32 *pii = bpf_map_lookup_elem(&read_flush_index, &id);
+    telemetry_event_t tev = *pev;
+    ptelemetry_event_t ev = &tev;
+
+    u32 *pii = bpf_map_lookup_elem(&read_flush_index, &index);
     if (NULL == pii)
     {
-        bpf_map_update_elem(&read_flush_index, &id, &id, BPF_ANY);
+        bpf_map_update_elem(&read_flush_index, &index, &index, BPF_ANY);
         goto Tail;
     }
 
-    if (idp)
-        id = *idp;
-    else
-        goto Exit;
 
     long count = 0;
-    u32 ii = *pii;
+    u32 ii = 0;
+    __builtin_memcpy(&ii, pii, sizeof(u32));
     u64 ptr = 0;
     u64 ret = 0;
     READ_LOOP(argv, TE_COMMAND_LINE)
@@ -1048,7 +1054,6 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_exec_tc_args,
     READ_LOOP(argv, TE_COMMAND_LINE)
     READ_LOOP(argv, TE_COMMAND_LINE)
 
-    u32 index = 0;
     bpf_map_update_elem(&read_flush_index, &index, &ii, BPF_ANY);
 
 Tail:
@@ -1069,32 +1074,37 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_exec_tc_envp,
                        const char __user *const __user *argv,
                        const char __user *const __user *envp)
 {
-    bpf_printk("tc_envp\n");
     u64 pid_tgid = bpf_get_current_pid_tgid();
     u32 pid = pid_tgid >> 32;
+    u32 index = 0;
     u64 *idp = bpf_map_lookup_elem(&telemetry_ids, &pid);
-    u64 id = 0;
-    u32 *pcurrent_index = bpf_map_lookup_elem(&telemetry_index, &id);
+    if (idp == NULL)
+    {
+        return 0;
+    }
+    u64 id = *idp;
+    u32 *pcurrent_index = bpf_map_lookup_elem(&telemetry_index, &index);
     if (!pcurrent_index)
     {
         return 0;
     }
-    ptelemetry_event_t ev = bpf_map_lookup_elem(&telemetry_stack, pcurrent_index);
-    if (!ev) // this should never happen, but the verifier complains otherwise
+    u32 current_index = *pcurrent_index;
+    // this needs to go on _stack_
+    ptelemetry_event_t pev = bpf_map_lookup_elem(&telemetry_stack, &current_index);
+    if (!pev) // this should never happen, but the verifier complains otherwise
     {
         goto Exit;
-    }
-    u32 *pii = bpf_map_lookup_elem(&read_flush_index, &id);
-    if (NULL == pii)
-    {
-        bpf_map_update_elem(&read_flush_index, &id, &id, BPF_ANY);
-        goto Tail;
     }
 
-    if (idp)
-        id = *idp;
-    else
-        goto Exit;
+    telemetry_event_t tev = *pev;
+    ptelemetry_event_t ev = &tev;
+
+    u32 *pii = bpf_map_lookup_elem(&read_flush_index, &index);
+    if (NULL == pii)
+    {
+        bpf_map_update_elem(&read_flush_index, &index, &index, BPF_ANY);
+        goto Tail;
+    }
 
     long count = 0;
     u32 ii = *pii;
@@ -1117,7 +1127,6 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_exec_tc_envp,
     READ_LOOP(envp, TE_ENVIRONMENT)
     READ_LOOP(envp, TE_ENVIRONMENT)
 
-    u32 index = 0;
     bpf_map_update_elem(&read_flush_index, &index, &ii, BPF_ANY);
 
 
@@ -1185,7 +1194,6 @@ static __always_inline int exit_exec(struct pt_regs *__ctx)
     u64 *id = bpf_map_lookup_elem(&telemetry_ids, &pid);
     if (id)
     {
-        bpf_printk("set id\n");
         ptelemetry_event_t ev = &(telemetry_event_t) {
                 .id = 0,
                 .done = TRUE,
@@ -1200,24 +1208,18 @@ static __always_inline int exit_exec(struct pt_regs *__ctx)
 
         ev->telemetry_type = TE_RETCODE;
         ev->u.retcode = (u32)PT_REGS_RC(__ctx);
-        if (!(ev = push_telemetry_event(ev)))
-        {
-            goto Flush;
-        }
-
+        push_telemetry_event(ev);
     }
     else
         goto Flush;
 
 Flush:
     flush_telemetry_events(__ctx);
-    bpf_printk("flush tc\n");
     bpf_tail_call(__ctx, &tail_call_table, 2);
 
 //Exit:
 
     clear_telemetry_events();
-    bpf_printk("clear!\n");
 
     return 0;
 }
@@ -1241,11 +1243,15 @@ static __always_inline int enter_clone(syscall_pattern_type_t sp, unsigned long 
                                        struct pt_regs *ctx, u32 ppid, u32 luid)
 {
     u64 id = 0; // reuse ID to save space
-    ptelemetry_event_t ev = bpf_map_lookup_elem(&telemetry_stack, (u32 *) &id);
-    if (!ev) // this should never happen, but the verifier complains otherwise
+    ptelemetry_event_t pev = bpf_map_lookup_elem(&telemetry_stack, (u32 *) &id);
+    if (!pev) // this should never happen, but the verifier complains otherwise
     {
         return -1;
     }
+    telemetry_event_t sev = {0};
+    __builtin_memcpy(&sev, pev, sizeof(telemetry_event_t));
+    ptelemetry_event_t ev = &sev;
+
     id = bpf_get_prandom_u32();
     ev->id = id;
     ev->done = FALSE;
@@ -1256,8 +1262,7 @@ static __always_inline int enter_clone(syscall_pattern_type_t sp, unsigned long 
     FILL_TELEMETRY_SYSCALL_EVENT(ev, sp);
     ev->u.syscall_info.ppid = ppid;
     ev->u.syscall_info.luid = luid;
-    if (!(ev = push_telemetry_event(ev)))
-        return -1;
+    push_telemetry_event(ev);
 
     clone_info_t clone_info = {
             .flags = flags,
@@ -1285,7 +1290,6 @@ static __always_inline int exit_clone(struct pt_regs *ctx)
     u64 *id = bpf_map_lookup_elem(&telemetry_ids, &pid);
     if (id)
     {
-        bpf_printk("set id\n");
         ptelemetry_event_t ev = &(telemetry_event_t) {
                 .id = 0,
                 .done = TRUE,
@@ -1318,18 +1322,14 @@ static __always_inline int exit_clone(struct pt_regs *ctx)
         bpf_probe_read(&clone_info.parent_tid, sizeof(u32), (void*) pclone_info->p_ptr);
         bpf_probe_read(&clone_info.child_tid, sizeof(u32), (void*) pclone_info->c_ptr);
         ev->u.clone_info = clone_info;
-        if (!(ev = push_telemetry_event(ev)))
-            return -1;
+        push_telemetry_event(ev);
 
         ev->id = *id;
         bpf_map_delete_elem(&telemetry_ids, &pid);
         ev->done = TRUE;
         ev->telemetry_type = TE_RETCODE;
         ev->u.retcode = (u32)PT_REGS_RC(ctx);
-        if (!(ev = push_telemetry_event(ev)))
-        {
-            goto Flush;
-        }
+        push_telemetry_event(ev);
 
     }
     else
@@ -1337,13 +1337,11 @@ static __always_inline int exit_clone(struct pt_regs *ctx)
 
 Flush:
     flush_telemetry_events(ctx);
-    bpf_printk("flush tc\n");
     bpf_tail_call(ctx, &tail_call_table, 3);
 
 //Exit:
 
     clear_telemetry_events();
-    bpf_printk("clear!\n");
 
     return 0;
 }
@@ -1381,13 +1379,16 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_clone, unsigned long flags, void *stack,
 static __always_inline int enter_clone3(syscall_pattern_type_t sp, struct clone_args __user *uargs,
                                         size_t size, struct pt_regs *ctx, u32 ppid, u32 luid)
 {
-
     u64 id = 0; // reuse ID to save space
-    ptelemetry_event_t ev = bpf_map_lookup_elem(&telemetry_stack, (u32 *) &id);
-    if (!ev) // this should never happen, but the verifier complains otherwise
+    ptelemetry_event_t pev = bpf_map_lookup_elem(&telemetry_stack, (u32 *) &id);
+    if (!pev) // this should never happen, but the verifier complains otherwise
     {
         return -1;
     }
+    telemetry_event_t sev = {0};
+    __builtin_memcpy(&sev, pev, sizeof(telemetry_event_t));
+    ptelemetry_event_t ev = &sev;
+
     id = bpf_get_prandom_u32();
     ev->id = id;
     ev->done = FALSE;
@@ -1398,8 +1399,7 @@ static __always_inline int enter_clone3(syscall_pattern_type_t sp, struct clone_
     FILL_TELEMETRY_SYSCALL_EVENT(ev, sp);
     ev->u.syscall_info.ppid = ppid;
     ev->u.syscall_info.luid = luid;
-    if (!(ev = push_telemetry_event(ev)))
-        return -1;
+    push_telemetry_event(ev);
     bpf_map_update_elem(&telemetry_ids, &pid, &id, BPF_ANY);
 
     clone3_info_t clone3_info = {0};
@@ -1434,7 +1434,6 @@ static __always_inline int exit_clone3(struct pt_regs *ctx)
     u64 *id = bpf_map_lookup_elem(&telemetry_ids, &pid);
     if (id)
     {
-        bpf_printk("set id\n");
         ptelemetry_event_t ev = &(telemetry_event_t) {
                 .id = 0,
                 .done = TRUE,
@@ -1477,18 +1476,14 @@ static __always_inline int exit_clone3(struct pt_regs *ctx)
         bpf_probe_read(&clone_info.parent_tid, sizeof(u32), (void*) clone_info.p_ptr);
         bpf_probe_read(&clone_info.child_tid, sizeof(u32), (void*) clone_info.c_ptr);
         ev->u.clone3_info = clone_info;
-        if (!(ev = push_telemetry_event(ev)))
-            return -1;
+        push_telemetry_event(ev);
 
         ev->id = *id;
         bpf_map_delete_elem(&telemetry_ids, &pid);
         ev->done = TRUE;
         ev->telemetry_type = TE_RETCODE;
         ev->u.retcode = (u32)PT_REGS_RC(ctx);
-        if (!(ev = push_telemetry_event(ev)))
-        {
-            goto Flush;
-        }
+        push_telemetry_event(ev);
 
     }
     else
@@ -1496,13 +1491,11 @@ static __always_inline int exit_clone3(struct pt_regs *ctx)
 
     Flush:
     flush_telemetry_events(ctx);
-    bpf_printk("flush tc\n");
     bpf_tail_call(ctx, &tail_call_table, 4);
 
 //Exit:
 
     clear_telemetry_events();
-    bpf_printk("clear!\n");
 
     return 0;
 }
@@ -1576,11 +1569,15 @@ static __always_inline int enter_unshare(syscall_pattern_type_t sp, int flags,
                                          struct pt_regs *ctx, u32 ppid, u32 luid)
 {
     u64 id = 0; // reuse ID to save space
-    ptelemetry_event_t ev = bpf_map_lookup_elem(&telemetry_stack, (u32 *) &id);
-    if (!ev) // this should never happen, but the verifier complains otherwise
+    ptelemetry_event_t pev = bpf_map_lookup_elem(&telemetry_stack, (u32 *) &id);
+    if (!pev) // this should never happen, but the verifier complains otherwise
     {
         return -1;
     }
+    telemetry_event_t sev = {0};
+    __builtin_memcpy(&sev, pev, sizeof(telemetry_event_t));
+    ptelemetry_event_t ev = &sev;
+
     id = bpf_get_prandom_u32();
     ev->id = id;
     ev->done = FALSE;
@@ -1591,15 +1588,13 @@ static __always_inline int enter_unshare(syscall_pattern_type_t sp, int flags,
     FILL_TELEMETRY_SYSCALL_EVENT(ev, sp);
     ev->u.syscall_info.ppid = ppid;
     ev->u.syscall_info.luid = luid;
-    if (!(ev = push_telemetry_event(ev)))
-        return -1;
+    push_telemetry_event(ev);
 
     ev->id = id;
     ev->done = FALSE;
     ev->telemetry_type = TE_UNSHARE_FLAGS;
     ev->u.unshare_flags = flags;
-    if (!(ev = push_telemetry_event(ev)))
-        return -1;
+    push_telemetry_event(ev);
 
     bpf_map_update_elem(&telemetry_ids, &pid, &id, BPF_ANY);
 
@@ -1614,7 +1609,6 @@ static __always_inline int exit_unshare(struct pt_regs *ctx)
     u64 *id = bpf_map_lookup_elem(&telemetry_ids, &pid);
     if (id)
     {
-        bpf_printk("set id\n");
         ptelemetry_event_t ev = &(telemetry_event_t) {
                 .id = 0,
                 .done = TRUE,
@@ -1629,10 +1623,7 @@ static __always_inline int exit_unshare(struct pt_regs *ctx)
 
         ev->telemetry_type = TE_RETCODE;
         ev->u.retcode = (u32)PT_REGS_RC(ctx);
-        if (!(ev = push_telemetry_event(ev)))
-        {
-            goto Flush;
-        }
+        push_telemetry_event(ev);
 
     }
     else
@@ -1640,13 +1631,11 @@ static __always_inline int exit_unshare(struct pt_regs *ctx)
 
     Flush:
     flush_telemetry_events(ctx);
-    bpf_printk("flush tc\n");
     bpf_tail_call(ctx, &tail_call_table, 5);
 
 //Exit:
 
     clear_telemetry_events();
-    bpf_printk("clear!\n");
 
     return 0;
 }
@@ -1677,11 +1666,16 @@ static __always_inline int enter_exit(syscall_pattern_type_t sp, int status,
                                          struct pt_regs *ctx, u32 ppid, u32 luid)
 {
     u64 id = 0; // reuse ID to save space
-    ptelemetry_event_t ev = bpf_map_lookup_elem(&telemetry_stack, (u32 *) &id);
-    if (!ev) // this should never happen, but the verifier complains otherwise
+    ptelemetry_event_t pev = bpf_map_lookup_elem(&telemetry_stack, (u32 *) &id);
+    if (!pev) // this should never happen, but the verifier complains otherwise
     {
         return -1;
     }
+    telemetry_event_t sev = {0};
+    __builtin_memcpy(&sev, pev, sizeof(telemetry_event_t));
+    ptelemetry_event_t ev = &sev;
+
+
     id = bpf_get_prandom_u32();
     ev->id = id;
     ev->done = FALSE;
@@ -1692,15 +1686,13 @@ static __always_inline int enter_exit(syscall_pattern_type_t sp, int status,
     FILL_TELEMETRY_SYSCALL_EVENT(ev, sp);
     ev->u.syscall_info.ppid = ppid;
     ev->u.syscall_info.luid = luid;
-    if (!(ev = push_telemetry_event(ev)))
-        return -1;
+    push_telemetry_event(ev);
 
     ev->id = id;
     ev->done = FALSE;
     ev->telemetry_type = TE_EXIT_STATUS;
     ev->u.exit_status = status;
-    if (!(ev = push_telemetry_event(ev)))
-        return -1;
+    push_telemetry_event(ev);
     bpf_map_update_elem(&telemetry_ids, &pid, &id, BPF_ANY);
 
     return 0;
@@ -1714,7 +1706,6 @@ static __always_inline int exit_exit(struct pt_regs *ctx)
     u64 *id = bpf_map_lookup_elem(&telemetry_ids, &pid);
     if (id)
     {
-        bpf_printk("set id\n");
         ptelemetry_event_t ev = &(telemetry_event_t) {
                 .id = 0,
                 .done = TRUE,
@@ -1729,10 +1720,7 @@ static __always_inline int exit_exit(struct pt_regs *ctx)
 
         ev->telemetry_type = TE_RETCODE;
         ev->u.retcode = (u32)PT_REGS_RC(ctx);
-        if (!(ev = push_telemetry_event(ev)))
-        {
-            goto Flush;
-        }
+        push_telemetry_event(ev);
 
     }
     else
@@ -1740,13 +1728,11 @@ static __always_inline int exit_exit(struct pt_regs *ctx)
 
     Flush:
     flush_telemetry_events(ctx);
-    bpf_printk("flush tc\n");
     bpf_tail_call(ctx, &tail_call_table, 6);
 
 //Exit:
 
     clear_telemetry_events();
-    bpf_printk("clear!\n");
 
     return 0;
 }
