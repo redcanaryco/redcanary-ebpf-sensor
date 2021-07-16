@@ -445,30 +445,26 @@ typeof(name(0)) name(struct pt_regs *ctx)				    \
 static __always_inline typeof(name(0)) ____##name(struct pt_regs *ctx, ##args)
 
 // Macros to populate arguments to the BPF_KRPOBE_SYSCALL function
-#define ___bpf_kprobe_syscall_args0() ctx
+#define ___bpf_kprobe_syscall_args0() ___ctx
 #define ___bpf_kprobe_syscall_args1(x) \
-	___bpf_kprobe_syscall_args0(), (void *)SYSCALL_PARM1(&___ctx)
+	___bpf_kprobe_syscall_args0(), (void *)SYSCALL_PARM1(___ctx)
 #define ___bpf_kprobe_syscall_args2(x, args...) \
-	___bpf_kprobe_syscall_args1(args), (void *)SYSCALL_PARM2(&___ctx)
+	___bpf_kprobe_syscall_args1(args), (void *)SYSCALL_PARM2(___ctx)
 #define ___bpf_kprobe_syscall_args3(x, args...) \
-	___bpf_kprobe_syscall_args2(args), (void *)SYSCALL_PARM3(&___ctx)
+	___bpf_kprobe_syscall_args2(args), (void *)SYSCALL_PARM3(___ctx)
 #define ___bpf_kprobe_syscall_args4(x, args...) \
-	___bpf_kprobe_syscall_args3(args), (void *)SYSCALL_PARM4(&___ctx)
+	___bpf_kprobe_syscall_args3(args), (void *)SYSCALL_PARM4(___ctx)
 #define ___bpf_kprobe_syscall_args5(x, args...) \
-	___bpf_kprobe_syscall_args4(args), (void *)SYSCALL_PARM5(&___ctx)
+	___bpf_kprobe_syscall_args4(args), (void *)SYSCALL_PARM5(___ctx)
 #define ___bpf_kprobe_syscall_args(args...) \
 	___bpf_apply(___bpf_kprobe_syscall_args, ___bpf_narg(args))(args)
 
 #ifdef CONFIG_SYSCALL_WRAPPER
 #define position_syscall_regs() \
-    struct pt_regs ___ctx = {}; \
-    u64 _pad __attribute__((unused)); \
-    bpf_probe_read(&___ctx, sizeof(___ctx), (void *)SYSCALL_PARM1_CORE(ctx))
+    struct pt_regs * ___ctx = (struct pt_regs *)SYSCALL_PARM1_CORE(ctx);
 #else
 #define position_syscall_regs() \
-    struct pt_regs ___ctx = {}; \
-    u64 _pad __attribute__((unused)); \
-    bpf_probe_read(&___ctx, sizeof(___ctx), (void *)ctx)
+    struct pt_regs * ___ctx = ctx;
 #endif
 
 /*
