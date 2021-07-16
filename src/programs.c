@@ -788,9 +788,8 @@ static __always_inline void clear_telemetry_events()
 {
     // The key is always zero since the index is just a simple state counter
     u32 key = 0;
-    u32 index = 0;
-    bpf_map_update_elem(&telemetry_index, &key, &index, BPF_ANY);
-    bpf_map_update_elem(&read_flush_index, &key, &index, BPF_ANY);
+    bpf_map_update_elem(&telemetry_index, &key, &key, BPF_ANY);
+    bpf_map_update_elem(&read_flush_index, &key, &key, BPF_ANY);
 }
 
 static __always_inline void push_telemetry_event(ptelemetry_event_t ev)
