@@ -275,20 +275,15 @@ static __always_inline syscall_pattern_type_t ptrace_syscall_pattern(u32 request
 #define FILL_TELEMETRY_SYSCALL_EVENT(E, SP)    \
     u64 pid_tgid = bpf_get_current_pid_tgid(); \
     u64 euid_egid = bpf_get_current_uid_gid(); \
-    u32 pid = pid_tgid >> 32;                  \
-    u32 tid = pid_tgid & 0xFFFFFFFF;           \
-    u32 euid = euid_egid >> 32;                \
-    u32 egid = euid_egid & 0xFFFFFFFF;         \
-    u64 mono_ns = bpf_ktime_get_ns();          \
     E->done = FALSE;                           \
     E->telemetry_type = TE_SYSCALL_INFO;       \
-    E->u.syscall_info.pid = pid;               \
-    E->u.syscall_info.tid = tid;               \
+    E->u.syscall_info.pid = pid_tgid >> 32;               \
+    E->u.syscall_info.tid = pid_tgid & 0xFFFFFFFF;               \
     E->u.syscall_info.ppid = -1;               \
     E->u.syscall_info.luid = -1;               \
-    E->u.syscall_info.euid = euid;             \
-    E->u.syscall_info.egid = egid;             \
-    E->u.syscall_info.mono_ns = mono_ns;       \
+    E->u.syscall_info.euid = euid_egid >> 32;             \
+    E->u.syscall_info.egid = euid_egid & 0xFFFFFFFF;             \
+    E->u.syscall_info.mono_ns = bpf_ktime_get_ns();       \
     E->u.syscall_info.syscall_pattern = SP;    \
     bpf_get_current_comm(E->u.syscall_info.comm, sizeof(E->u.syscall_info.comm));
 
@@ -956,6 +951,7 @@ static __always_inline int enter_exec(syscall_pattern_type_t sp, int fd,
     ev->u.v.truncated = FALSE;
 
     FILL_TELEMETRY_SYSCALL_EVENT(ev, sp);
+    u32 pid = pid_tgid >> 32;
     ev->u.syscall_info.ppid = ppid;
     ev->u.syscall_info.luid = luid;
     push_telemetry_event(ev);
@@ -1259,6 +1255,7 @@ static __always_inline int enter_clone(syscall_pattern_type_t sp, unsigned long 
     ev->u.v.truncated = FALSE;
 
     FILL_TELEMETRY_SYSCALL_EVENT(ev, sp);
+    u32 pid = pid_tgid >> 32;
     ev->u.syscall_info.ppid = ppid;
     ev->u.syscall_info.luid = luid;
     push_telemetry_event(ev);
@@ -1346,6 +1343,8 @@ Flush:
 }
 
 
+// TODO: get exe path from mm_struct argv
+
 SEC("kprobe/sys_clone_4_8")
 #if defined(__TARGET_ARCH_x86)
 int BPF_KPROBE_SYSCALL(kprobe__sys_clone_4_8, unsigned long flags, void __user *stack,
@@ -1379,14 +1378,14 @@ static __always_inline int enter_clone3(syscall_pattern_type_t sp, struct clone_
                                         size_t size, struct pt_regs *ctx, u32 ppid, u32 luid)
 {
     u64 id = 0; // reuse ID to save space
-    ptelemetry_event_t pev = bpf_map_lookup_elem(&telemetry_stack, (u32 *) &id);
-    if (!pev) // this should never happen, but the verifier complains otherwise
+    ptelemetry_event_t ev = bpf_map_lookup_elem(&telemetry_stack, (u32 *) &id);
+    if (!ev) // this should never happen, but the verifier complains otherwise
     {
         return -1;
     }
     telemetry_event_t sev = {0};
-    __builtin_memcpy(&sev, pev, sizeof(telemetry_event_t));
-    ptelemetry_event_t ev = &sev;
+    __builtin_memcpy(&sev, ev, sizeof(telemetry_event_t));
+    ev = &sev;
 
     id = bpf_get_prandom_u32();
     ev->id = id;
@@ -1396,10 +1395,12 @@ static __always_inline int enter_clone3(syscall_pattern_type_t sp, struct clone_
     ev->u.v.truncated = FALSE;
 
     FILL_TELEMETRY_SYSCALL_EVENT(ev, sp);
+
     ev->u.syscall_info.ppid = ppid;
     ev->u.syscall_info.luid = luid;
     push_telemetry_event(ev);
-    bpf_map_update_elem(&telemetry_ids, &pid, &id, BPF_ANY);
+    pid_tgid = pid_tgid >> 32;
+    bpf_map_update_elem(&telemetry_ids, (u32 *)&pid_tgid, &id, BPF_ANY);
 
     clone3_info_t clone3_info = {0};
     clone3_info.size = (u64) size;
@@ -1419,8 +1420,8 @@ static __always_inline int enter_clone3(syscall_pattern_type_t sp, struct clone_
         bpf_probe_read(&clone3_info.cgroup, sizeof(u64), &uargs->cgroup);
     }
 
-    u32 key = 0;
-    bpf_map_update_elem(&clone3_info_store, &key, &clone3_info, BPF_ANY);
+    id = 0;
+    bpf_map_update_elem(&clone3_info_store, &id, &clone3_info, BPF_ANY);
 
     return 0;
 }
@@ -1564,6 +1565,8 @@ int kretprobe__ret_sys_vfork(struct pt_regs *ctx)
     return exit_clone(ctx);
 }
 
+// everything but items, exit
+
 static __always_inline int enter_unshare(syscall_pattern_type_t sp, int flags,
                                          struct pt_regs *ctx, u32 ppid, u32 luid)
 {
@@ -1585,6 +1588,7 @@ static __always_inline int enter_unshare(syscall_pattern_type_t sp, int flags,
     ev->u.v.truncated = FALSE;
 
     FILL_TELEMETRY_SYSCALL_EVENT(ev, sp);
+    u32 pid = pid_tgid >> 32;
     ev->u.syscall_info.ppid = ppid;
     ev->u.syscall_info.luid = luid;
     push_telemetry_event(ev);
@@ -1661,6 +1665,8 @@ int kretprobe__ret_sys_unshare(struct pt_regs *ctx)
 }
 
 
+// exits - all but a0, items, and exit
+
 static __always_inline int enter_exit(syscall_pattern_type_t sp, int status,
                                          struct pt_regs *ctx, u32 ppid, u32 luid)
 {
@@ -1683,6 +1689,7 @@ static __always_inline int enter_exit(syscall_pattern_type_t sp, int status,
     ev->u.v.truncated = FALSE;
 
     FILL_TELEMETRY_SYSCALL_EVENT(ev, sp);
+    u32 pid = pid_tgid >> 32;
     ev->u.syscall_info.ppid = ppid;
     ev->u.syscall_info.luid = luid;
     push_telemetry_event(ev);
