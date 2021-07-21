@@ -462,12 +462,10 @@ static __always_inline typeof(name(0)) ____##name(struct pt_regs *ctx, ##args)
 #ifdef CONFIG_SYSCALL_WRAPPER
 #define position_syscall_regs() \
     struct pt_regs  ___ctx = {}; \
-    u64 _pad __attribute__((unused));                            \
     bpf_probe_read(&___ctx, sizeof(___ctx), (void *)SYSCALL_PARM1_CORE(ctx));
 #else
 #define position_syscall_regs() \
         struct pt_regs ___ctx = {}; \
-        u64 _pad __attribute__((unused)); \
         bpf_probe_read(&___ctx, sizeof(___ctx), (void *)ctx);
 #endif
 

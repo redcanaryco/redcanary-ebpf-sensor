@@ -274,15 +274,14 @@ static __always_inline syscall_pattern_type_t ptrace_syscall_pattern(u32 request
 
 #define FILL_TELEMETRY_SYSCALL_EVENT(E, SP)    \
     u64 pid_tgid = bpf_get_current_pid_tgid(); \
-    u64 euid_egid = bpf_get_current_uid_gid(); \
     E->done = FALSE;                           \
     E->telemetry_type = TE_SYSCALL_INFO;       \
     E->u.syscall_info.pid = pid_tgid >> 32;               \
     E->u.syscall_info.tid = pid_tgid & 0xFFFFFFFF;               \
     E->u.syscall_info.ppid = -1;               \
     E->u.syscall_info.luid = -1;               \
-    E->u.syscall_info.euid = euid_egid >> 32;             \
-    E->u.syscall_info.egid = euid_egid & 0xFFFFFFFF;             \
+    E->u.syscall_info.euid = bpf_get_current_uid_gid() >> 32;             \
+    E->u.syscall_info.egid = bpf_get_current_uid_gid() & 0xFFFFFFFF;             \
     E->u.syscall_info.mono_ns = bpf_ktime_get_ns();       \
     E->u.syscall_info.syscall_pattern = SP;    \
     bpf_get_current_comm(E->u.syscall_info.comm, sizeof(E->u.syscall_info.comm));
@@ -983,10 +982,6 @@ Exit:
     return 0;
 }
 
-// TODO: inline func for getting ppid, luid, and other task struct schtuff
-
-// process start - everything but a0, exit
-
 SEC("kprobe/sys_exec_tc_args")
 int BPF_KPROBE_SYSCALL(kprobe__sys_exec_tc_args,
                        const char __user *filename,
@@ -1343,8 +1338,6 @@ Flush:
 }
 
 
-// TODO: get exe path from mm_struct argv
-
 SEC("kprobe/sys_clone_4_8")
 #if defined(__TARGET_ARCH_x86)
 int BPF_KPROBE_SYSCALL(kprobe__sys_clone_4_8, unsigned long flags, void __user *stack,
@@ -1565,8 +1558,6 @@ int kretprobe__ret_sys_vfork(struct pt_regs *ctx)
     return exit_clone(ctx);
 }
 
-// everything but items, exit
-
 static __always_inline int enter_unshare(syscall_pattern_type_t sp, int flags,
                                          struct pt_regs *ctx, u32 ppid, u32 luid)
 {
@@ -1664,8 +1655,6 @@ int kretprobe__ret_sys_unshare(struct pt_regs *ctx)
     return exit_unshare(ctx);
 }
 
-
-// exits - all but a0, items, and exit
 
 static __always_inline int enter_exit(syscall_pattern_type_t sp, int status,
                                          struct pt_regs *ctx, u32 ppid, u32 luid)
