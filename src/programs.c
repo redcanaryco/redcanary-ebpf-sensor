@@ -9,6 +9,7 @@
 
 #include "bpf_helpers.h"
 #include "types.h"
+#include "offsets.h"
 
 #define MAX_TELEMETRY_STACK_ENTRIES 128
 #define CLONE_ARGS_SIZE_VER0 64 /* sizeof first published struct */
@@ -272,18 +273,18 @@ static __always_inline syscall_pattern_type_t ptrace_syscall_pattern(u32 request
         .mono_ns = mono_ns,                    \
     }
 
-#define FILL_TELEMETRY_SYSCALL_EVENT(E, SP)    \
-    u64 pid_tgid = bpf_get_current_pid_tgid(); \
-    E->done = FALSE;                           \
-    E->telemetry_type = TE_SYSCALL_INFO;       \
-    E->u.syscall_info.pid = pid_tgid >> 32;               \
-    E->u.syscall_info.tid = pid_tgid & 0xFFFFFFFF;               \
-    E->u.syscall_info.ppid = -1;               \
-    E->u.syscall_info.luid = -1;               \
-    E->u.syscall_info.euid = bpf_get_current_uid_gid() >> 32;             \
-    E->u.syscall_info.egid = bpf_get_current_uid_gid() & 0xFFFFFFFF;             \
-    E->u.syscall_info.mono_ns = bpf_ktime_get_ns();       \
-    E->u.syscall_info.syscall_pattern = SP;    \
+#define FILL_TELEMETRY_SYSCALL_EVENT(E, SP)                                         \
+    u64 pid_tgid = bpf_get_current_pid_tgid();                                      \
+    E->done = FALSE;                                                                \
+    E->telemetry_type = TE_SYSCALL_INFO;                                            \
+    E->u.syscall_info.pid = pid_tgid >> 32;                                         \
+    E->u.syscall_info.tid = pid_tgid & 0xFFFFFFFF;                                  \
+    E->u.syscall_info.ppid = -1;                                                    \
+    E->u.syscall_info.luid = -1;                                                    \
+    E->u.syscall_info.euid = bpf_get_current_uid_gid() >> 32;                       \
+    E->u.syscall_info.egid = bpf_get_current_uid_gid() & 0xFFFFFFFF;                \
+    E->u.syscall_info.mono_ns = bpf_ktime_get_ns();                                 \
+    E->u.syscall_info.syscall_pattern = SP;                                         \
     bpf_get_current_comm(E->u.syscall_info.comm, sizeof(E->u.syscall_info.comm));
 
 #define FILL_TELEMETRY_SYSCALL_RET(E, SP) \
@@ -293,7 +294,7 @@ static __always_inline syscall_pattern_type_t ptrace_syscall_pattern(u32 request
     /* if "loaded" doesn't exist in the map, we get NULL back and won't read from offsets                           \
      * when offsets are loaded into the offsets map, "loaded" should be given any value                             \
      */                                                                                                             \
-    u64 loaded = 0xec6642829d632573; /* CRC64 of "loaded"  */                                                       \
+    u64 loaded = CRC_LOADED;                                                         \
     loaded = (u64) bpf_map_lookup_elem(&offsets, &loaded); /* squeezing out as much stack as possible */            \
     /* since we're using offsets to read from the structs, we don't need to bother with                             \
      * understanding their structure                                                                                \
@@ -301,12 +302,9 @@ static __always_inline syscall_pattern_type_t ptrace_syscall_pattern(u32 request
     void *ts = (void *)bpf_get_current_task();                                                                      \
     void *pts = NULL;                                                                                               \
     if (ts && loaded) {                                                                                             \
-        /* CRC64 of task_struct->real_parent */                                                                     \
-        u64 real_parent_offset = 0x940b92aaad4c5437;                                                                \
-        /* CRC64 of task_struct->pid */                                                                             \
-        u64 ppid_offset = 0xc713ffcffcd1cc3c;                                                                       \
-        /* CRC64 of task_struct->loginuid */                                                                        \
-        u64 luid_offset = 0x9951a3e4f7757060;                                                                       \
+        u64 real_parent_offset = CRC_TASK_STRUCT_REAL_PARENT;                                                       \
+        u64 ppid_offset = CRC_TASK_STRUCT_PID;                                                                      \
+        u64 luid_offset = CRC_TASK_STRUCT_LOGINUID;                                                                 \
         real_parent_offset = (u64) bpf_map_lookup_elem(&offsets, &real_parent_offset);                              \
         ppid_offset = (u64) bpf_map_lookup_elem(&offsets, &ppid_offset);                                            \
         luid_offset = (u64) bpf_map_lookup_elem(&offsets, &luid_offset);                                            \
@@ -824,8 +822,9 @@ static __always_inline void push_telemetry_event(ptelemetry_event_t ev)
 }
 
 #define FLUSH_LOOP                                                          \
-    if (ii < *pcurrent_index) {                                            \
-        ev = bpf_map_lookup_elem(&telemetry_stack, &ii);                     \
+    if (ii < *pcurrent_index) {                                             \
+        ev = bpf_map_lookup_elem(&telemetry_stack, &ii);                    \
+        ii++;                                                               \
         if (ev) {                                                           \
             bpf_perf_event_output(ctx,                                      \
                 &telemetry_events,                                          \
@@ -833,13 +832,10 @@ static __always_inline void push_telemetry_event(ptelemetry_event_t ev)
                 ev,                                                         \
                 sizeof(*ev)                                                 \
             );                                                              \
-            ii++;                                                        \
         }                                                                   \
-        else                                                                \
-        {                                                                   \
-        }\
     }
 
+#define FLUSH_LOOP_N(N) REPEAT_##N(FLUSH_LOOP;)
 
 static __always_inline void flush_telemetry_events(struct pt_regs *ctx)
 {
@@ -859,48 +855,13 @@ static __always_inline void flush_telemetry_events(struct pt_regs *ctx)
 
     u32 ii = *pii;
     ptelemetry_event_t ev = NULL;
-    FLUSH_LOOP
-    FLUSH_LOOP
-    FLUSH_LOOP
-    FLUSH_LOOP
-    FLUSH_LOOP
-    FLUSH_LOOP
-    FLUSH_LOOP
-    FLUSH_LOOP
-    FLUSH_LOOP
-    FLUSH_LOOP
-    FLUSH_LOOP
-    FLUSH_LOOP
-    FLUSH_LOOP
-    FLUSH_LOOP
-    FLUSH_LOOP
-    FLUSH_LOOP
-    FLUSH_LOOP
-    FLUSH_LOOP
-    FLUSH_LOOP
-    FLUSH_LOOP
-    FLUSH_LOOP
-    FLUSH_LOOP
-    FLUSH_LOOP
-    FLUSH_LOOP
-    FLUSH_LOOP
-    FLUSH_LOOP
-    FLUSH_LOOP
-    FLUSH_LOOP
-    FLUSH_LOOP
-    FLUSH_LOOP
-    FLUSH_LOOP
-    FLUSH_LOOP
-    FLUSH_LOOP
+    FLUSH_LOOP_N(27);
     bpf_map_update_elem(&read_flush_index, &key, &ii, BPF_ANY);
 }
 
-#define READ_LOOP(PTR, T)                                                       \
-    ev->id = id;                                                                \
-    ev->done = FALSE;                                                           \
-    ev->telemetry_type = T;                                                     \
-    ev->u.v.truncated = FALSE;                                                  \
+#define READ_LOOP(PTR)                                                          \
     ptr = 0;                                                                    \
+    ev->u.v.truncated = FALSE;                                                  \
     ret = bpf_probe_read(&ptr, sizeof(u64), (void*) PTR + (ii * sizeof(u64)));  \
     if (ret < 0)                                                                \
     {                                                                           \
@@ -920,10 +881,10 @@ static __always_inline void flush_telemetry_events(struct pt_regs *ctx)
             goto Next;                                                          \
         }                                                                       \
     }                                                                           \
-    push_telemetry_event(ev);                                       \
+    push_telemetry_event(ev);                                                   \
     ii++;
 
-
+#define READ_LOOP_N(PTR, N) REPEAT_##N(READ_LOOP(PTR);)
 
 static __always_inline int enter_exec(syscall_pattern_type_t sp, int fd,
                                       const char __user *filename,
@@ -959,21 +920,20 @@ static __always_inline int enter_exec(syscall_pattern_type_t sp, int fd,
 
 
     // explicit null check to satisfy the verifier
-    if (filename)
-    {
-        ev->id = id;
-        ev->done = FALSE;
-        ev->telemetry_type = TE_EXE_PATH;
-        ev->u.v.truncated = FALSE;
-        long count = 0;
-        count = bpf_probe_read_str(&ev->u.v.value, VALUE_SIZE, (void*) filename);
-        if (count == VALUE_SIZE) {
-            ev->u.v.truncated = TRUE;
-        }
-        push_telemetry_event(ev);
-    }
-    else
+    if (!filename)
         goto Exit;
+
+    ev->id = id;
+    ev->done = FALSE;
+    ev->telemetry_type = TE_EXE_PATH;
+    ev->u.v.truncated = FALSE;
+    long count = 0;
+    count = bpf_probe_read_str(&ev->u.v.value, VALUE_SIZE, (void*) filename);
+    if (count == VALUE_SIZE) {
+        ev->u.v.truncated = TRUE;
+    }
+    push_telemetry_event(ev);
+
 
     bpf_tail_call(ctx, &tail_call_table, 0);
 
@@ -982,8 +942,8 @@ Exit:
     return 0;
 }
 
-SEC("kprobe/sys_exec_tc_args")
-int BPF_KPROBE_SYSCALL(kprobe__sys_exec_tc_args,
+SEC("kprobe/sys_exec_tc_argv")
+int BPF_KPROBE_SYSCALL(kprobe__sys_exec_tc_argv,
                        const char __user *filename,
                        const char __user *const __user *argv,
                        const char __user *const __user *envp)
@@ -1027,22 +987,12 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_exec_tc_args,
     __builtin_memcpy(&ii, pii, sizeof(u32));
     u64 ptr = 0;
     u64 ret = 0;
-    READ_LOOP(argv, TE_COMMAND_LINE)
-    READ_LOOP(argv, TE_COMMAND_LINE)
-    READ_LOOP(argv, TE_COMMAND_LINE)
-    READ_LOOP(argv, TE_COMMAND_LINE)
-    READ_LOOP(argv, TE_COMMAND_LINE)
-    READ_LOOP(argv, TE_COMMAND_LINE)
-    READ_LOOP(argv, TE_COMMAND_LINE)
-    READ_LOOP(argv, TE_COMMAND_LINE)
-    READ_LOOP(argv, TE_COMMAND_LINE)
-    READ_LOOP(argv, TE_COMMAND_LINE)
-    READ_LOOP(argv, TE_COMMAND_LINE)
-    READ_LOOP(argv, TE_COMMAND_LINE)
-    READ_LOOP(argv, TE_COMMAND_LINE)
-    READ_LOOP(argv, TE_COMMAND_LINE)
-    READ_LOOP(argv, TE_COMMAND_LINE)
-    READ_LOOP(argv, TE_COMMAND_LINE)
+
+    ev->id = id;
+    ev->done = FALSE;
+    ev->telemetry_type = TE_COMMAND_LINE;
+
+    READ_LOOP_N(argv, 7);
 
     bpf_map_update_elem(&read_flush_index, &index, &ii, BPF_ANY);
 
@@ -1100,22 +1050,12 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_exec_tc_envp,
     u32 ii = *pii;
     u64 ptr = 0;
     u64 ret = 0;
-    READ_LOOP(envp, TE_ENVIRONMENT)
-    READ_LOOP(envp, TE_ENVIRONMENT)
-    READ_LOOP(envp, TE_ENVIRONMENT)
-    READ_LOOP(envp, TE_ENVIRONMENT)
-    READ_LOOP(envp, TE_ENVIRONMENT)
-    READ_LOOP(envp, TE_ENVIRONMENT)
-    READ_LOOP(envp, TE_ENVIRONMENT)
-    READ_LOOP(envp, TE_ENVIRONMENT)
-    READ_LOOP(envp, TE_ENVIRONMENT)
-    READ_LOOP(envp, TE_ENVIRONMENT)
-    READ_LOOP(envp, TE_ENVIRONMENT)
-    READ_LOOP(envp, TE_ENVIRONMENT)
-    READ_LOOP(envp, TE_ENVIRONMENT)
-    READ_LOOP(envp, TE_ENVIRONMENT)
-    READ_LOOP(envp, TE_ENVIRONMENT)
-    READ_LOOP(envp, TE_ENVIRONMENT)
+
+    ev->id = id;
+    ev->done = FALSE;
+    ev->telemetry_type = TE_ENVIRONMENT;
+
+    READ_LOOP_N(envp, 7);
 
     bpf_map_update_elem(&read_flush_index, &index, &ii, BPF_ANY);
 
@@ -1182,33 +1122,29 @@ static __always_inline int exit_exec(struct pt_regs *__ctx)
     u64 pid_tgid = bpf_get_current_pid_tgid();
     u32 pid = pid_tgid >> 32;
     u64 *id = bpf_map_lookup_elem(&telemetry_ids, &pid);
-    if (id)
-    {
-        ptelemetry_event_t ev = &(telemetry_event_t) {
-                .id = 0,
-                .done = TRUE,
-                .telemetry_type = 0,
-                .u.v = {
-                        .value[0] = '\0',
-                        .truncated = FALSE,
-                },
-        };
-        ev->id = *id;
-        bpf_map_delete_elem(&telemetry_ids, &pid);
 
-        ev->telemetry_type = TE_RETCODE;
-        ev->u.retcode = (u32)PT_REGS_RC(__ctx);
-        push_telemetry_event(ev);
-    }
-    else
+    if (!id)
         goto Flush;
+
+    ptelemetry_event_t ev = &(telemetry_event_t) {
+            .id = 0,
+            .done = TRUE,
+            .telemetry_type = 0,
+            .u.v = {
+                    .value[0] = '\0',
+                    .truncated = FALSE,
+            },
+    };
+    ev->id = *id;
+    bpf_map_delete_elem(&telemetry_ids, &pid);
+
+    ev->telemetry_type = TE_RETCODE;
+    ev->u.retcode = (u32)PT_REGS_RC(__ctx);
+    push_telemetry_event(ev);
 
 Flush:
     flush_telemetry_events(__ctx);
     bpf_tail_call(__ctx, &tail_call_table, 2);
-
-//Exit:
-
     clear_telemetry_events();
 
     return 0;
@@ -1279,59 +1215,55 @@ static __always_inline int exit_clone(struct pt_regs *ctx)
     u64 pid_tgid = bpf_get_current_pid_tgid();
     u32 pid = pid_tgid >> 32;
     u64 *id = bpf_map_lookup_elem(&telemetry_ids, &pid);
-    if (id)
-    {
-        ptelemetry_event_t ev = &(telemetry_event_t) {
-                .id = 0,
-                .done = TRUE,
-                .telemetry_type = 0,
-                .u.v = {
-                        .value[0] = '\0',
-                        .truncated = FALSE,
-                },
-        };
 
-        ev->id = *id;
-        ev->done = FALSE;
-        ev->telemetry_type = TE_CLONE_INFO;
-        u32 key = 0;
-        pclone_info_t pclone_info = bpf_map_lookup_elem(&clone_info_store, &key);
-
-        if (!pclone_info)
-            goto Flush;
-
-        clone_info_t clone_info = {
-                .flags = pclone_info->flags,
-                .stack = (u64) pclone_info->stack,
-                .parent_tid = -1,
-                .child_tid = -1,
-                .tls = pclone_info->tls,
-                .p_ptr = pclone_info->p_ptr,
-                .c_ptr = pclone_info->c_ptr,
-        };
-
-        bpf_probe_read(&clone_info.parent_tid, sizeof(u32), (void*) pclone_info->p_ptr);
-        bpf_probe_read(&clone_info.child_tid, sizeof(u32), (void*) pclone_info->c_ptr);
-        ev->u.clone_info = clone_info;
-        push_telemetry_event(ev);
-
-        ev->id = *id;
-        bpf_map_delete_elem(&telemetry_ids, &pid);
-        ev->done = TRUE;
-        ev->telemetry_type = TE_RETCODE;
-        ev->u.retcode = (u32)PT_REGS_RC(ctx);
-        push_telemetry_event(ev);
-
-    }
-    else
+    if (!id)
         goto Flush;
+
+    ptelemetry_event_t ev = &(telemetry_event_t) {
+            .id = 0,
+            .done = TRUE,
+            .telemetry_type = 0,
+            .u.v = {
+                    .value[0] = '\0',
+                    .truncated = FALSE,
+            },
+    };
+
+    ev->id = *id;
+    ev->done = FALSE;
+    ev->telemetry_type = TE_CLONE_INFO;
+    u32 key = 0;
+    pclone_info_t pclone_info = bpf_map_lookup_elem(&clone_info_store, &key);
+
+    if (!pclone_info)
+        goto Flush;
+
+    clone_info_t clone_info = {
+            .flags = pclone_info->flags,
+            .stack = (u64) pclone_info->stack,
+            .parent_tid = -1,
+            .child_tid = -1,
+            .tls = pclone_info->tls,
+            .p_ptr = pclone_info->p_ptr,
+            .c_ptr = pclone_info->c_ptr,
+    };
+
+    bpf_probe_read(&clone_info.parent_tid, sizeof(u32), (void*) pclone_info->p_ptr);
+    bpf_probe_read(&clone_info.child_tid, sizeof(u32), (void*) pclone_info->c_ptr);
+    ev->u.clone_info = clone_info;
+    push_telemetry_event(ev);
+
+    ev->id = *id;
+    bpf_map_delete_elem(&telemetry_ids, &pid);
+    ev->done = TRUE;
+    ev->telemetry_type = TE_RETCODE;
+    ev->u.retcode = (u32)PT_REGS_RC(ctx);
+    push_telemetry_event(ev);
+
 
 Flush:
     flush_telemetry_events(ctx);
     bpf_tail_call(ctx, &tail_call_table, 3);
-
-//Exit:
-
     clear_telemetry_events();
 
     return 0;
@@ -1425,69 +1357,64 @@ static __always_inline int exit_clone3(struct pt_regs *ctx)
     u64 pid_tgid = bpf_get_current_pid_tgid();
     u32 pid = pid_tgid >> 32;
     u64 *id = bpf_map_lookup_elem(&telemetry_ids, &pid);
-    if (id)
-    {
-        ptelemetry_event_t ev = &(telemetry_event_t) {
-                .id = 0,
-                .done = TRUE,
-                .telemetry_type = 0,
-                .u.v = {
-                        .value[0] = '\0',
-                        .truncated = FALSE,
-                },
-        };
 
-        ev->id = *id;
-        ev->done = FALSE;
-        ev->telemetry_type = TE_CLONE3_INFO;
-        u32 key = 0;
-        pclone3_info_t pclone3_info = bpf_map_lookup_elem(&clone3_info_store, &key);
-
-        if (!pclone3_info)
-            goto Flush;
-
-        clone3_info_t clone_info = {0};
-
-        clone_info.flags = pclone3_info->flags;
-        clone_info.stack = (u64) pclone3_info->stack;
-        clone_info.parent_tid = -1;
-        clone_info.child_tid = -1;
-        clone_info.tls = pclone3_info->tls;
-        clone_info.size = pclone3_info->size;
-        clone_info.p_ptr = pclone3_info->p_ptr;
-        clone_info.c_ptr = pclone3_info->c_ptr;
-        if (pclone3_info->size >= CLONE_ARGS_SIZE_VER1)
-        {
-            clone_info.set_tid = pclone3_info->set_tid;
-            clone_info.set_tid_size = pclone3_info->set_tid_size;
-        }
-        if (pclone3_info->size >= CLONE_ARGS_SIZE_VER2)
-        {
-            clone_info.cgroup = pclone3_info->cgroup;
-        }
-
-        bpf_probe_read(&clone_info.parent_tid, sizeof(u32), (void*) clone_info.p_ptr);
-        bpf_probe_read(&clone_info.child_tid, sizeof(u32), (void*) clone_info.c_ptr);
-        ev->u.clone3_info = clone_info;
-        push_telemetry_event(ev);
-
-        ev->id = *id;
-        bpf_map_delete_elem(&telemetry_ids, &pid);
-        ev->done = TRUE;
-        ev->telemetry_type = TE_RETCODE;
-        ev->u.retcode = (u32)PT_REGS_RC(ctx);
-        push_telemetry_event(ev);
-
-    }
-    else
+    if (!id)
         goto Flush;
 
-    Flush:
+    ptelemetry_event_t ev = &(telemetry_event_t) {
+            .id = 0,
+            .done = TRUE,
+            .telemetry_type = 0,
+            .u.v = {
+                    .value[0] = '\0',
+                    .truncated = FALSE,
+            },
+    };
+
+    ev->id = *id;
+    ev->done = FALSE;
+    ev->telemetry_type = TE_CLONE3_INFO;
+    u32 key = 0;
+    pclone3_info_t pclone3_info = bpf_map_lookup_elem(&clone3_info_store, &key);
+
+    if (!pclone3_info)
+        goto Flush;
+
+    clone3_info_t clone_info = {0};
+
+    clone_info.flags = pclone3_info->flags;
+    clone_info.stack = (u64) pclone3_info->stack;
+    clone_info.parent_tid = -1;
+    clone_info.child_tid = -1;
+    clone_info.tls = pclone3_info->tls;
+    clone_info.size = pclone3_info->size;
+    clone_info.p_ptr = pclone3_info->p_ptr;
+    clone_info.c_ptr = pclone3_info->c_ptr;
+    if (pclone3_info->size >= CLONE_ARGS_SIZE_VER1)
+    {
+        clone_info.set_tid = pclone3_info->set_tid;
+        clone_info.set_tid_size = pclone3_info->set_tid_size;
+    }
+    if (pclone3_info->size >= CLONE_ARGS_SIZE_VER2)
+    {
+        clone_info.cgroup = pclone3_info->cgroup;
+    }
+
+    bpf_probe_read(&clone_info.parent_tid, sizeof(u32), (void*) clone_info.p_ptr);
+    bpf_probe_read(&clone_info.child_tid, sizeof(u32), (void*) clone_info.c_ptr);
+    ev->u.clone3_info = clone_info;
+    push_telemetry_event(ev);
+
+    ev->id = *id;
+    bpf_map_delete_elem(&telemetry_ids, &pid);
+    ev->done = TRUE;
+    ev->telemetry_type = TE_RETCODE;
+    ev->u.retcode = (u32)PT_REGS_RC(ctx);
+    push_telemetry_event(ev);
+
+Flush:
     flush_telemetry_events(ctx);
     bpf_tail_call(ctx, &tail_call_table, 4);
-
-//Exit:
-
     clear_telemetry_events();
 
     return 0;
@@ -1601,34 +1528,29 @@ static __always_inline int exit_unshare(struct pt_regs *ctx)
     u64 pid_tgid = bpf_get_current_pid_tgid();
     u32 pid = pid_tgid >> 32;
     u64 *id = bpf_map_lookup_elem(&telemetry_ids, &pid);
-    if (id)
-    {
-        ptelemetry_event_t ev = &(telemetry_event_t) {
-                .id = 0,
-                .done = TRUE,
-                .telemetry_type = 0,
-                .u.v = {
-                        .value[0] = '\0',
-                        .truncated = FALSE,
-                },
-        };
-        ev->id = *id;
-        bpf_map_delete_elem(&telemetry_ids, &pid);
 
-        ev->telemetry_type = TE_RETCODE;
-        ev->u.retcode = (u32)PT_REGS_RC(ctx);
-        push_telemetry_event(ev);
-
-    }
-    else
+    if (!id)
         goto Flush;
 
-    Flush:
+    ptelemetry_event_t ev = &(telemetry_event_t) {
+            .id = 0,
+            .done = TRUE,
+            .telemetry_type = 0,
+            .u.v = {
+                    .value[0] = '\0',
+                    .truncated = FALSE,
+            },
+    };
+    ev->id = *id;
+    bpf_map_delete_elem(&telemetry_ids, &pid);
+
+    ev->telemetry_type = TE_RETCODE;
+    ev->u.retcode = (u32)PT_REGS_RC(ctx);
+    push_telemetry_event(ev);
+
+Flush:
     flush_telemetry_events(ctx);
     bpf_tail_call(ctx, &tail_call_table, 5);
-
-//Exit:
-
     clear_telemetry_events();
 
     return 0;
@@ -1674,7 +1596,7 @@ static __always_inline int enter_exit(syscall_pattern_type_t sp, int status,
     ev->id = id;
     ev->done = FALSE;
     ev->telemetry_type = 0,
-            ev->u.v.value[0] = '\0';
+    ev->u.v.value[0] = '\0';
     ev->u.v.truncated = FALSE;
 
     FILL_TELEMETRY_SYSCALL_EVENT(ev, sp);
@@ -1699,33 +1621,29 @@ static __always_inline int exit_exit(struct pt_regs *ctx)
     u64 pid_tgid = bpf_get_current_pid_tgid();
     u32 pid = pid_tgid >> 32;
     u64 *id = bpf_map_lookup_elem(&telemetry_ids, &pid);
-    if (id)
-    {
-        ptelemetry_event_t ev = &(telemetry_event_t) {
-                .id = 0,
-                .done = TRUE,
-                .telemetry_type = 0,
-                .u.v = {
-                        .value[0] = '\0',
-                        .truncated = FALSE,
-                },
-        };
-        ev->id = *id;
-        bpf_map_delete_elem(&telemetry_ids, &pid);
 
-        ev->telemetry_type = TE_RETCODE;
-        ev->u.retcode = (u32)PT_REGS_RC(ctx);
-        push_telemetry_event(ev);
-
-    }
-    else
+    if (!id)
         goto Flush;
 
-    Flush:
+    ptelemetry_event_t ev = &(telemetry_event_t) {
+            .id = 0,
+            .done = TRUE,
+            .telemetry_type = 0,
+            .u.v = {
+                    .value[0] = '\0',
+                    .truncated = FALSE,
+            },
+    };
+    ev->id = *id;
+    bpf_map_delete_elem(&telemetry_ids, &pid);
+
+    ev->telemetry_type = TE_RETCODE;
+    ev->u.retcode = (u32)PT_REGS_RC(ctx);
+    push_telemetry_event(ev);
+
+Flush:
     flush_telemetry_events(ctx);
     bpf_tail_call(ctx, &tail_call_table, 6);
-
-//Exit:
 
     clear_telemetry_events();
 

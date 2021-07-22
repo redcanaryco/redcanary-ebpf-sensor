@@ -62,7 +62,7 @@ typedef enum
 
 typedef enum
 {
-    Unspec,
+    TE_UNSPEC,
     TE_SYSCALL_INFO,
     TE_EXE_PATH,
     TE_PATH,
