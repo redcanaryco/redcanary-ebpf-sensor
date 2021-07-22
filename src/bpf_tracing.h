@@ -459,14 +459,68 @@ static __always_inline typeof(name(0)) ____##name(struct pt_regs *ctx, ##args)
 #define ___bpf_kprobe_syscall_args(args...) \
 	___bpf_apply(___bpf_kprobe_syscall_args, ___bpf_narg(args))(args)
 
-#ifdef CONFIG_SYSCALL_WRAPPER
-#define position_syscall_regs() \
-    struct pt_regs  ___ctx = {}; \
-    bpf_probe_read(&___ctx, sizeof(___ctx), (void *)SYSCALL_PARM1_CORE(ctx));
-#else
-#define position_syscall_regs() \
-        struct pt_regs ___ctx = {}; \
+/*
+ * We only need the following registers from pt_regs on each architecture,
+ * so we only copy up to their size to save space.
+ *
+ * x86_64:
+ *  - (parm1) di
+ *  - (parm2) si
+ *  - (parm3) dx
+ *  - (parm4) cx or r10
+ *  - (parm5) r8
+ *
+ * aarch64:
+ *  - (parm1) regs[0]
+ *  - (parm2) regs[1]
+ *  - (parm3) regs[2]
+ *  - (parm4) regs[3]
+ *  - (parm5) regs[4]
+ */
+
+struct _x64_pt_regs {
+    u64 r15;
+    u64 r14;
+    u64 r13;
+    u64 r12;
+    u64 bp;
+    u64 bx;
+    u64 r11;
+    u64 r10;
+    u64 r9;
+    u64 r8;
+    u64 ax;
+    u64 cx;
+    u64 dx;
+    u64 si;
+    u64 di;
+};
+
+struct _aarch64_pt_regs {
+    u64 regs[5];
+};
+
+#ifdef bpf_target_x86
+    #ifdef CONFIG_SYSCALL_WRAPPER
+    #define position_syscall_regs() \
+        struct _x64_pt_regs  ___ctx = {}; \
+        bpf_probe_read(&___ctx, sizeof(___ctx), (void *)SYSCALL_PARM1_CORE(ctx));
+    #else
+    #define position_syscall_regs() \
+        struct _x64_pt_regs ___ctx = {}; \
         bpf_probe_read(&___ctx, sizeof(___ctx), (void *)ctx);
+    #endif
+#endif
+#ifdef bpf_target_arm64
+    #ifdef CONFIG_SYSCALL_WRAPPER
+    #define position_syscall_regs() \
+        struct _aarch64_pt_regs  ___ctx = {}; \
+        bpf_probe_read(&___ctx, sizeof(___ctx), (void *)SYSCALL_PARM1_CORE(ctx));
+    #else
+    #define position_syscall_regs() \
+        struct _aarch64_pt_regs ___ctx = {}; \
+        bpf_probe_read(&___ctx, sizeof(___ctx), (void *)ctx);
+    #endif
 #endif
 
 /*
