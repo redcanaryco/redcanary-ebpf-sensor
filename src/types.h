@@ -5,6 +5,9 @@
 #include <linux/types.h>
 
 #define MAX_ADDRESSES 16
+#define TRUE 1
+#define FALSE 0
+#define VALUE_SIZE 128
 
 typedef enum
 {
@@ -46,14 +49,40 @@ typedef enum
     SP_SETREGID,
     SP_SETRESUID,
     SP_SETRESGID,
-} syscall_pattern_t;
+    SP_EXIT,
+    SP_EXITGROUP,
+    SP_UNSHARE,
+    SP_CLONE,
+    SP_CLONE3,
+    SP_FORK,
+    SP_VFORK,
+    SP_EXECVE,
+    SP_EXECVEAT,
+} syscall_pattern_type_t;
+
+typedef enum
+{
+    TE_UNSPEC,
+    TE_SYSCALL_INFO,
+    TE_EXE_PATH,
+    TE_PATH,
+    TE_COMMAND_LINE,
+    TE_ENVIRONMENT,
+    TE_CURRENT_WORKING_DIRECTORY,
+    TE_FILE_INFO,
+    TE_RETCODE,
+    TE_CLONE_INFO,
+    TE_CLONE3_INFO,
+    TE_UNSHARE_FLAGS,
+    TE_EXIT_STATUS,
+} telemetry_event_type_t;
 
 #define COMMON_FIELDS \
     u32 pid;          \
     u32 tid;          \
     u64 mono_ns;      \
-    u32 __pad;        \
-    syscall_pattern_t syscall_pattern;
+    u32 ppid;         \
+    syscall_pattern_type_t syscall_pattern;
 
 typedef struct
 {
@@ -142,4 +171,101 @@ typedef struct
 {
     COMMON_FIELDS;
     char value[384];
-} read_return_string_t;
+} read_return_string_event_t;
+
+typedef struct {
+    u64 inode;
+    u32 devmajor;
+    u32 devminor;
+    char value[VALUE_SIZE];
+} file_info_t;
+
+typedef struct
+{
+    u32 new_pid;
+    u64 fork_flags;
+} process_fork_info_t;
+
+typedef struct
+{
+
+} netconn_info_t;
+
+typedef struct 
+{
+    COMMON_FIELDS;
+    u32 luid;
+    u32 euid;
+    u32 egid;
+    char comm[16];
+    union {
+        process_fork_info_t fork_info;
+        netconn_info_t netconn_info;
+    } u;
+} syscall_info_t, *psyscall_info_t;
+
+typedef struct
+{
+    u64 flags;
+    u64 stack;
+    u32 parent_tid;
+    u32 child_tid;
+    u64 tls;
+    u64 p_ptr;
+    u64 c_ptr;
+} clone_info_t, *pclone_info_t;
+
+typedef struct
+{
+    u64 flags;
+    u64 pidfd;
+    u64 child_tid;
+    u64 parent_tid;
+    u64 exit_signal;
+    u64 stack;
+    u64 stack_size;
+    u64 tls;
+    u64 set_tid;
+    u64 set_tid_size;
+    u64 cgroup;
+    u64 c_ptr;
+    u64 p_ptr;
+    u64 size;
+} clone3_info_t, *pclone3_info_t;
+
+typedef struct
+{
+    u64 id;
+    u32 done;
+    telemetry_event_type_t telemetry_type;
+    union {
+        syscall_info_t syscall_info; 
+        file_info_t file_info;
+        clone_info_t clone_info;
+        clone3_info_t clone3_info;
+        int unshare_flags;
+        int exit_status;
+        struct {
+            char value[VALUE_SIZE];
+            char truncated;
+        } v;
+        u64 retcode;
+    } u;
+} telemetry_event_t, *ptelemetry_event_t;
+
+// clone3 args are not available in sched.h until 5.3, and we build against 4.4
+struct clone_args {
+    __aligned_u64 flags;
+    __aligned_u64 pidfd;
+    __aligned_u64 child_tid;
+    __aligned_u64 parent_tid;
+    __aligned_u64 exit_signal;
+    __aligned_u64 stack;
+    __aligned_u64 stack_size;
+    __aligned_u64 tls;
+    // version 2
+    __aligned_u64 set_tid;
+    __aligned_u64 set_tid_size;
+    // version 3
+    __aligned_u64 cgroup;
+};

@@ -459,16 +459,68 @@ static __always_inline typeof(name(0)) ____##name(struct pt_regs *ctx, ##args)
 #define ___bpf_kprobe_syscall_args(args...) \
 	___bpf_apply(___bpf_kprobe_syscall_args, ___bpf_narg(args))(args)
 
-#ifdef CONFIG_SYSCALL_WRAPPER
-#define position_syscall_regs() \
-    struct pt_regs ___ctx = {}; \
-    u64 _pad __attribute__((unused)); \
-    bpf_probe_read(&___ctx, sizeof(___ctx), (void *)SYSCALL_PARM1_CORE(ctx))
-#else
-#define position_syscall_regs() \
-    struct pt_regs ___ctx = {}; \
-    u64 _pad __attribute__((unused)); \
-    bpf_probe_read(&___ctx, sizeof(___ctx), (void *)ctx)
+/*
+ * We only need the following registers from pt_regs on each architecture,
+ * so we only copy up to their size to save space.
+ *
+ * x86_64:
+ *  - (parm1) di
+ *  - (parm2) si
+ *  - (parm3) dx
+ *  - (parm4) cx or r10
+ *  - (parm5) r8
+ *
+ * aarch64:
+ *  - (parm1) regs[0]
+ *  - (parm2) regs[1]
+ *  - (parm3) regs[2]
+ *  - (parm4) regs[3]
+ *  - (parm5) regs[4]
+ */
+
+struct _x64_pt_regs {
+    u64 r15;
+    u64 r14;
+    u64 r13;
+    u64 r12;
+    u64 bp;
+    u64 bx;
+    u64 r11;
+    u64 r10;
+    u64 r9;
+    u64 r8;
+    u64 ax;
+    u64 cx;
+    u64 dx;
+    u64 si;
+    u64 di;
+};
+
+struct _aarch64_pt_regs {
+    u64 regs[5];
+};
+
+#ifdef bpf_target_x86
+    #ifdef CONFIG_SYSCALL_WRAPPER
+    #define position_syscall_regs() \
+        struct _x64_pt_regs  ___ctx = {}; \
+        bpf_probe_read(&___ctx, sizeof(___ctx), (void *)SYSCALL_PARM1_CORE(ctx));
+    #else
+    #define position_syscall_regs() \
+        struct _x64_pt_regs ___ctx = {}; \
+        bpf_probe_read(&___ctx, sizeof(___ctx), (void *)ctx);
+    #endif
+#endif
+#ifdef bpf_target_arm64
+    #ifdef CONFIG_SYSCALL_WRAPPER
+    #define position_syscall_regs() \
+        struct _aarch64_pt_regs  ___ctx = {}; \
+        bpf_probe_read(&___ctx, sizeof(___ctx), (void *)SYSCALL_PARM1_CORE(ctx));
+    #else
+    #define position_syscall_regs() \
+        struct _aarch64_pt_regs ___ctx = {}; \
+        bpf_probe_read(&___ctx, sizeof(___ctx), (void *)ctx);
+    #endif
 #endif
 
 /*
@@ -505,3 +557,41 @@ ____##name(struct pt_regs *ctx, ##args)
 					    ___param, sizeof(___param));    \
 		___ret;							    \
 	})
+
+/*
+ * Loop helpers.
+ */
+
+#define REPEAT_0(S)
+#define REPEAT_1(S) S REPEAT_0(S)
+#define REPEAT_2(S) S REPEAT_1(S)
+#define REPEAT_3(S) S REPEAT_2(S)
+#define REPEAT_4(S) S REPEAT_3(S)
+#define REPEAT_5(S) S REPEAT_4(S)
+#define REPEAT_6(S) S REPEAT_5(S)
+#define REPEAT_7(S) S REPEAT_6(S)
+#define REPEAT_8(S) S REPEAT_7(S)
+#define REPEAT_9(S) S REPEAT_8(S)
+#define REPEAT_10(S) S REPEAT_9(S)
+#define REPEAT_11(S) S REPEAT_10(S)
+#define REPEAT_12(S) S REPEAT_11(S)
+#define REPEAT_13(S) S REPEAT_12(S)
+#define REPEAT_14(S) S REPEAT_13(S)
+#define REPEAT_15(S) S REPEAT_14(S)
+#define REPEAT_16(S) S REPEAT_15(S)
+#define REPEAT_17(S) S REPEAT_16(S)
+#define REPEAT_18(S) S REPEAT_17(S)
+#define REPEAT_19(S) S REPEAT_18(S)
+#define REPEAT_20(S) S REPEAT_19(S)
+#define REPEAT_21(S) S REPEAT_20(S)
+#define REPEAT_22(S) S REPEAT_21(S)
+#define REPEAT_23(S) S REPEAT_22(S)
+#define REPEAT_24(S) S REPEAT_23(S)
+#define REPEAT_25(S) S REPEAT_24(S)
+#define REPEAT_26(S) S REPEAT_25(S)
+#define REPEAT_27(S) S REPEAT_26(S)
+#define REPEAT_28(S) S REPEAT_27(S)
+#define REPEAT_29(S) S REPEAT_28(S)
+#define REPEAT_30(S) S REPEAT_29(S)
+#define REPEAT_31(S) S REPEAT_30(S)
+#define REPEAT_32(S) S REPEAT_31(S)

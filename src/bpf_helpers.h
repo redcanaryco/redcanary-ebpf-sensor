@@ -2,7 +2,9 @@
 
 #pragma once
 
-#include <linux/bpf.h>
+#include <uapi/linux/bpf.h>
+
+#define BPF_MAP_TYPE_PERCPU_ARRAY 6
 
 #define __BPF_EXT_FUNC_MAPPER(FN)           \
     FN(unspec),                             \
@@ -227,6 +229,10 @@ static int (*bpf_probe_read_user_str)(void *dst, __u32 size, const void *unsafe_
     (void *)BPF_EXT_FUNC_probe_read_user_str;
 static int (*bpf_probe_read_kernel_str)(void *dst, __u32 size, const void *unsafe_ptr) =
     (void *)BPF_EXT_FUNC_probe_read_kernel_str;
+static unsigned long long (*bpf_get_current_task)(void) =
+    (void *)BPF_EXT_FUNC_get_current_task;
+static unsigned long long (*bpf_tail_call)(void *ctx, void *map, int index) =
+    (void *)BPF_EXT_FUNC_tail_call;
 
 /* llvm builtin functions that eBPF C program may use to
  * emit BPF_LD_ABS and BPF_LD_IND instructions
@@ -268,5 +274,13 @@ static int (*bpf_l4_csum_replace)(void *ctx, int off, int from, int to, int flag
         bpf_probe_read((void *) &__val , sizeof(__val), (&((typeof((src)))(src))->a));  \
 		__val;					  \
 	})
+
+/* Helper macro to print out debug messages */
+#define bpf_printk(fmt, ...)                            \
+({                                                      \
+        char ____fmt[] = fmt;                           \
+        bpf_trace_printk(____fmt, sizeof(____fmt),      \
+                         ##__VA_ARGS__);                \
+})
 
 #include "bpf_tracing.h"
