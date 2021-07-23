@@ -1004,7 +1004,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_exec_tc_argv,
 
     // this number was arrived at experimentally, increasing it will result in too many
     // instructions for older kernels
-    READ_LOOP_N(argv, TE_COMMAND_LINE, 7);
+    READ_LOOP_N(argv, TE_COMMAND_LINE, 6);
 
     bpf_map_update_elem(&read_flush_index, &index, &ii, BPF_ANY);
 
@@ -1065,7 +1065,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_exec_tc_envp,
 
     // this number was arrived at experimentally, increasing it will result in too many
     // instructions for older kernels
-    READ_LOOP_N(envp, TE_ENVIRONMENT, 7);
+    READ_LOOP_N(envp, TE_ENVIRONMENT, 6);
 
     bpf_map_update_elem(&read_flush_index, &index, &ii, BPF_ANY);
 
