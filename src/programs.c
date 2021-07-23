@@ -792,6 +792,9 @@ static __always_inline void push_telemetry_event(ptelemetry_event_t ev)
     {
         return;
     }
+
+    // setting this value directly (without the + 0) fails the verifier
+    // the verifier really doesn't like this function, see the index updating below
     u32 idx = *pcurrent_index + 0;
 
     int ret = bpf_map_update_elem(&telemetry_stack, &idx, ev, BPF_ANY);
@@ -803,10 +806,10 @@ static __always_inline void push_telemetry_event(ptelemetry_event_t ev)
     // Update the index
     // this is fine:
     idx = *pcurrent_index + 1;
-    // // This fails verification on 4.15 with `invalid register spill`
-    // idx += 1;
-    // // this fails too, same message
-    // idx = idx + 1;
+    // This fails verification on 4.15 with `invalid register spill`
+    //      idx += 1;
+    // this fails too, same message
+    //      idx = idx + 1;
     ret = bpf_map_update_elem(&telemetry_index, &key, &idx, BPF_ANY);
     if (ret < 0 )
     {
@@ -853,15 +856,23 @@ static __always_inline void flush_telemetry_events(struct pt_regs *ctx)
         return;
     }
 
+    // move ii to the stack for the verifier
     u32 ii = *pii;
     ptelemetry_event_t ev = NULL;
+
+    // this number was arrived at experimentally, increasing it will result in too many
+    // instructions for older kernels
     FLUSH_LOOP_N(27);
+
     bpf_map_update_elem(&read_flush_index, &key, &ii, BPF_ANY);
 }
 
-#define READ_LOOP(PTR)                                                          \
+#define READ_LOOP(PTR, T)                                                       \
     ptr = 0;                                                                    \
     ev->u.v.truncated = FALSE;                                                  \
+    ev->id = id;                                                                \
+    ev->done = FALSE;                                                           \
+    ev->telemetry_type = T;                                                     \
     ret = bpf_probe_read(&ptr, sizeof(u64), (void*) PTR + (ii * sizeof(u64)));  \
     if (ret < 0)                                                                \
     {                                                                           \
@@ -884,7 +895,7 @@ static __always_inline void flush_telemetry_events(struct pt_regs *ctx)
     push_telemetry_event(ev);                                                   \
     ii++;
 
-#define READ_LOOP_N(PTR, N) REPEAT_##N(READ_LOOP(PTR);)
+#define READ_LOOP_N(PTR, T, N) REPEAT_##N(READ_LOOP(PTR, T);)
 
 static __always_inline int enter_exec(syscall_pattern_type_t sp, int fd,
                                       const char __user *filename,
@@ -899,6 +910,7 @@ static __always_inline int enter_exec(syscall_pattern_type_t sp, int fd,
     {
         goto Exit;
     }
+    // this pointer passing and memcpy is to put the struct on the stack and satisfy the verifier
     telemetry_event_t sev = {0};
     __builtin_memcpy(&sev, pev, sizeof(telemetry_event_t));
     ptelemetry_event_t ev = &sev;
@@ -971,6 +983,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_exec_tc_argv,
         goto Exit;
     }
 
+    // put the event on the stack and satisfy the verifier
     telemetry_event_t tev = *pev;
     ptelemetry_event_t ev = &tev;
 
@@ -984,15 +997,14 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_exec_tc_argv,
 
     long count = 0;
     u32 ii = 0;
+    // explicit copy from pointer to stack, satisfy verifier
     __builtin_memcpy(&ii, pii, sizeof(u32));
     u64 ptr = 0;
     u64 ret = 0;
 
-    ev->id = id;
-    ev->done = FALSE;
-    ev->telemetry_type = TE_COMMAND_LINE;
-
-    READ_LOOP_N(argv, 7);
+    // this number was arrived at experimentally, increasing it will result in too many
+    // instructions for older kernels
+    READ_LOOP_N(argv, TE_COMMAND_LINE, 7);
 
     bpf_map_update_elem(&read_flush_index, &index, &ii, BPF_ANY);
 
@@ -1051,11 +1063,9 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_exec_tc_envp,
     u64 ptr = 0;
     u64 ret = 0;
 
-    ev->id = id;
-    ev->done = FALSE;
-    ev->telemetry_type = TE_ENVIRONMENT;
-
-    READ_LOOP_N(envp, 7);
+    // this number was arrived at experimentally, increasing it will result in too many
+    // instructions for older kernels
+    READ_LOOP_N(envp, TE_ENVIRONMENT, 7);
 
     bpf_map_update_elem(&read_flush_index, &index, &ii, BPF_ANY);
 
@@ -1174,6 +1184,8 @@ static __always_inline int enter_clone(syscall_pattern_type_t sp, unsigned long 
     {
         return -1;
     }
+
+    // explicit memcpy to move the struct to the stack and satisfy the verifier
     telemetry_event_t sev = {0};
     __builtin_memcpy(&sev, pev, sizeof(telemetry_event_t));
     ptelemetry_event_t ev = &sev;
@@ -1587,6 +1599,8 @@ static __always_inline int enter_exit(syscall_pattern_type_t sp, int status,
     {
         return -1;
     }
+
+    // explicit memcpy to put the struct on the stack and satisfy the verifier
     telemetry_event_t sev = {0};
     __builtin_memcpy(&sev, pev, sizeof(telemetry_event_t));
     ptelemetry_event_t ev = &sev;
