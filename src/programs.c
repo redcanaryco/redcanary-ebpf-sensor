@@ -947,7 +947,7 @@ static __always_inline int enter_exec(syscall_pattern_type_t sp, int fd,
     push_telemetry_event(ev);
 
 
-    bpf_tail_call(ctx, &tail_call_table, 0);
+    bpf_tail_call(ctx, &tail_call_table, SYS_EXEC_TC_ARGV);
 
 
 Exit:
@@ -1009,12 +1009,12 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_exec_tc_argv,
     bpf_map_update_elem(&read_flush_index, &index, &ii, BPF_ANY);
 
 Tail:
-    bpf_tail_call(ctx, &tail_call_table, 0);
+    bpf_tail_call(ctx, &tail_call_table, SYS_EXEC_TC_ARGV);
 
 Next:;
     u32 reset = 0;
     bpf_map_update_elem(&read_flush_index, &reset, &reset, BPF_ANY);
-    bpf_tail_call(ctx, &tail_call_table, 1);
+    bpf_tail_call(ctx, &tail_call_table, SYS_EXEC_TC_ENVP);
 
 Exit:
     return 0;
@@ -1071,7 +1071,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_exec_tc_envp,
 
 
 Tail:
-    bpf_tail_call(ctx, &tail_call_table, 1);
+    bpf_tail_call(ctx, &tail_call_table, SYS_EXEC_TC_ENVP);
 
 Next:
 Exit:;
@@ -1154,7 +1154,7 @@ static __always_inline int exit_exec(struct pt_regs *__ctx)
 
 Flush:
     flush_telemetry_events(__ctx);
-    bpf_tail_call(__ctx, &tail_call_table, 2);
+    bpf_tail_call(__ctx, &tail_call_table, RET_SYS_EXECVE);
     clear_telemetry_events();
 
     return 0;
@@ -1275,7 +1275,7 @@ static __always_inline int exit_clone(struct pt_regs *ctx)
 
 Flush:
     flush_telemetry_events(ctx);
-    bpf_tail_call(ctx, &tail_call_table, 3);
+    bpf_tail_call(ctx, &tail_call_table, RET_SYS_CLONE);
     clear_telemetry_events();
 
     return 0;
@@ -1426,7 +1426,7 @@ static __always_inline int exit_clone3(struct pt_regs *ctx)
 
 Flush:
     flush_telemetry_events(ctx);
-    bpf_tail_call(ctx, &tail_call_table, 4);
+    bpf_tail_call(ctx, &tail_call_table, RET_SYS_CLONE3);
     clear_telemetry_events();
 
     return 0;
@@ -1562,7 +1562,7 @@ static __always_inline int exit_unshare(struct pt_regs *ctx)
 
 Flush:
     flush_telemetry_events(ctx);
-    bpf_tail_call(ctx, &tail_call_table, 5);
+    bpf_tail_call(ctx, &tail_call_table, RET_SYS_UNSHARE);
     clear_telemetry_events();
 
     return 0;

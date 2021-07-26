@@ -3,6 +3,7 @@
 #pragma once
 
 #include <linux/types.h>
+#include <linux/limits.h>
 
 #define MAX_ADDRESSES 16
 #define TRUE 1
@@ -274,3 +275,13 @@ struct clone_args {
     // version 3
     __aligned_u64 cgroup;
 };
+
+typedef enum {
+    SYS_EXEC_TC_ARGV,
+    SYS_EXEC_TC_ENVP,
+    RET_SYS_EXECVE,
+    RET_SYS_CLONE,
+    RET_SYS_CLONE3,
+    RET_SYS_UNSHARE,
+    RET_SYS_EXIT,
+} tail_call_slot_t;
