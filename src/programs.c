@@ -305,9 +305,23 @@ static __always_inline syscall_pattern_type_t ptrace_syscall_pattern(u32 request
         u64 real_parent_offset = CRC_TASK_STRUCT_REAL_PARENT;                                                       \
         u64 ppid_offset = CRC_TASK_STRUCT_PID;                                                                      \
         u64 luid_offset = CRC_TASK_STRUCT_LOGINUID;                                                                 \
+        u64 mm_struct_offset = CRC_TASK_STRUCT_MM;                                                                  \
+        u64 exe_file_offset = CRC_MM_STRUCT_EXE_FILE;                                                               \
+        u64 f_path_offset = CRC_FILE_F_PATH;                                                                        \
+        u64 dentry_offset = CRC_PATH_DENTRY;                                                                        \
+        u64 d_name_offset = CRC_DENTRY_D_NAME;                                                                      \
+        u64 hash_len_offset = CRC_QSTR_HASH_LEN;                                                                    \
+        u64 name_offset = CRC_QSTR_NAME;                                                                            \
         real_parent_offset = (u64) bpf_map_lookup_elem(&offsets, &real_parent_offset);                              \
         ppid_offset = (u64) bpf_map_lookup_elem(&offsets, &ppid_offset);                                            \
         luid_offset = (u64) bpf_map_lookup_elem(&offsets, &luid_offset);                                            \
+        mm_struct_offset = (u64) bpf_map_lookup_elem(&offsets, &mm_struct_offset);                                  \
+        exe_file_offset = (u64) bpf_map_lookup_elem(&offsets, &exe_file_offset);                                    \
+        f_path_offset = (u64) bpf_map_lookup_elem(&offsets, &f_path_offset);                                        \
+        dentry_offset = (u64) bpf_map_lookup_elem(&offsets, &dentry_offset);                                        \
+        d_name_offset = (u64) bpf_map_lookup_elem(&offsets, &d_name_offset);                                        \
+        hash_len_offset = (u64) bpf_map_lookup_elem(&offsets, &hash_len_offset);                                    \
+        name_offset = (u64) bpf_map_lookup_elem(&offsets, &name_offset);                                            \
         if (real_parent_offset && ppid_offset && luid_offset)                                                       \
         {                                                                                                           \
             bpf_probe_read(&pts, sizeof(pts), ts + *(u32*)real_parent_offset);                                      \
