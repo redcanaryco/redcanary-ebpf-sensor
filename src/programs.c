@@ -294,44 +294,63 @@ static __always_inline syscall_pattern_type_t ptrace_syscall_pattern(u32 request
     /* if "loaded" doesn't exist in the map, we get NULL back and won't read from offsets                           \
      * when offsets are loaded into the offsets map, "loaded" should be given any value                             \
      */                                                                                                             \
-    u64 loaded = CRC_LOADED;                                                         \
-    loaded = (u64) bpf_map_lookup_elem(&offsets, &loaded); /* squeezing out as much stack as possible */            \
+    u64 offset = CRC_LOADED;                                                                                        \
+    offset = (u64) bpf_map_lookup_elem(&offsets, &offset); /* squeezing out as much stack as possible */            \
     /* since we're using offsets to read from the structs, we don't need to bother with                             \
      * understanding their structure                                                                                \
      */                                                                                                             \
     void *ts = (void *)bpf_get_current_task();                                                                      \
-    void *pts = NULL;                                                                                               \
-    if (ts && loaded) {                                                                                             \
-        u64 real_parent_offset = CRC_TASK_STRUCT_REAL_PARENT;                                                       \
-        u64 ppid_offset = CRC_TASK_STRUCT_PID;                                                                      \
-        u64 luid_offset = CRC_TASK_STRUCT_LOGINUID;                                                                 \
-        u64 mm_struct_offset = CRC_TASK_STRUCT_MM;                                                                  \
-        u64 exe_file_offset = CRC_MM_STRUCT_EXE_FILE;                                                               \
-        u64 f_path_offset = CRC_FILE_F_PATH;                                                                        \
-        u64 dentry_offset = CRC_PATH_DENTRY;                                                                        \
-        u64 d_name_offset = CRC_DENTRY_D_NAME;                                                                      \
-        u64 hash_len_offset = CRC_QSTR_HASH_LEN;                                                                    \
-        u64 name_offset = CRC_QSTR_NAME;                                                                            \
-        real_parent_offset = (u64) bpf_map_lookup_elem(&offsets, &real_parent_offset);                              \
-        ppid_offset = (u64) bpf_map_lookup_elem(&offsets, &ppid_offset);                                            \
-        luid_offset = (u64) bpf_map_lookup_elem(&offsets, &luid_offset);                                            \
-        mm_struct_offset = (u64) bpf_map_lookup_elem(&offsets, &mm_struct_offset);                                  \
-        exe_file_offset = (u64) bpf_map_lookup_elem(&offsets, &exe_file_offset);                                    \
-        f_path_offset = (u64) bpf_map_lookup_elem(&offsets, &f_path_offset);                                        \
-        dentry_offset = (u64) bpf_map_lookup_elem(&offsets, &dentry_offset);                                        \
-        d_name_offset = (u64) bpf_map_lookup_elem(&offsets, &d_name_offset);                                        \
-        hash_len_offset = (u64) bpf_map_lookup_elem(&offsets, &hash_len_offset);                                    \
-        name_offset = (u64) bpf_map_lookup_elem(&offsets, &name_offset);                                            \
-        if (real_parent_offset && ppid_offset && luid_offset)                                                       \
-        {                                                                                                           \
-            bpf_probe_read(&pts, sizeof(pts), ts + *(u32*)real_parent_offset);                                      \
-            if (pts)                                                                                                \
-            {                                                                                                       \
-                bpf_probe_read(&ppid, sizeof(ppid), pts + *(u32*)ppid_offset);                                      \
-            }                                                                                                       \
-            bpf_probe_read(&luid, sizeof(luid), ts + *(u32*)luid_offset);                                           \
-        }                                                                                                           \
+    void *ptr = NULL;                                                                                               \
+    if (ts && offset) {                                                                                             \
+        offset = CRC_TASK_STRUCT_REAL_PARENT;                                                                       \
+        offset = (u64) bpf_map_lookup_elem(&offsets, &offset);                                                      \
+        if (!offset) goto Skip;                                                                                     \
+        bpf_probe_read(&ptr, sizeof(ptr), ts + *(u32*)offset);                                                      \
+        if (!ptr) goto Skip;                                                                                        \
+        offset = CRC_TASK_STRUCT_PID;                                                                               \
+        offset = (u64) bpf_map_lookup_elem(&offsets, &offset);                                                      \
+        if (!offset) goto Skip;                                                                                     \
+        bpf_probe_read(&ppid, sizeof(ppid), ptr + *(u32*)offset);                                                   \
+        if (!ppid) goto Skip;                                                                                       \
+        offset = CRC_TASK_STRUCT_LOGINUID;                                                                          \
+        offset = (u64) bpf_map_lookup_elem(&offsets, &offset);                                                      \
+        if (!offset) goto Skip;                                                                                     \
+        bpf_probe_read(&luid, sizeof(luid), ts + *(u32*)offset);                                                    \
+        if (!luid) goto Skip;                                                                                       \
+        offset = CRC_TASK_STRUCT_MM;                                                                                \
+        offset = (u64) bpf_map_lookup_elem(&offsets, &offset);                                                      \
+        if (!offset) goto Skip;                                                                                     \
+        bpf_probe_read(&ptr, sizeof(ptr), ts + *(u32*) offset); /* ptr to mm */                                     \
+        if (!ptr) goto Skip;                                                                                        \
+        offset = CRC_MM_STRUCT_EXE_FILE;                                                                            \
+        offset = (u64) bpf_map_lookup_elem(&offsets, &offset);                                                      \
+        if (!offset) goto Skip;                                                                                     \
+        bpf_probe_read(&ptr, sizeof(ptr), ptr + *(u32*) offset); /* ptr to exe_file */                              \
+        if (!ptr) goto Skip;                                                                                        \
+        offset = CRC_FILE_F_PATH;                                                                                   \
+        offset = (u64) bpf_map_lookup_elem(&offsets, &offset);                                                      \
+        if (!offset) goto Skip;                                                                                     \
+        ptr = ptr + *(u32*) offset;  /* ptr to f_path */                                                            \
+        if (!ptr) goto Skip;                                                                                        \
+        offset = CRC_PATH_DENTRY;                                                                                   \
+        offset = (u64) bpf_map_lookup_elem(&offsets, &offset);                                                      \
+        if (!offset) goto Skip;                                                                                     \
+        bpf_probe_read(&ptr, sizeof(ptr), ptr + *(u32*) offset); /* ptr to dentry */                                \
+        if (!ptr) goto Skip;                                                                                        \
+        offset = CRC_DENTRY_D_NAME;                                                                                 \
+        offset = (u64) bpf_map_lookup_elem(&offsets, &offset);                                                      \
+        if (!offset) goto Skip;                                                                                     \
+        ptr = ptr + *(u32*) offset; /* ptr to d_name */                                                             \
+        if (!ptr) goto Skip;                                                                                        \
+        bpf_probe_read(&length, sizeof(length), ptr); /* length in lower 32 bits */                                 \
+        if (!length) goto Skip;                                                                                     \
+        offset = CRC_QSTR_NAME;                                                                                     \
+        offset = (u64) bpf_map_lookup_elem(&offsets, &offset);                                                      \
+        if (!offset) goto Skip;                                                                                     \
+        bpf_probe_read(&exe, sizeof(exe), ptr + *(u32*) offset); /* ptr to name string */                           \
+        if (!exe) goto Skip;                                                                                        \
     }
+
 
 
 SEC("kprobe/sys_ptrace_write")
@@ -916,7 +935,7 @@ static __always_inline int enter_exec(syscall_pattern_type_t sp, int fd,
                                       const char __user *const __user *argv,
                                       const char __user *const __user *envp,
                                       int flags, struct pt_regs *ctx, u32 ppid,
-                                      u32 luid)
+                                      u32 luid, const char __user *exe, u32 len)
 {
     u64 id = 0; // reuse ID to save space
     ptelemetry_event_t pev = bpf_map_lookup_elem(&telemetry_stack, (u32 *) &id);
@@ -944,6 +963,17 @@ static __always_inline int enter_exec(syscall_pattern_type_t sp, int fd,
 
     bpf_map_update_elem(&telemetry_ids, &pid, &id, BPF_ANY);
 
+    ev->id = id;
+    ev->done = FALSE;
+    ev->telemetry_type = TE_EXE_PATH;
+    ev->u.v.truncated = FALSE;
+    long count = 0;
+    count = bpf_probe_read_str(&ev->u.v.value, VALUE_SIZE, (void *) exe);
+    if (count == VALUE_SIZE) {
+        ev->u.v.truncated = TRUE;
+    }
+    push_telemetry_event(ev);
+
 
     // explicit null check to satisfy the verifier
     if (!filename)
@@ -951,9 +981,9 @@ static __always_inline int enter_exec(syscall_pattern_type_t sp, int fd,
 
     ev->id = id;
     ev->done = FALSE;
-    ev->telemetry_type = TE_EXE_PATH;
+    ev->telemetry_type = TE_EXEC_FILENAME;
     ev->u.v.truncated = FALSE;
-    long count = 0;
+    count = 0;
     count = bpf_probe_read_str(&ev->u.v.value, VALUE_SIZE, (void*) filename);
     if (count == VALUE_SIZE) {
         ev->u.v.truncated = TRUE;
@@ -1103,8 +1133,13 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execveat_4_8,
 {
     u32 ppid = -1;
     u32 luid = -1;
+    const char __user *exe = NULL;
+    u32 length = -1;
     GET_OFFSETS_4_8;
-    return enter_exec(SP_EXECVEAT, fd, filename, argv, envp, flags, ctx, ppid, luid);
+    return enter_exec(SP_EXECVEAT, fd, filename, argv, envp, flags, ctx, ppid, luid, exe, length);
+Skip:
+    bpf_printk("skipped!\n");
+    return -1;
 }
 
 
@@ -1116,8 +1151,12 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execve_4_8,
 {
     u32 ppid = -1;
     u32 luid = -1;
+    const char __user *exe = NULL;
+    u32 length = -1;
     GET_OFFSETS_4_8;
-    return enter_exec(SP_EXECVE, AT_FDCWD, filename, argv, envp, 0, ctx, ppid, luid);
+    return enter_exec(SP_EXECVE, AT_FDCWD, filename, argv, envp, 0, ctx, ppid, luid, exe, length);
+Skip:
+    return -1;
 }
 
 
@@ -1128,7 +1167,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execveat,
                        const char __user *const __user *envp,
                        int flags)
 {
-    return enter_exec(SP_EXECVEAT, fd, filename, argv, envp, flags, ctx, -1, -1);
+    return enter_exec(SP_EXECVEAT, fd, filename, argv, envp, flags, ctx, -1, -1, NULL, -1);
 }
 
 SEC("kprobe/sys_execve")
@@ -1137,7 +1176,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execve,
                        const char __user *const __user *argv,
                        const char __user *const __user *envp)
 {
-    return enter_exec(SP_EXECVE, AT_FDCWD, filename, argv, envp, 0, ctx, -1, -1);
+    return enter_exec(SP_EXECVE, AT_FDCWD, filename, argv, envp, 0, ctx, -1, -1, NULL, -1);
 }
 
 
@@ -1190,7 +1229,8 @@ int kretprobe__ret_sys_execveat(struct pt_regs *ctx)
 static __always_inline int enter_clone(syscall_pattern_type_t sp, unsigned long flags,
                                        void __user *stack, int __user *parent_tid,
                                        int __user *child_tid, unsigned long tls,
-                                       struct pt_regs *ctx, u32 ppid, u32 luid)
+                                       struct pt_regs *ctx, u32 ppid, u32 luid,
+                                       const char __user *exe, u32 len)
 {
     u64 id = 0; // reuse ID to save space
     ptelemetry_event_t pev = bpf_map_lookup_elem(&telemetry_stack, (u32 *) &id);
@@ -1215,6 +1255,17 @@ static __always_inline int enter_clone(syscall_pattern_type_t sp, unsigned long 
     u32 pid = pid_tgid >> 32;
     ev->u.syscall_info.ppid = ppid;
     ev->u.syscall_info.luid = luid;
+    push_telemetry_event(ev);
+
+    ev->id = id;
+    ev->done = FALSE;
+    ev->telemetry_type = TE_EXE_PATH;
+    ev->u.v.truncated = FALSE;
+    long count = 0;
+    count = bpf_probe_read_str(&ev->u.v.value, VALUE_SIZE, (void *) exe);
+    if (count == VALUE_SIZE) {
+        ev->u.v.truncated = TRUE;
+    }
     push_telemetry_event(ev);
 
     clone_info_t clone_info = {
@@ -1307,8 +1358,12 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_clone_4_8, unsigned long flags, void __user *
 {
     u32 ppid = -1;
     u32 luid = -1;
+    const char __user *exe = NULL;
+    u32 length = -1;
     GET_OFFSETS_4_8;
-    return enter_clone(SP_CLONE, flags, stack, parent_tid, child_tid, tls, ctx, ppid, luid);
+    return enter_clone(SP_CLONE, flags, stack, parent_tid, child_tid, tls, ctx, ppid, luid, exe, length);
+Skip:
+    return -1;
 }
 
 
@@ -1321,12 +1376,13 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_clone, unsigned long flags, void *stack,
                        int *parent_tid, unsigned long tls, int *child_tid)
 #endif
 {
-    return enter_clone(SP_CLONE, flags, stack, parent_tid, child_tid, tls, ctx, -1, -1);
+    return enter_clone(SP_CLONE, flags, stack, parent_tid, child_tid, tls, ctx, -1, -1, NULL, -1);
 }
 
 
 static __always_inline int enter_clone3(syscall_pattern_type_t sp, struct clone_args __user *uargs,
-                                        size_t size, struct pt_regs *ctx, u32 ppid, u32 luid)
+                                        size_t size, struct pt_regs *ctx, u32 ppid, u32 luid,
+                                        const char __user *exe, u32 len)
 {
     u64 id = 0; // reuse ID to save space
     ptelemetry_event_t ev = bpf_map_lookup_elem(&telemetry_stack, (u32 *) &id);
@@ -1352,6 +1408,17 @@ static __always_inline int enter_clone3(syscall_pattern_type_t sp, struct clone_
     push_telemetry_event(ev);
     pid_tgid = pid_tgid >> 32;
     bpf_map_update_elem(&telemetry_ids, (u32 *)&pid_tgid, &id, BPF_ANY);
+
+    ev->id = id;
+    ev->done = FALSE;
+    ev->telemetry_type = TE_EXE_PATH;
+    ev->u.v.truncated = FALSE;
+    long count = 0;
+    count = bpf_probe_read_str(&ev->u.v.value, VALUE_SIZE, (void *) exe);
+    if (count == VALUE_SIZE) {
+        ev->u.v.truncated = TRUE;
+    }
+    push_telemetry_event(ev);
 
     clone3_info_t clone3_info = {0};
     clone3_info.size = (u64) size;
@@ -1452,8 +1519,13 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_clone3, struct clone_args __user *uargs, size
     // clone3 was added in 5.3, so this should always be available if clone3 is attachable
     u32 ppid = -1;
     u32 luid = -1;
+    const char __user *exe = NULL;
+    u32 length = -1;
     GET_OFFSETS_4_8;
-    return enter_clone3(SP_CLONE3, uargs, size, ctx, ppid, luid);
+    return enter_clone3(SP_CLONE3, uargs, size, ctx, ppid, luid, exe, length);
+Skip:
+bpf_printk("skipped!\n");
+    return -1;
 }
 
 SEC("kretprobe/ret_sys_clone3")
@@ -1466,13 +1538,13 @@ int kretprobe__ret_sys_clone3(struct pt_regs *ctx)
 SEC("kprobe/sys_fork")
 int BPF_KPROBE_SYSCALL(kprobe__sys_fork)
 {
-    return enter_clone(SP_FORK, 0, NULL, NULL, NULL, 0, ctx, -1, -1);
+    return enter_clone(SP_FORK, 0, NULL, NULL, NULL, 0, ctx, -1, -1, NULL, -1);
 }
 
 SEC("kprobe/sys_vfork")
 int BPF_KPROBE_SYSCALL(kprobe__sys_vfork)
 {
-    return enter_clone(SP_VFORK, 0, NULL, NULL, NULL, 0, ctx, -1, -1);
+    return enter_clone(SP_VFORK, 0, NULL, NULL, NULL, 0, ctx, -1, -1, NULL, -1);
 }
 
 SEC("kprobe/sys_fork_4_8")
@@ -1480,8 +1552,13 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_fork_4_8)
 {
     u32 ppid = -1;
     u32 luid = -1;
+    const char __user *exe = NULL;
+    u32 length = -1;
     GET_OFFSETS_4_8;
-    return enter_clone(SP_FORK, 0, NULL, NULL, NULL, 0, ctx, ppid, luid);
+    return enter_clone(SP_FORK, 0, NULL, NULL, NULL, 0, ctx, ppid, luid, exe, length);
+Skip:
+    bpf_printk("skipped!\n");
+    return -1;
 }
 
 SEC("kprobe/sys_vfork_4_8")
@@ -1489,8 +1566,13 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_vfork_4_8)
 {
     u32 ppid = -1;
     u32 luid = -1;
+    const char __user *exe = NULL;
+    u32 length = -1;
     GET_OFFSETS_4_8;
-    return enter_clone(SP_VFORK, 0, NULL, NULL, NULL, 0, ctx, ppid, luid);
+    return enter_clone(SP_VFORK, 0, NULL, NULL, NULL, 0, ctx, ppid, luid, exe, length);
+Skip:
+    bpf_printk("skipped!\n");
+    return -1;
 }
 
 SEC("kretprobe/ret_sys_clone")
@@ -1512,7 +1594,8 @@ int kretprobe__ret_sys_vfork(struct pt_regs *ctx)
 }
 
 static __always_inline int enter_unshare(syscall_pattern_type_t sp, int flags,
-                                         struct pt_regs *ctx, u32 ppid, u32 luid)
+                                         struct pt_regs *ctx, u32 ppid, u32 luid,
+                                         const char __user *exe, u32 len)
 {
     u64 id = 0; // reuse ID to save space
     ptelemetry_event_t pev = bpf_map_lookup_elem(&telemetry_stack, (u32 *) &id);
@@ -1535,6 +1618,17 @@ static __always_inline int enter_unshare(syscall_pattern_type_t sp, int flags,
     u32 pid = pid_tgid >> 32;
     ev->u.syscall_info.ppid = ppid;
     ev->u.syscall_info.luid = luid;
+    push_telemetry_event(ev);
+
+    ev->id = id;
+    ev->done = FALSE;
+    ev->telemetry_type = TE_EXE_PATH;
+    ev->u.v.truncated = FALSE;
+    long count = 0;
+    count = bpf_probe_read_str(&ev->u.v.value, VALUE_SIZE, (void *) exe);
+    if (count == VALUE_SIZE) {
+        ev->u.v.truncated = TRUE;
+    }
     push_telemetry_event(ev);
 
     ev->id = id;
@@ -1587,14 +1681,19 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_unshare_4_8, int flags)
 {
     u32 ppid = -1;
     u32 luid = -1;
+    const char __user *exe = NULL;
+    u32 length = -1;
     GET_OFFSETS_4_8;
-    return enter_unshare(SP_UNSHARE, flags, ctx, ppid, luid);
+    return enter_unshare(SP_UNSHARE, flags, ctx, ppid, luid, exe, length);
+Skip:
+    bpf_printk("skipped!\n");
+    return -1;
 }
 
 SEC("kprobe/sys_unshare")
 int BPF_KPROBE_SYSCALL(kprobe__sys_unshare, int flags)
 {
-    return enter_unshare(SP_UNSHARE, flags, ctx, -1, -1);
+    return enter_unshare(SP_UNSHARE, flags, ctx, -1, -1, NULL, -1);
 }
 
 SEC("kretprobe/ret_sys_unshare")
@@ -1605,7 +1704,8 @@ int kretprobe__ret_sys_unshare(struct pt_regs *ctx)
 
 
 static __always_inline int enter_exit(syscall_pattern_type_t sp, int status,
-                                         struct pt_regs *ctx, u32 ppid, u32 luid)
+                                      struct pt_regs *ctx, u32 ppid, u32 luid,
+                                      const char __user *exe, u32 len)
 {
     u64 id = 0; // reuse ID to save space
     ptelemetry_event_t pev = bpf_map_lookup_elem(&telemetry_stack, (u32 *) &id);
@@ -1631,6 +1731,17 @@ static __always_inline int enter_exit(syscall_pattern_type_t sp, int status,
     u32 pid = pid_tgid >> 32;
     ev->u.syscall_info.ppid = ppid;
     ev->u.syscall_info.luid = luid;
+    push_telemetry_event(ev);
+
+    ev->id = id;
+    ev->done = FALSE;
+    ev->telemetry_type = TE_EXE_PATH;
+    ev->u.v.truncated = FALSE;
+    long count = 0;
+    count = bpf_probe_read_str(&ev->u.v.value, VALUE_SIZE, (void *) exe);
+    if (count == VALUE_SIZE) {
+        ev->u.v.truncated = TRUE;
+    }
     push_telemetry_event(ev);
 
     ev->id = id;
@@ -1683,14 +1794,18 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_exit_4_8, int status)
 {
     u32 ppid = -1;
     u32 luid = -1;
+    const char __user *exe = NULL;
+    u32 length = -1;
     GET_OFFSETS_4_8;
-    return enter_exit(SP_EXIT, status, ctx, ppid, luid);
+    return enter_exit(SP_EXIT, status, ctx, ppid, luid, exe, length);
+Skip:
+    return -1;
 }
 
 SEC("kprobe/sys_exit")
 int BPF_KPROBE_SYSCALL(kprobe__sys_exit, int status)
 {
-    return enter_exit(SP_EXIT, status, ctx, -1, -1);
+    return enter_exit(SP_EXIT, status, ctx, -1, -1, NULL, -1);
 }
 
 SEC("kprobe/sys_exit_group_4_8")
@@ -1698,14 +1813,18 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_exit_group_4_8, int status)
 {
     u32 ppid = -1;
     u32 luid = -1;
+    const char __user *exe = NULL;
+    u32 length = -1;
     GET_OFFSETS_4_8;
-    return enter_exit(SP_EXITGROUP, status, ctx, ppid, luid);
+    return enter_exit(SP_EXITGROUP, status, ctx, ppid, luid, exe, length);
+Skip:
+    return -1;
 }
 
 SEC("kprobe/sys_exit_group")
 int BPF_KPROBE_SYSCALL(kprobe__sys_exit_group, int status)
 {
-    return enter_exit(SP_EXITGROUP, status, ctx, -1, -1);
+    return enter_exit(SP_EXITGROUP, status, ctx, -1, -1, NULL, -1);
 }
 
 SEC("kretprobe/ret_sys_exit")
