@@ -204,10 +204,6 @@ typedef struct
     u32 euid;
     u32 egid;
     char comm[16];
-    union {
-        process_fork_info_t fork_info;
-        netconn_info_t netconn_info;
-    } u;
 } syscall_info_t, *psyscall_info_t;
 
 typedef struct
