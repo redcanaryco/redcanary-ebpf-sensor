@@ -13,8 +13,7 @@
  * This number was determined experimentally, setting it higher will exceed
  * the BPF 512 byte stack limit.
  */
-//#define VALUE_SIZE 176
-#define VALUE_SIZE 128
+#define VALUE_SIZE 144
 
 typedef enum
 {

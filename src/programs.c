@@ -289,6 +289,14 @@ static __always_inline syscall_pattern_type_t ptrace_syscall_pattern(u32 request
 
 #define FILL_TELEMETRY_SYSCALL_RET(E, SP) \
 
+#define SET_OFFSET(CRC) \
+    offset = CRC;                                               \
+    offset = (u64) bpf_map_lookup_elem(&offsets, &offset);      \
+    if (!offset) goto Skip;
+
+#define FOLLOW_PTR(O) \
+    bpf_probe_read(&ptr, sizeof(ptr), ptr + *(u32*) O); \
+    if (!ptr) goto Skip;
 
 #define GET_OFFSETS_4_8 \
     /* if "loaded" doesn't exist in the map, we get NULL back and won't read from offsets                           \
@@ -302,51 +310,29 @@ static __always_inline syscall_pattern_type_t ptrace_syscall_pattern(u32 request
     void *ts = (void *)bpf_get_current_task();                                                                      \
     void *ptr = NULL;                                                                                               \
     if (ts && offset) {                                                                                             \
-        offset = CRC_TASK_STRUCT_REAL_PARENT;                                                                       \
-        offset = (u64) bpf_map_lookup_elem(&offsets, &offset);                                                      \
-        if (!offset) goto Skip;                                                                                     \
+        SET_OFFSET(CRC_TASK_STRUCT_REAL_PARENT);                                                                    \
         bpf_probe_read(&ptr, sizeof(ptr), ts + *(u32*)offset);                                                      \
         if (!ptr) goto Skip;                                                                                        \
-        offset = CRC_TASK_STRUCT_PID;                                                                               \
-        offset = (u64) bpf_map_lookup_elem(&offsets, &offset);                                                      \
-        if (!offset) goto Skip;                                                                                     \
+        SET_OFFSET(CRC_TASK_STRUCT_PID);                                                                            \
         bpf_probe_read(&ppid, sizeof(ppid), ptr + *(u32*)offset);                                                   \
         if (!ppid) goto Skip;                                                                                       \
-        offset = CRC_TASK_STRUCT_LOGINUID;                                                                          \
-        offset = (u64) bpf_map_lookup_elem(&offsets, &offset);                                                      \
-        if (!offset) goto Skip;                                                                                     \
+        SET_OFFSET(CRC_TASK_STRUCT_LOGINUID);                                                                       \
         bpf_probe_read(&luid, sizeof(luid), ts + *(u32*)offset);                                                    \
         if (!luid) goto Skip;                                                                                       \
-        offset = CRC_TASK_STRUCT_MM;                                                                                \
-        offset = (u64) bpf_map_lookup_elem(&offsets, &offset);                                                      \
-        if (!offset) goto Skip;                                                                                     \
+        SET_OFFSET(CRC_TASK_STRUCT_MM);                                                                             \
         bpf_probe_read(&ptr, sizeof(ptr), ts + *(u32*) offset); /* ptr to mm */                                     \
         if (!ptr) goto Skip;                                                                                        \
-        offset = CRC_MM_STRUCT_EXE_FILE;                                                                            \
-        offset = (u64) bpf_map_lookup_elem(&offsets, &offset);                                                      \
-        if (!offset) goto Skip;                                                                                     \
-        bpf_probe_read(&ptr, sizeof(ptr), ptr + *(u32*) offset); /* ptr to exe_file */                              \
-        if (!ptr) goto Skip;                                                                                        \
-        offset = CRC_FILE_F_PATH;                                                                                   \
-        offset = (u64) bpf_map_lookup_elem(&offsets, &offset);                                                      \
-        if (!offset) goto Skip;                                                                                     \
+        SET_OFFSET(CRC_MM_STRUCT_EXE_FILE);                                                                         \
+        FOLLOW_PTR(offset); /* ptr to exe_file */                                                                   \
+        SET_OFFSET(CRC_FILE_F_PATH);                                                                                \
         ptr = ptr + *(u32*) offset;  /* ptr to f_path */                                                            \
-        if (!ptr) goto Skip;                                                                                        \
-        offset = CRC_PATH_DENTRY;                                                                                   \
-        offset = (u64) bpf_map_lookup_elem(&offsets, &offset);                                                      \
-        if (!offset) goto Skip;                                                                                     \
-        bpf_probe_read(&ptr, sizeof(ptr), ptr + *(u32*) offset); /* ptr to dentry */                                \
-        if (!ptr) goto Skip;                                                                                        \
-        offset = CRC_DENTRY_D_NAME;                                                                                 \
-        offset = (u64) bpf_map_lookup_elem(&offsets, &offset);                                                      \
-        if (!offset) goto Skip;                                                                                     \
+        SET_OFFSET(CRC_PATH_DENTRY);                                                                                \
+        FOLLOW_PTR(offset); /* ptr to dentry */                                                                     \
+        SET_OFFSET(CRC_DENTRY_D_NAME);                                                                              \
         ptr = ptr + *(u32*) offset; /* ptr to d_name */                                                             \
-        if (!ptr) goto Skip;                                                                                        \
         bpf_probe_read(&length, sizeof(length), ptr); /* length in lower 32 bits */                                 \
         if (!length) goto Skip;                                                                                     \
-        offset = CRC_QSTR_NAME;                                                                                     \
-        offset = (u64) bpf_map_lookup_elem(&offsets, &offset);                                                      \
-        if (!offset) goto Skip;                                                                                     \
+        SET_OFFSET(CRC_QSTR_NAME);                                                                                  \
         bpf_probe_read(&exe, sizeof(exe), ptr + *(u32*) offset); /* ptr to name string */                           \
         if (!exe) goto Skip;                                                                                        \
     }
