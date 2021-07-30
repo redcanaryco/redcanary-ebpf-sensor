@@ -129,30 +129,30 @@ struct bpf_map_def SEC("maps/telemetry_index") telemetry_index = {
 };
 
 struct bpf_map_def SEC("maps/read_flush_index") read_flush_index = {
-        .type = BPF_MAP_TYPE_PERCPU_ARRAY,
-        .key_size = sizeof(u32),
-        .value_size = sizeof(u32),
-        .max_entries = 1,
-        .pinning = 0,
-        .namespace = "",
+    .type = BPF_MAP_TYPE_PERCPU_ARRAY,
+    .key_size = sizeof(u32),
+    .value_size = sizeof(u32),
+    .max_entries = 1,
+    .pinning = 0,
+    .namespace = "",
 };
 
 struct bpf_map_def SEC("maps/clone_info_store") clone_info_store = {
-        .type = BPF_MAP_TYPE_PERCPU_ARRAY,
-        .key_size = sizeof(u32),
-        .value_size = sizeof(clone_info_t),
-        .max_entries = 1,
-        .pinning = 0,
-        .namespace = "",
+    .type = BPF_MAP_TYPE_PERCPU_ARRAY,
+    .key_size = sizeof(u32),
+    .value_size = sizeof(clone_info_t),
+    .max_entries = 1,
+    .pinning = 0,
+    .namespace = "",
 };
 
 struct bpf_map_def SEC("maps/clone3_info_store") clone3_info_store = {
-        .type = BPF_MAP_TYPE_PERCPU_ARRAY,
-        .key_size = sizeof(u32),
-        .value_size = sizeof(clone3_info_t),
-        .max_entries = 1,
-        .pinning = 0,
-        .namespace = "",
+    .type = BPF_MAP_TYPE_PERCPU_ARRAY,
+    .key_size = sizeof(u32),
+    .value_size = sizeof(clone3_info_t),
+    .max_entries = 1,
+    .pinning = 0,
+    .namespace = "",
 };
 
 struct bpf_map_def SEC("maps/telemetry_events") telemetry_events = {
@@ -174,21 +174,21 @@ struct bpf_map_def SEC("maps/telemetry_ids") telemetry_ids = {
 };
 
 struct bpf_map_def SEC("maps/tail_call_table") tail_call_table  = {
-        .type = BPF_MAP_TYPE_PROG_ARRAY,
-        .key_size = sizeof(u32),
-        .value_size = sizeof(u32),
-        .max_entries = 32,
-        .pinning = 0,
-        .namespace = "",
+    .type = BPF_MAP_TYPE_PROG_ARRAY,
+    .key_size = sizeof(u32),
+    .value_size = sizeof(u32),
+    .max_entries = 32,
+    .pinning = 0,
+    .namespace = "",
 };
 
 struct bpf_map_def SEC("maps/offsets") offsets = {
-        .type = BPF_MAP_TYPE_HASH,
-        .key_size = sizeof(u64),
-        .value_size = sizeof(u32),
-        .max_entries = 4096,
-        .pinning = 0,
-        .namespace = "",
+    .type = BPF_MAP_TYPE_HASH,
+    .key_size = sizeof(u64),
+    .value_size = sizeof(u32),
+    .max_entries = 4096,
+    .pinning = 0,
+    .namespace = "",
 };
 
 static __always_inline syscall_pattern_type_t ptrace_syscall_pattern(u32 request)
@@ -886,12 +886,26 @@ static __always_inline void flush_telemetry_events(struct pt_regs *ctx)
     bpf_map_update_elem(&read_flush_index, &key, &ii, BPF_ANY);
 }
 
-#define READ_LOOP(PTR, T)                                                       \
+#define __READ_LOOP(PTR, T) \
+    if (!br) {                                                                          \
+        ev->u.v.truncated = FALSE;                                                      \
+        ev->id = id;                                                                    \
+        ev->done = FALSE;                                                               \
+        ev->telemetry_type = T;                                                         \
+        count = bpf_probe_read_str(&ev->u.v.value, VALUE_SIZE, (void *) PTR + off);     \
+        if (count == VALUE_SIZE) {                                                      \
+            ev->u.v.truncated = TRUE;                                                   \
+            off = off + VALUE_SIZE;                                                     \
+        } else {                                                                        \
+            br = 1;                                                                     \
+        }                                                                               \
+        push_telemetry_event(ev);                                                       \
+    }
+
+#define __READ_LOOP_N(PTR, T, N) REPEAT_##N(__READ_LOOP(PTR, T);)
+
+#define READ_LOOP(PTR, T)                                                    \
     ptr = 0;                                                                    \
-    ev->u.v.truncated = FALSE;                                                  \
-    ev->id = id;                                                                \
-    ev->done = FALSE;                                                           \
-    ev->telemetry_type = T;                                                     \
     ret = bpf_probe_read(&ptr, sizeof(u64), (void*) PTR + (ii * sizeof(u64)));  \
     if (ret < 0)                                                                \
     {                                                                           \
@@ -903,18 +917,32 @@ static __always_inline void flush_telemetry_events(struct pt_regs *ctx)
     }                                                                           \
     else                                                                        \
     {                                                                           \
-        count = bpf_probe_read_str(&ev->u.v.value, VALUE_SIZE, (void *) ptr);   \
-        if (count == VALUE_SIZE) {                                              \
-            ev->u.v.truncated = TRUE;                                           \
-        }                                                                       \
-        if (count <= 0) {                                                       \
-            goto Next;                                                          \
-        }                                                                       \
+        u32 off = 0;                                                            \
+        char br = 0;                                                            \
+        __READ_LOOP_N(ptr, T, 5);                                               \
     }                                                                           \
-    push_telemetry_event(ev);                                                   \
     ii++;
 
 #define READ_LOOP_N(PTR, T, N) REPEAT_##N(READ_LOOP(PTR, T);)
+
+#define READ_VALUE(EV, T, S) \
+    if (!br){                                                                       \
+        EV->id = id;                                                                \
+        EV->done = FALSE;                                                           \
+        EV->telemetry_type = T;                                                     \
+        EV->u.v.truncated = FALSE;                                                  \
+        count = 0;                                                                  \
+        count = bpf_probe_read_str(&ev->u.v.value, VALUE_SIZE, (void *) S + off);   \
+        if (count == VALUE_SIZE) {                                                  \
+            EV->u.v.truncated = TRUE;                                               \
+            off = off + VALUE_SIZE;                                                 \
+        } else {                                                                    \
+            br = 1;                                                                 \
+        }                                                                           \
+        push_telemetry_event(EV);                                                   \
+    }
+
+#define READ_VALUE_N(EV, T, S, N) REPEAT_##N(READ_VALUE(EV, T, S);)
 
 static __always_inline int enter_exec(syscall_pattern_type_t sp, int fd,
                                       const char __user *filename,
@@ -949,33 +977,19 @@ static __always_inline int enter_exec(syscall_pattern_type_t sp, int fd,
 
     bpf_map_update_elem(&telemetry_ids, &pid, &id, BPF_ANY);
 
-    ev->id = id;
-    ev->done = FALSE;
-    ev->telemetry_type = TE_EXE_PATH;
-    ev->u.v.truncated = FALSE;
     long count = 0;
-    count = bpf_probe_read_str(&ev->u.v.value, VALUE_SIZE, (void *) exe);
-    if (count == VALUE_SIZE) {
-        ev->u.v.truncated = TRUE;
-    }
-    push_telemetry_event(ev);
-
+    u32 off = 0;
+    char br = 0;
+    READ_VALUE_N(ev, TE_EXE_PATH, exe, 5);
 
     // explicit null check to satisfy the verifier
     if (!filename)
         goto Exit;
 
-    ev->id = id;
-    ev->done = FALSE;
-    ev->telemetry_type = TE_EXEC_FILENAME;
-    ev->u.v.truncated = FALSE;
     count = 0;
-    count = bpf_probe_read_str(&ev->u.v.value, VALUE_SIZE, (void*) filename);
-    if (count == VALUE_SIZE) {
-        ev->u.v.truncated = TRUE;
-    }
-    push_telemetry_event(ev);
-
+    off = 0;
+    br = 0;
+    READ_VALUE_N(ev, TE_EXEC_FILENAME, filename, 5);
 
     bpf_tail_call(ctx, &tail_call_table, SYS_EXEC_TC_ARGV);
 
