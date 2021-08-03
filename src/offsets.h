@@ -33,3 +33,12 @@ const u64 CRC_QSTR_HASH_LEN = 0xeb88a6081906b367;
 
 /* qstr->name */
 const u64 CRC_QSTR_NAME = 0x8f5975ec8033153c;
+
+/* file->f_inode */
+const u64 CRC_FILE_F_INODE = 0xad18ad97f6aef632;
+
+/* inode->i_rdev */
+const u64 CRC_INODE_I_RDEV = 0x51b3c613c3a6c688;
+
+/* inode->i_ino */
+const u64 CRC_INODE_I_INO = 0xa9a6f8a386ba140e;

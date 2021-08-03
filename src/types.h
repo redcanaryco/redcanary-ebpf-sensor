@@ -180,12 +180,16 @@ typedef struct
     char value[384];
 } read_return_string_event_t;
 
+
+#define MAJOR(dev)	((dev)>>8)
+#define MINOR(dev)	((dev) & 0xff)
+
 typedef struct {
     u64 inode;
     u32 devmajor;
     u32 devminor;
     char value[VALUE_SIZE];
-} file_info_t;
+} file_info_t, *pfile_info_t;
 
 typedef struct
 {

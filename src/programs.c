@@ -298,6 +298,34 @@ static __always_inline syscall_pattern_type_t ptrace_syscall_pattern(u32 request
     bpf_probe_read(&ptr, sizeof(ptr), ptr + *(u32*) O); \
     if (!ptr) goto Skip;
 
+/* this must go in the kretprobe so we can grab the new process from `task_struct` */
+#define GET_OFFSETS_4_8_RET_EXEC \
+    /* if "loaded" doesn't exist in the map, we get NULL back and won't read from offsets                           \
+     * when offsets are loaded into the offsets map, "loaded" should be given any value                             \
+    */                                                                                                              \
+    u64 offset = CRC_LOADED;                                                                                        \
+    offset = (u64) bpf_map_lookup_elem(&offsets, &offset); /* squeezing out as much stack as possible */            \
+    /* since we're using offsets to read from the structs, we don't need to bother with                             \
+     * understanding their structure                                                                                \
+    */                                                                                                              \
+    u32 i_rdev = 0;                                                                                                 \
+    u64 i_ino = 0;                                                                                                  \
+    void *ts = (void *)bpf_get_current_task();                                                                      \
+    void *ptr = NULL;            \
+    if (ts && offset) {                                                                                             \
+        SET_OFFSET(CRC_TASK_STRUCT_MM);                                                                             \
+        bpf_probe_read(&ptr, sizeof(ptr), ts + *(u32*)offset);                                                      \
+        SET_OFFSET(CRC_MM_STRUCT_EXE_FILE);                                                                         \
+        FOLLOW_PTR(offset);      \
+        SET_OFFSET(CRC_FILE_F_INODE);                                                                               \
+        FOLLOW_PTR(offset);      \
+        SET_OFFSET(CRC_INODE_I_RDEV);                                                                               \
+        bpf_probe_read(&i_rdev, sizeof(i_rdev), ptr + *(u32*)offset);                                               \
+        SET_OFFSET(CRC_INODE_I_INO);                                                                                \
+        bpf_probe_read(&i_ino, sizeof(i_rdev), ptr + *(u32*)offset);                                                \
+    }
+
+
 #define GET_OFFSETS_4_8 \
     /* if "loaded" doesn't exist in the map, we get NULL back and won't read from offsets                           \
      * when offsets are loaded into the offsets map, "loaded" should be given any value                             \
@@ -1138,7 +1166,6 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execveat_4_8,
     GET_OFFSETS_4_8;
     return enter_exec(SP_EXECVEAT, fd, filename, argv, envp, flags, ctx, ppid, luid, exe, length);
 Skip:
-    bpf_printk("skipped!\n");
     return -1;
 }
 
@@ -1180,7 +1207,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execve,
 }
 
 
-static __always_inline int exit_exec(struct pt_regs *__ctx)
+static __always_inline int exit_exec(struct pt_regs *__ctx, u32 i_rdev, u64 i_ino)
 {
     u64 pid_tgid = bpf_get_current_pid_tgid();
     u32 pid = pid_tgid >> 32;
@@ -1191,8 +1218,8 @@ static __always_inline int exit_exec(struct pt_regs *__ctx)
 
     ptelemetry_event_t ev = &(telemetry_event_t) {
             .id = 0,
-            .done = TRUE,
-            .telemetry_type = 0,
+            .done = FALSE,
+            .telemetry_type = TE_UNSPEC,
             .u.v = {
                     .value[0] = '\0',
                     .truncated = FALSE,
@@ -1201,6 +1228,19 @@ static __always_inline int exit_exec(struct pt_regs *__ctx)
     ev->id = *id;
     bpf_map_delete_elem(&telemetry_ids, &pid);
 
+    file_info_t fi = {
+        .inode = i_ino,
+        .devmajor = MAJOR(i_rdev),
+        .devminor = MINOR(i_rdev),
+        .value[0] = '\0',
+    };
+
+    ev->telemetry_type = TE_FILE_INFO;
+    __builtin_memcpy(&ev->u.file_info, &fi, sizeof(fi));
+    push_telemetry_event(ev);
+
+    ev->id = *id;
+    ev->done = TRUE;
     ev->telemetry_type = TE_RETCODE;
     ev->u.retcode = (u32)PT_REGS_RC(__ctx);
     push_telemetry_event(ev);
@@ -1216,15 +1256,33 @@ Flush:
 SEC("kretprobe/ret_sys_execve")
 int kretprobe__ret_sys_execve(struct pt_regs *ctx)
 {
-    return exit_exec(ctx);
+    return exit_exec(ctx, -1, -1);
 }
 
 SEC("kretprobe/ret_sys_execveat")
 int kretprobe__ret_sys_execveat(struct pt_regs *ctx)
 {
-    return exit_exec(ctx);
+    return exit_exec(ctx, -1, -1);
 }
 
+
+SEC("kretprobe/ret_sys_execve_4_8")
+int kretprobe__ret_sys_execve_4_8(struct pt_regs *ctx)
+{
+    GET_OFFSETS_4_8_RET_EXEC;
+    return exit_exec(ctx, i_rdev, i_ino);
+Skip:;
+    return -1;
+}
+
+SEC("kretprobe/ret_sys_execveat_4_8")
+int kretprobe__ret_sys_execveat_4_8(struct pt_regs *ctx)
+{
+    GET_OFFSETS_4_8_RET_EXEC;
+    return exit_exec(ctx, i_rdev, i_ino);
+Skip:;
+    return -1;
+}
 
 static __always_inline int enter_clone(syscall_pattern_type_t sp, unsigned long flags,
                                        void __user *stack, int __user *parent_tid,
@@ -1524,7 +1582,6 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_clone3, struct clone_args __user *uargs, size
     GET_OFFSETS_4_8;
     return enter_clone3(SP_CLONE3, uargs, size, ctx, ppid, luid, exe, length);
 Skip:
-bpf_printk("skipped!\n");
     return -1;
 }
 
@@ -1557,7 +1614,6 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_fork_4_8)
     GET_OFFSETS_4_8;
     return enter_clone(SP_FORK, 0, NULL, NULL, NULL, 0, ctx, ppid, luid, exe, length);
 Skip:
-    bpf_printk("skipped!\n");
     return -1;
 }
 
@@ -1571,7 +1627,6 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_vfork_4_8)
     GET_OFFSETS_4_8;
     return enter_clone(SP_VFORK, 0, NULL, NULL, NULL, 0, ctx, ppid, luid, exe, length);
 Skip:
-    bpf_printk("skipped!\n");
     return -1;
 }
 
@@ -1686,7 +1741,6 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_unshare_4_8, int flags)
     GET_OFFSETS_4_8;
     return enter_unshare(SP_UNSHARE, flags, ctx, ppid, luid, exe, length);
 Skip:
-    bpf_printk("skipped!\n");
     return -1;
 }
 
