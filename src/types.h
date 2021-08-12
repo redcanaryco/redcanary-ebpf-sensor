@@ -13,7 +13,7 @@
  * This number was determined experimentally, setting it higher will exceed
  * the BPF 512 byte stack limit.
  */
-#define VALUE_SIZE 144
+#define VALUE_SIZE 144UL
 
 typedef enum
 {
@@ -82,6 +82,7 @@ typedef enum
     TE_UNSHARE_FLAGS,
     TE_EXIT_STATUS,
     TE_EXEC_FILENAME,
+    TE_PWD,
 } telemetry_event_type_t;
 
 #define COMMON_FIELDS \
@@ -278,6 +279,8 @@ struct clone_args {
 };
 
 typedef enum {
+    SYS_EXECVE_4_8,
+    SYS_EXECVEAT_4_8,
     SYS_EXEC_TC_ARGV,
     SYS_EXEC_TC_ENVP,
     RET_SYS_EXECVE,

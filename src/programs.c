@@ -10,8 +10,9 @@
 #include "bpf_helpers.h"
 #include "types.h"
 #include "offsets.h"
+#include "repeat.h"
 
-#define MAX_TELEMETRY_STACK_ENTRIES 128
+#define MAX_TELEMETRY_STACK_ENTRIES 1024
 #define CLONE_ARGS_SIZE_VER0 64 /* sizeof first published struct */
 #define CLONE_ARGS_SIZE_VER1 80 /* sizeof second published struct */
 #define CLONE_ARGS_SIZE_VER2 88 /* sizeof third published struct */
@@ -358,7 +359,7 @@ static __always_inline syscall_pattern_type_t ptrace_syscall_pattern(u32 request
         FOLLOW_PTR(offset); /* ptr to dentry */                                                                     \
         SET_OFFSET(CRC_DENTRY_D_NAME);                                                                              \
         ptr = ptr + *(u32*) offset; /* ptr to d_name */                                                             \
-        bpf_probe_read(&length, sizeof(length), ptr); /* length in lower 32 bits */                                 \
+        bpf_probe_read(&length, sizeof(length), ptr + *(u32*)offset ); /* length in lower 32 bits */                \
         if (!length) goto Skip;                                                                                     \
         SET_OFFSET(CRC_QSTR_NAME);                                                                                  \
         bpf_probe_read(&exe, sizeof(exe), ptr + *(u32*) offset); /* ptr to name string */                           \
@@ -909,7 +910,7 @@ static __always_inline void flush_telemetry_events(struct pt_regs *ctx)
 
     // this number was arrived at experimentally, increasing it will result in too many
     // instructions for older kernels
-    FLUSH_LOOP_N(27);
+    FLUSH_LOOP_N(154);
 
     bpf_map_update_elem(&read_flush_index, &key, &ii, BPF_ANY);
 }
@@ -972,7 +973,84 @@ static __always_inline void flush_telemetry_events(struct pt_regs *ctx)
 
 #define READ_VALUE_N(EV, T, S, N) REPEAT_##N(READ_VALUE(EV, T, S);)
 
+#define SEND_PATH \
+    ev->id = id;                                                            \
+    ev->done = FALSE;                                                       \
+    ev->telemetry_type = TE_PWD;                                            \
+    if (br == 0)                                                            \
+    {                                                                       \
+        bpf_probe_read(&offset, sizeof(offset), ptr + name);                \
+        if (!offset) goto PwdRead;                                          \
+        bpf_probe_read(&count, sizeof(count), ptr + qstr_len);              \
+    }                                                                       \
+    temp = 0;                                                               \
+    __builtin_memset(&ev->u.v.value, 0, VALUE_SIZE);                        \
+    if (count > (VALUE_SIZE - 1)) temp = VALUE_SIZE - 1; else temp = count; \
+    bpf_probe_read(&ev->u.v.value, temp, (void*)offset);                    \
+    br = ev->u.v.value[0];                                                  \
+    if (count > VALUE_SIZE) {                                               \
+        br = 1;                                                             \
+        ev->u.v.truncated = TRUE;                                           \
+        offset = offset + VALUE_SIZE;                                       \
+        count = count - VALUE_SIZE;                                         \
+        push_telemetry_event(ev);                                           \
+    } else {                                                                \
+        if (count != 0) {                                                   \
+            ev->u.v.truncated = FALSE;                                      \
+            push_telemetry_event(ev);                                       \
+        }                                                                   \
+        /* we're done here, follow the pointer */                           \
+        bpf_probe_read(&ptr, sizeof(ptr), ptr + parent);                    \
+        if (!ptr) goto PwdRead;                                             \
+        if (br == '/') goto PwdRead;                                        \
+        br = 0;                                                             \
+    }
+
+
+#define SEND_PATH_N(N) REPEAT_##N(SEND_PATH;)
+
 static __always_inline int enter_exec(syscall_pattern_type_t sp, int fd,
+                                          const char __user *filename,
+                                          const char __user *const __user *argv,
+                                          const char __user *const __user *envp,
+                                          int flags, struct pt_regs *ctx, u32 ppid,
+                                          u32 luid, const char __user *exe, u32 len)
+{
+    u64 id = 0; // reuse ID to save space
+    ptelemetry_event_t pev = bpf_map_lookup_elem(&telemetry_stack, (u32 *) &id);
+    if (!pev) // this should never happen, but the verifier complains otherwise
+        {
+        goto Exit;
+        }
+    // this pointer passing and memcpy is to put the struct on the stack and satisfy the verifier
+    telemetry_event_t sev = {0};
+    __builtin_memcpy(&sev, pev, sizeof(telemetry_event_t));
+    ptelemetry_event_t ev = &sev;
+
+    u64 p_t = bpf_get_current_pid_tgid();
+    u32 t = p_t >> 32;
+    id = (u64) bpf_map_lookup_elem(&telemetry_ids, &t);
+
+    id = bpf_get_prandom_u32();
+    ev->id = id;
+    ev->done = FALSE;
+    ev->telemetry_type = 0,
+    ev->u.v.value[0] = '\0';
+    ev->u.v.truncated = FALSE;
+
+    FILL_TELEMETRY_SYSCALL_EVENT(ev, sp);
+    u32 pid = pid_tgid >> 32;
+    ev->u.syscall_info.ppid = ppid;
+    ev->u.syscall_info.luid = luid;
+    push_telemetry_event(ev);
+
+    bpf_map_update_elem(&telemetry_ids, &pid, &id, BPF_ANY);
+
+Exit:
+    return 0;
+}
+
+static __always_inline ptelemetry_event_t enter_exec_4_8(syscall_pattern_type_t sp, int fd,
                                       const char __user *filename,
                                       const char __user *const __user *argv,
                                       const char __user *const __user *envp,
@@ -990,6 +1068,15 @@ static __always_inline int enter_exec(syscall_pattern_type_t sp, int fd,
     __builtin_memcpy(&sev, pev, sizeof(telemetry_event_t));
     ptelemetry_event_t ev = &sev;
 
+    u64 p_t = bpf_get_current_pid_tgid();
+    u32 t = p_t >> 32;
+    id = (u64) bpf_map_lookup_elem(&telemetry_ids, &t);
+    if (id)
+    {
+        __builtin_memcpy(&id, (void*)id, sizeof(u64));
+        goto Pwd;
+    }
+
     id = bpf_get_prandom_u32();
     ev->id = id;
     ev->done = FALSE;
@@ -1005,25 +1092,52 @@ static __always_inline int enter_exec(syscall_pattern_type_t sp, int fd,
 
     bpf_map_update_elem(&telemetry_ids, &pid, &id, BPF_ANY);
 
-    long count = 0;
-    u32 off = 0;
+    u32 count = 0;
     char br = 0;
-    READ_VALUE_N(ev, TE_EXE_PATH, exe, 5);
+    //READ_VALUE_N(ev, TE_EXE_PATH, exe, 5); // TODO: is this necessary?
 
-    // explicit null check to satisfy the verifier
-    if (!filename)
-        goto Exit;
+Pwd:;
+    u64 offset = 0;
+    void *ptr = (void*)bpf_get_current_task();
+    offset = CRC_TASK_STRUCT_FS;
+    offset = (u64) bpf_map_lookup_elem(&offsets, &offset);
+    if (!offset) goto PwdRead;
+    bpf_probe_read(&ptr, sizeof(ptr), ptr + *(u32*)offset); // ptr to fs
+    if (!ptr) goto PwdRead;
+    offset = CRC_FS_STRUCT_PWD;
+    offset = (u64) bpf_map_lookup_elem(&offsets, &offset);
+    if (!offset) goto PwdRead;
+    ptr = ptr + *(u32*)offset; // ptr to pwd
+    offset = CRC_PATH_DENTRY;
+    offset = (u64) bpf_map_lookup_elem(&offsets, &offset);
+    if (!offset) goto PwdRead;
+    bpf_probe_read(&ptr, sizeof(ptr), ptr + *(u32*)offset); // ptr to first dentry
+    if (!ptr) goto PwdRead;
+    // name = name offset in qstr (d_name + name)
+    offset = CRC_DENTRY_D_NAME;
+    offset = (u64) bpf_map_lookup_elem(&offsets, &offset);
+    if (!offset) goto PwdRead;
+    u32 qstr_len = *(u32*) offset; // variable name doesn't match here, we're reusing it to preserve stack
+    offset = CRC_QSTR_NAME;
+    offset = (u64) bpf_map_lookup_elem(&offsets, &offset);
+    if (!offset) goto PwdRead;
+    u32 name = qstr_len + *(u32*) offset; // offset to name char ptr within qstr of dentry
+    offset = CRC_DENTRY_D_PARENT;
+    offset = (u64) bpf_map_lookup_elem(&offsets, &offset);
+    if (!offset) goto PwdRead;
+    u32 parent = *(u32*) offset; // offset of d_parent
+    offset = CRC_QSTR_LEN;
+    offset = (u64) bpf_map_lookup_elem(&offsets, &offset);
+    if (!offset) goto PwdRead;
+    qstr_len = qstr_len + *(u32*)offset;
+    u32 temp = 0;
+    SEND_PATH_N(14);
+    bpf_tail_call(ctx, &tail_call_table, SYS_EXECVE_4_8);
 
-    count = 0;
-    off = 0;
-    br = 0;
-    READ_VALUE_N(ev, TE_EXEC_FILENAME, filename, 5);
-
-    bpf_tail_call(ctx, &tail_call_table, SYS_EXEC_TC_ARGV);
-
-
+PwdRead:;
 Exit:
-    return 0;
+    ev->id = id;
+    return ev;
 }
 
 SEC("kprobe/sys_exec_tc_argv")
@@ -1152,19 +1266,33 @@ Exit:;
     return 0;
 }
 
+// hook begin_new_exec https://elixir.bootlin.com/linux/latest/source/fs/exec.c#L1239
+// get fdpath https://elixir.bootlin.com/linux/latest/source/include/linux/binfmts.h#L17
+// for dave:
+// - we have `offsets.h` header now
+// - we have the taill_call_slot_t
+// - we have all the struct offsets on x64 and ARM (EXCEPT rhel and suse b/c licensing)
+// - we're grabbing full strings on plugins side, w/ truncation
+// TODO: differentiate truncate b/c gave up
+// - I'm having trouble w/ rel path pwd
+// - I got an rpi for testing so if you have some stuff pushed up I can test it
+// - Carl is working on FB stuff still, he was running into issues that I don't remember (Brandon is helping him)
+
 SEC("kprobe/sys_execveat_4_8")
 int BPF_KPROBE_SYSCALL(kprobe__sys_execveat_4_8,
                        int fd, const char __user *filename,
                        const char __user *const __user *argv,
                        const char __user *const __user *envp,
                        int flags)
-{
+                       {
     u32 ppid = -1;
     u32 luid = -1;
     const char __user *exe = NULL;
     u32 length = -1;
+    // inode->i_rdev, inode->i_ino
     GET_OFFSETS_4_8;
-    return enter_exec(SP_EXECVEAT, fd, filename, argv, envp, flags, ctx, ppid, luid, exe, length);
+    enter_exec_4_8(SP_EXECVEAT, fd, filename, argv, envp, flags, ctx, ppid, luid, exe, length);
+
 Skip:
     return -1;
 }
@@ -1181,7 +1309,65 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execve_4_8,
     const char __user *exe = NULL;
     u32 length = -1;
     GET_OFFSETS_4_8;
-    return enter_exec(SP_EXECVE, AT_FDCWD, filename, argv, envp, 0, ctx, ppid, luid, exe, length);
+    enter_exec_4_8(SP_EXECVE, AT_FDCWD, filename, argv, envp, 0, ctx, ppid, luid, exe, length);
+
+Skip:
+    return -1;
+}
+
+SEC("kprobe/sys_execveat_4_11")
+int BPF_KPROBE_SYSCALL(kprobe__sys_execveat_4_11,
+                       int fd, const char __user *filename,
+                       const char __user *const __user *argv,
+                       const char __user *const __user *envp,
+                       int flags)
+{
+    u32 ppid = -1;
+    u32 luid = -1;
+    const char __user *exe = NULL;
+    u32 length = -1;
+    // inode->i_rdev, inode->i_ino
+    GET_OFFSETS_4_8;
+    ptelemetry_event_t ev = enter_exec_4_8(SP_EXECVEAT, fd, filename, argv, envp, flags, ctx, ppid, luid, exe, length);
+
+    if (!filename) goto Skip;
+    u64 id = ev->id;
+    __builtin_memset(ev, 0, sizeof(telemetry_event_t));
+    u32 count = 0;
+    u64 off = 0;
+    char br = 0;
+    READ_VALUE_N(ev, TE_EXEC_FILENAME, filename, 5);
+
+    bpf_tail_call(ctx, &tail_call_table, SYS_EXEC_TC_ARGV);
+
+Skip:
+    return -1;
+}
+
+
+SEC("kprobe/sys_execve_4_11")
+int BPF_KPROBE_SYSCALL(kprobe__sys_execve_4_11,
+                       const char __user *filename,
+                       const char __user *const __user *argv,
+                       const char __user *const __user *envp)
+{
+    u32 ppid = -1;
+    u32 luid = -1;
+    const char __user *exe = NULL;
+    u32 length = -1;
+    GET_OFFSETS_4_8;
+    ptelemetry_event_t ev = enter_exec_4_8(SP_EXECVE, AT_FDCWD, filename, argv, envp, 0, ctx, ppid, luid, exe, length);
+
+    if (!filename) goto Skip;
+    u64 id = ev->id;
+    __builtin_memset(ev, 0, sizeof(telemetry_event_t));
+    u32 count = 0;
+    u64 off = 0;
+    char br = 0;
+    READ_VALUE_N(ev, TE_EXEC_FILENAME, filename, 5);
+
+    bpf_tail_call(ctx, &tail_call_table, SYS_EXEC_TC_ARGV);
+
 Skip:
     return -1;
 }
