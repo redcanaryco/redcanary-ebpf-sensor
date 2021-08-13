@@ -4,9 +4,13 @@
 #include <linux/ptrace.h>
 #include <linux/version.h>
 #include <uapi/linux/bpf.h>
+#include <uapi/linux/ipv6.h>
 #include <linux/uio.h>
 #include <linux/fcntl.h>
-
+#include <linux/skbuff.h>
+#include <linux/udp.h>
+#include <linux/ip.h>
+#include <net/sock.h>
 #include "bpf_helpers.h"
 #include "types.h"
 #include "offsets.h"
@@ -15,6 +19,9 @@
 #define CLONE_ARGS_SIZE_VER0 64 /* sizeof first published struct */
 #define CLONE_ARGS_SIZE_VER1 80 /* sizeof second published struct */
 #define CLONE_ARGS_SIZE_VER2 88 /* sizeof third published struct */
+
+// Just doing a simple 16-bit byte swap
+#define SWAP_U16(x) (((x) >> 8) | ((x) << 8))
 
 typedef struct
 {
@@ -129,30 +136,30 @@ struct bpf_map_def SEC("maps/telemetry_index") telemetry_index = {
 };
 
 struct bpf_map_def SEC("maps/read_flush_index") read_flush_index = {
-        .type = BPF_MAP_TYPE_PERCPU_ARRAY,
-        .key_size = sizeof(u32),
-        .value_size = sizeof(u32),
-        .max_entries = 1,
-        .pinning = 0,
-        .namespace = "",
+    .type = BPF_MAP_TYPE_PERCPU_ARRAY,
+    .key_size = sizeof(u32),
+    .value_size = sizeof(u32),
+    .max_entries = 1,
+    .pinning = 0,
+    .namespace = "",
 };
 
 struct bpf_map_def SEC("maps/clone_info_store") clone_info_store = {
-        .type = BPF_MAP_TYPE_PERCPU_ARRAY,
-        .key_size = sizeof(u32),
-        .value_size = sizeof(clone_info_t),
-        .max_entries = 1,
-        .pinning = 0,
-        .namespace = "",
+    .type = BPF_MAP_TYPE_PERCPU_ARRAY,
+    .key_size = sizeof(u32),
+    .value_size = sizeof(clone_info_t),
+    .max_entries = 1,
+    .pinning = 0,
+    .namespace = "",
 };
 
 struct bpf_map_def SEC("maps/clone3_info_store") clone3_info_store = {
-        .type = BPF_MAP_TYPE_PERCPU_ARRAY,
-        .key_size = sizeof(u32),
-        .value_size = sizeof(clone3_info_t),
-        .max_entries = 1,
-        .pinning = 0,
-        .namespace = "",
+    .type = BPF_MAP_TYPE_PERCPU_ARRAY,
+    .key_size = sizeof(u32),
+    .value_size = sizeof(clone3_info_t),
+    .max_entries = 1,
+    .pinning = 0,
+    .namespace = "",
 };
 
 struct bpf_map_def SEC("maps/telemetry_events") telemetry_events = {
@@ -160,6 +167,33 @@ struct bpf_map_def SEC("maps/telemetry_events") telemetry_events = {
     .key_size = sizeof(u32),
     .value_size = sizeof(u32),
     .max_entries = 1024 * 16,
+    .pinning = 0,
+    .namespace = "",
+};
+
+struct bpf_map_def SEC("maps/tcpv4_connect") tcpv4_connect = {
+    .type = BPF_MAP_TYPE_HASH,
+    .key_size = sizeof(u32),
+    .value_size = sizeof(size_t),
+    .max_entries = 1024,
+    .pinning = 0,
+    .namespace = "",
+};
+
+struct bpf_map_def SEC("maps/udpv4_sendmsg_map") udpv4_sendmsg_map = {
+    .type = BPF_MAP_TYPE_HASH,
+    .key_size = sizeof(u32),
+    .value_size = sizeof(size_t),
+    .max_entries = 1024,
+    .pinning = 0,
+    .namespace = "",
+};
+
+struct bpf_map_def SEC("maps/tcpv6_connect") tcpv6_connect = {
+    .type = BPF_MAP_TYPE_HASH,
+    .key_size = sizeof(u32),
+    .value_size = sizeof(size_t),
+    .max_entries = 1024,
     .pinning = 0,
     .namespace = "",
 };
@@ -173,22 +207,31 @@ struct bpf_map_def SEC("maps/telemetry_ids") telemetry_ids = {
     .namespace = "",
 };
 
-struct bpf_map_def SEC("maps/tail_call_table") tail_call_table  = {
-        .type = BPF_MAP_TYPE_PROG_ARRAY,
-        .key_size = sizeof(u32),
-        .value_size = sizeof(u32),
-        .max_entries = 32,
-        .pinning = 0,
-        .namespace = "",
+struct bpf_map_def SEC("maps/udpv6_sendmsg_map") udpv6_sendmsg_map = {
+    .type = BPF_MAP_TYPE_HASH,
+    .key_size = sizeof(u32),
+    .value_size = sizeof(size_t),
+    .max_entries = 1024,
+    .pinning = 0,
+    .namespace = "",
+};
+
+struct bpf_map_def SEC("maps/tail_call_table") tail_call_table = {
+    .type = BPF_MAP_TYPE_PROG_ARRAY,
+    .key_size = sizeof(u32),
+    .value_size = sizeof(u32),
+    .max_entries = 32,
+    .pinning = 0,
+    .namespace = "",
 };
 
 struct bpf_map_def SEC("maps/offsets") offsets = {
-        .type = BPF_MAP_TYPE_HASH,
-        .key_size = sizeof(u64),
-        .value_size = sizeof(u32),
-        .max_entries = 4096,
-        .pinning = 0,
-        .namespace = "",
+    .type = BPF_MAP_TYPE_HASH,
+    .key_size = sizeof(u64),
+    .value_size = sizeof(u32),
+    .max_entries = 4096,
+    .pinning = 0,
+    .namespace = "",
 };
 
 static __always_inline syscall_pattern_type_t ptrace_syscall_pattern(u32 request)
@@ -273,52 +316,51 @@ static __always_inline syscall_pattern_type_t ptrace_syscall_pattern(u32 request
         .mono_ns = mono_ns,                    \
     }
 
-#define FILL_TELEMETRY_SYSCALL_EVENT(E, SP)                                         \
-    u64 pid_tgid = bpf_get_current_pid_tgid();                                      \
-    E->done = FALSE;                                                                \
-    E->telemetry_type = TE_SYSCALL_INFO;                                            \
-    E->u.syscall_info.pid = pid_tgid >> 32;                                         \
-    E->u.syscall_info.tid = pid_tgid & 0xFFFFFFFF;                                  \
-    E->u.syscall_info.ppid = -1;                                                    \
-    E->u.syscall_info.luid = -1;                                                    \
-    E->u.syscall_info.euid = bpf_get_current_uid_gid() >> 32;                       \
-    E->u.syscall_info.egid = bpf_get_current_uid_gid() & 0xFFFFFFFF;                \
-    E->u.syscall_info.mono_ns = bpf_ktime_get_ns();                                 \
-    E->u.syscall_info.syscall_pattern = SP;                                         \
+#define FILL_TELEMETRY_SYSCALL_EVENT(E, SP)                          \
+    u64 pid_tgid = bpf_get_current_pid_tgid();                       \
+    E->done = FALSE;                                                 \
+    E->telemetry_type = TE_SYSCALL_INFO;                             \
+    E->u.syscall_info.pid = pid_tgid >> 32;                          \
+    E->u.syscall_info.tid = pid_tgid & 0xFFFFFFFF;                   \
+    E->u.syscall_info.ppid = -1;                                     \
+    E->u.syscall_info.luid = -1;                                     \
+    E->u.syscall_info.euid = bpf_get_current_uid_gid() >> 32;        \
+    E->u.syscall_info.egid = bpf_get_current_uid_gid() & 0xFFFFFFFF; \
+    E->u.syscall_info.mono_ns = bpf_ktime_get_ns();                  \
+    E->u.syscall_info.syscall_pattern = SP;                          \
     bpf_get_current_comm(E->u.syscall_info.comm, sizeof(E->u.syscall_info.comm));
 
-#define FILL_TELEMETRY_SYSCALL_RET(E, SP) \
+#define FILL_TELEMETRY_SYSCALL_RET(E, SP)
 
-
-#define GET_OFFSETS_4_8 \
-    /* if "loaded" doesn't exist in the map, we get NULL back and won't read from offsets                           \
-     * when offsets are loaded into the offsets map, "loaded" should be given any value                             \
-     */                                                                                                             \
-    u64 loaded = CRC_LOADED;                                                         \
-    loaded = (u64) bpf_map_lookup_elem(&offsets, &loaded); /* squeezing out as much stack as possible */            \
-    /* since we're using offsets to read from the structs, we don't need to bother with                             \
-     * understanding their structure                                                                                \
-     */                                                                                                             \
-    void *ts = (void *)bpf_get_current_task();                                                                      \
-    void *pts = NULL;                                                                                               \
-    if (ts && loaded) {                                                                                             \
-        u64 real_parent_offset = CRC_TASK_STRUCT_REAL_PARENT;                                                       \
-        u64 ppid_offset = CRC_TASK_STRUCT_PID;                                                                      \
-        u64 luid_offset = CRC_TASK_STRUCT_LOGINUID;                                                                 \
-        real_parent_offset = (u64) bpf_map_lookup_elem(&offsets, &real_parent_offset);                              \
-        ppid_offset = (u64) bpf_map_lookup_elem(&offsets, &ppid_offset);                                            \
-        luid_offset = (u64) bpf_map_lookup_elem(&offsets, &luid_offset);                                            \
-        if (real_parent_offset && ppid_offset && luid_offset)                                                       \
-        {                                                                                                           \
-            bpf_probe_read(&pts, sizeof(pts), ts + *(u32*)real_parent_offset);                                      \
-            if (pts)                                                                                                \
-            {                                                                                                       \
-                bpf_probe_read(&ppid, sizeof(ppid), pts + *(u32*)ppid_offset);                                      \
-            }                                                                                                       \
-            bpf_probe_read(&luid, sizeof(luid), ts + *(u32*)luid_offset);                                           \
-        }                                                                                                           \
+#define GET_OFFSETS_4_8                                                                                 \
+    /* if "loaded" doesn't exist in the map, we get NULL back and won't read from offsets               \
+     * when offsets are loaded into the offsets map, "loaded" should be given any value                 \
+     */                                                                                                 \
+    u64 loaded = CRC_LOADED;                                                                            \
+    loaded = (u64)bpf_map_lookup_elem(&offsets, &loaded); /* squeezing out as much stack as possible */ \
+    /* since we're using offsets to read from the structs, we don't need to bother with                 \
+     * understanding their structure                                                                    \
+     */                                                                                                 \
+    void *ts = (void *)bpf_get_current_task();                                                          \
+    void *pts = NULL;                                                                                   \
+    if (ts && loaded)                                                                                   \
+    {                                                                                                   \
+        u64 real_parent_offset = CRC_TASK_STRUCT_REAL_PARENT;                                           \
+        u64 ppid_offset = CRC_TASK_STRUCT_PID;                                                          \
+        u64 luid_offset = CRC_TASK_STRUCT_LOGINUID;                                                     \
+        real_parent_offset = (u64)bpf_map_lookup_elem(&offsets, &real_parent_offset);                   \
+        ppid_offset = (u64)bpf_map_lookup_elem(&offsets, &ppid_offset);                                 \
+        luid_offset = (u64)bpf_map_lookup_elem(&offsets, &luid_offset);                                 \
+        if (real_parent_offset && ppid_offset && luid_offset)                                           \
+        {                                                                                               \
+            bpf_probe_read(&pts, sizeof(pts), ts + *(u32 *)real_parent_offset);                         \
+            if (pts)                                                                                    \
+            {                                                                                           \
+                bpf_probe_read(&ppid, sizeof(ppid), pts + *(u32 *)ppid_offset);                         \
+            }                                                                                           \
+            bpf_probe_read(&luid, sizeof(luid), ts + *(u32 *)luid_offset);                              \
+        }                                                                                               \
     }
-
 
 SEC("kprobe/sys_ptrace_write")
 int BPF_KPROBE_SYSCALL(kprobe__sys_ptrace_write,
@@ -811,7 +853,7 @@ static __always_inline void push_telemetry_event(ptelemetry_event_t ev)
     // this fails too, same message
     //      idx = idx + 1;
     ret = bpf_map_update_elem(&telemetry_index, &key, &idx, BPF_ANY);
-    if (ret < 0 )
+    if (ret < 0)
     {
         return;
     }
@@ -824,18 +866,19 @@ static __always_inline void push_telemetry_event(ptelemetry_event_t ev)
     return;
 }
 
-#define FLUSH_LOOP                                                          \
-    if (ii < *pcurrent_index) {                                             \
-        ev = bpf_map_lookup_elem(&telemetry_stack, &ii);                    \
-        ii++;                                                               \
-        if (ev) {                                                           \
-            bpf_perf_event_output(ctx,                                      \
-                &telemetry_events,                                          \
-                bpf_get_smp_processor_id(),                                 \
-                ev,                                                         \
-                sizeof(*ev)                                                 \
-            );                                                              \
-        }                                                                   \
+#define FLUSH_LOOP                                            \
+    if (ii < *pcurrent_index)                                 \
+    {                                                         \
+        ev = bpf_map_lookup_elem(&telemetry_stack, &ii);      \
+        ii++;                                                 \
+        if (ev)                                               \
+        {                                                     \
+            bpf_perf_event_output(ctx,                        \
+                                  &telemetry_events,          \
+                                  bpf_get_smp_processor_id(), \
+                                  ev,                         \
+                                  sizeof(*ev));               \
+        }                                                     \
     }
 
 #define FLUSH_LOOP_N(N) REPEAT_##N(FLUSH_LOOP;)
@@ -867,32 +910,34 @@ static __always_inline void flush_telemetry_events(struct pt_regs *ctx)
     bpf_map_update_elem(&read_flush_index, &key, &ii, BPF_ANY);
 }
 
-#define READ_LOOP(PTR, T)                                                       \
-    ptr = 0;                                                                    \
-    ev->u.v.truncated = FALSE;                                                  \
-    ev->id = id;                                                                \
-    ev->done = FALSE;                                                           \
-    ev->telemetry_type = T;                                                     \
-    ret = bpf_probe_read(&ptr, sizeof(u64), (void*) PTR + (ii * sizeof(u64)));  \
-    if (ret < 0)                                                                \
-    {                                                                           \
-        goto Next;                                                              \
-    }                                                                           \
-    else if ((void *) ptr == NULL)                                              \
-    {                                                                           \
-        goto Next;                                                              \
-    }                                                                           \
-    else                                                                        \
-    {                                                                           \
-        count = bpf_probe_read_str(&ev->u.v.value, VALUE_SIZE, (void *) ptr);   \
-        if (count == VALUE_SIZE) {                                              \
-            ev->u.v.truncated = TRUE;                                           \
-        }                                                                       \
-        if (count <= 0) {                                                       \
-            goto Next;                                                          \
-        }                                                                       \
-    }                                                                           \
-    push_telemetry_event(ev);                                                   \
+#define READ_LOOP(PTR, T)                                                      \
+    ptr = 0;                                                                   \
+    ev->u.v.truncated = FALSE;                                                 \
+    ev->id = id;                                                               \
+    ev->done = FALSE;                                                          \
+    ev->telemetry_type = T;                                                    \
+    ret = bpf_probe_read(&ptr, sizeof(u64), (void *)PTR + (ii * sizeof(u64))); \
+    if (ret < 0)                                                               \
+    {                                                                          \
+        goto Next;                                                             \
+    }                                                                          \
+    else if ((void *)ptr == NULL)                                              \
+    {                                                                          \
+        goto Next;                                                             \
+    }                                                                          \
+    else                                                                       \
+    {                                                                          \
+        count = bpf_probe_read_str(&ev->u.v.value, VALUE_SIZE, (void *)ptr);   \
+        if (count == VALUE_SIZE)                                               \
+        {                                                                      \
+            ev->u.v.truncated = TRUE;                                          \
+        }                                                                      \
+        if (count <= 0)                                                        \
+        {                                                                      \
+            goto Next;                                                         \
+        }                                                                      \
+    }                                                                          \
+    push_telemetry_event(ev);                                                  \
     ii++;
 
 #define READ_LOOP_N(PTR, T, N) REPEAT_##N(READ_LOOP(PTR, T);)
@@ -905,7 +950,7 @@ static __always_inline int enter_exec(syscall_pattern_type_t sp, int fd,
                                       u32 luid)
 {
     u64 id = 0; // reuse ID to save space
-    ptelemetry_event_t pev = bpf_map_lookup_elem(&telemetry_stack, (u32 *) &id);
+    ptelemetry_event_t pev = bpf_map_lookup_elem(&telemetry_stack, (u32 *)&id);
     if (!pev) // this should never happen, but the verifier complains otherwise
     {
         goto Exit;
@@ -930,7 +975,6 @@ static __always_inline int enter_exec(syscall_pattern_type_t sp, int fd,
 
     bpf_map_update_elem(&telemetry_ids, &pid, &id, BPF_ANY);
 
-
     // explicit null check to satisfy the verifier
     if (!filename)
         goto Exit;
@@ -940,15 +984,14 @@ static __always_inline int enter_exec(syscall_pattern_type_t sp, int fd,
     ev->telemetry_type = TE_EXE_PATH;
     ev->u.v.truncated = FALSE;
     long count = 0;
-    count = bpf_probe_read_str(&ev->u.v.value, VALUE_SIZE, (void*) filename);
-    if (count == VALUE_SIZE) {
+    count = bpf_probe_read_str(&ev->u.v.value, VALUE_SIZE, (void *)filename);
+    if (count == VALUE_SIZE)
+    {
         ev->u.v.truncated = TRUE;
     }
     push_telemetry_event(ev);
 
-
     bpf_tail_call(ctx, &tail_call_table, 0);
-
 
 Exit:
     return 0;
@@ -993,7 +1036,6 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_exec_tc_argv,
         bpf_map_update_elem(&read_flush_index, &index, &index, BPF_ANY);
         goto Tail;
     }
-
 
     long count = 0;
     u32 ii = 0;
@@ -1069,7 +1111,6 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_exec_tc_envp,
 
     bpf_map_update_elem(&read_flush_index, &index, &ii, BPF_ANY);
 
-
 Tail:
     bpf_tail_call(ctx, &tail_call_table, 1);
 
@@ -1093,7 +1134,6 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execveat_4_8,
     return enter_exec(SP_EXECVEAT, fd, filename, argv, envp, flags, ctx, ppid, luid);
 }
 
-
 SEC("kprobe/sys_execve_4_8")
 int BPF_KPROBE_SYSCALL(kprobe__sys_execve_4_8,
                        const char __user *filename,
@@ -1105,7 +1145,6 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execve_4_8,
     GET_OFFSETS_4_8;
     return enter_exec(SP_EXECVE, AT_FDCWD, filename, argv, envp, 0, ctx, ppid, luid);
 }
-
 
 SEC("kprobe/sys_execveat")
 int BPF_KPROBE_SYSCALL(kprobe__sys_execveat,
@@ -1126,7 +1165,6 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execve,
     return enter_exec(SP_EXECVE, AT_FDCWD, filename, argv, envp, 0, ctx, -1, -1);
 }
 
-
 static __always_inline int exit_exec(struct pt_regs *__ctx)
 {
     u64 pid_tgid = bpf_get_current_pid_tgid();
@@ -1136,14 +1174,14 @@ static __always_inline int exit_exec(struct pt_regs *__ctx)
     if (!id)
         goto Flush;
 
-    ptelemetry_event_t ev = &(telemetry_event_t) {
-            .id = 0,
-            .done = TRUE,
-            .telemetry_type = 0,
-            .u.v = {
-                    .value[0] = '\0',
-                    .truncated = FALSE,
-            },
+    ptelemetry_event_t ev = &(telemetry_event_t){
+        .id = 0,
+        .done = TRUE,
+        .telemetry_type = 0,
+        .u.v = {
+            .value[0] = '\0',
+            .truncated = FALSE,
+        },
     };
     ev->id = *id;
     bpf_map_delete_elem(&telemetry_ids, &pid);
@@ -1160,6 +1198,615 @@ Flush:
     return 0;
 }
 
+SEC("kprobe/tcp_v4_connect")
+int kprobe__tcp_v4_connect(struct pt_regs *ctx)
+{
+    struct sock *sk = (struct sock *)PT_REGS_PARM1(ctx);
+    u32 index = (u32)bpf_get_current_pid_tgid();
+
+    bpf_map_update_elem(&tcpv4_connect, &index, &sk, BPF_ANY);
+
+    return 0;
+}
+
+SEC("kprobe/ip_local_out")
+int kprobe__ip_local_out(struct pt_regs *ctx)
+{
+    struct sk_buff *sk = (struct sk_buff *)PT_REGS_PARM3(ctx);
+    u32 index = (u32)bpf_get_current_pid_tgid();
+
+    bpf_map_update_elem(&udpv4_sendmsg_map, &index, &sk, BPF_ANY);
+
+    return 0;
+}
+
+SEC("kprobe/ip6_local_out")
+int kprobe__ip6_local_out(struct pt_regs *ctx)
+{
+    struct sk_buff *sk = (struct sk_buff *)PT_REGS_PARM3(ctx);
+    u32 index = (u32)bpf_get_current_pid_tgid();
+
+    bpf_map_update_elem(&udpv6_sendmsg_map, &index, &sk, BPF_ANY);
+
+    return 0;
+}
+
+SEC("kprobe/tcp_v6_connect")
+int kprobe__tcp_v6_connect(struct pt_regs *ctx)
+{
+    struct sock *sk = (struct sock *)PT_REGS_PARM1(ctx);
+    u32 index = (u32)bpf_get_current_pid_tgid();
+
+    bpf_map_update_elem(&tcpv6_connect, &index, &sk, BPF_ANY);
+
+    return 0;
+}
+
+// This handles outgoing udp packets
+SEC("kretprobe/ret_ip6_local_out")
+int kretprobe__ret_ip6_local_out(struct pt_regs *ctx)
+{
+    unsigned char *skb_head = NULL;
+    unsigned short transport_header = 0;
+    unsigned short network_header = 0;
+    unsigned char proto = 0;
+    struct sk_buff **skpp;
+
+    int ret = PT_REGS_RC(ctx);
+    if (ret < 0)
+    {
+        return 0;
+    }
+
+    // Just to be safe 0 out the structs
+    telemetry_event_t ev;
+    memset(&ev, 0, sizeof(ev));
+
+    // Initialize some of the telemetry event
+    ev.id = bpf_get_prandom_u32();
+    ev.done = 0;
+    ev.telemetry_type = TE_NETWORK;
+    ev.u.network_info.direction = outbound;
+    ev.u.network_info.ip_type = AF_INET6;
+    ev.u.network_info.mono_ns = bpf_ktime_get_ns();
+
+    // Get current pid
+    u32 index = (u32)bpf_get_current_pid_tgid();
+
+    // Save the pid in the event structure
+    ev.u.network_info.process.pid = index;
+
+    // Lookup the corresponding *sk that we saved when tcp_v4_connect was called
+    skpp = bpf_map_lookup_elem(&udpv6_sendmsg_map, &index);
+    if (skpp == NULL)
+    {
+        return 0;
+    }
+
+    struct sk_buff *skp = *skpp;
+    unsigned char *skbuff_base = (unsigned char *)skp;
+    if (skbuff_base == NULL)
+    {
+        return 0;
+    }
+
+    u64 loaded = CRC_LOADED;
+    loaded = (u64)bpf_map_lookup_elem(&offsets, &loaded);
+
+    u64 skb_head_offset = CRC_SKBUFF_HEAD;
+    skb_head_offset = (u64)bpf_map_lookup_elem(&offsets, &skb_head_offset);
+
+    u64 transport_hdr_offset = CRC_TRANSPORT_HDR;
+    transport_hdr_offset = (u64)bpf_map_lookup_elem(&offsets, &transport_hdr_offset);
+
+    u64 network_hdr_offset = CRC_NETWORK_HDR;
+    network_hdr_offset = (u64)bpf_map_lookup_elem(&offsets, &network_hdr_offset);
+
+    if (!loaded)
+    {
+        return 0;
+    }
+
+    if (!skb_head_offset || !transport_hdr_offset || !network_hdr_offset)
+    {
+        return 0;
+    }
+
+    bpf_probe_read(&skb_head, sizeof(skb_head), skbuff_base + *(u32 *)skb_head_offset);
+    bpf_probe_read(&transport_header, sizeof(transport_header), skbuff_base + *(u32 *)transport_hdr_offset);
+    bpf_probe_read(&network_header, sizeof(network_header), skbuff_base + *(u32 *)network_hdr_offset);
+
+    struct ipv6hdr *ip = (struct ipv6hdr *)(skb_head + network_header);
+    bpf_probe_read(&proto, sizeof(proto), (void *)(&ip->nexthdr));
+
+    if (proto == IPPROTO_UDP)
+    {
+        struct udphdr *udp = (struct udphdr *)(skb_head + transport_header);
+        bpf_probe_read(&ev.u.network_info.protos.udpv6.dest_addr, sizeof(ev.u.network_info.protos.udpv6.dest_addr), (void *)(&ip->daddr));
+        bpf_probe_read(&ev.u.network_info.protos.udpv6.src_addr, sizeof(ev.u.network_info.protos.udpv6.src_addr), (void *)(&ip->saddr));
+        bpf_probe_read(&ev.u.network_info.protos.udpv6.dest_port, sizeof(ev.u.network_info.protos.udpv6.dest_port), (void *)(&udp->dest));
+        bpf_probe_read(&ev.u.network_info.protos.udpv6.src_port, sizeof(ev.u.network_info.protos.udpv6.src_port), (void *)(&udp->source));
+        ev.u.network_info.protocol_type = IPPROTO_UDP;
+        ev.u.network_info.protos.udpv6.src_port = SWAP_U16(ev.u.network_info.protos.udpv6.src_port);
+    }
+    else
+    {
+        // Not udp and therefore we ignore it. We only want udp packets
+        return 0;
+    }
+    // Get Process data and set pid and comm string
+    bpf_get_current_comm(ev.u.network_info.process.comm, sizeof(ev.u.network_info.process.comm));
+
+    // Output data to generator
+    bpf_perf_event_output(ctx, &telemetry_events, bpf_get_smp_processor_id(), &ev, sizeof(ev));
+
+    return 0;
+}
+
+SEC("kretprobe/ret_inet_csk_accept")
+int kretprobe__ret_inet_csk_accept(struct pt_regs *ctx)
+{
+    // Get the return value from inet_csk_accept
+    struct sock *sk = (struct sock *)PT_REGS_RC(ctx);
+
+    // Just to be safe 0 out the structs
+    telemetry_event_t ev;
+    memset(&ev, 0, sizeof(ev));
+
+    // Initialize some of the telemetry event
+    ev.id = bpf_get_prandom_u32();
+    ev.done = 0;
+    ev.telemetry_type = TE_NETWORK;
+    ev.u.network_info.mono_ns = bpf_ktime_get_ns();
+
+    // For this one the return value is the socket we are interested.
+    // We might not need to track the pid on this one
+    // Get current pid
+    u32 index = (u32)bpf_get_current_pid_tgid();
+
+    // If getting the socket from the listening queue fails it returns a NULL pointer
+    unsigned char *sk_base = (unsigned char *)sk;
+    if (sk_base == NULL)
+    {
+        return 0;
+    }
+
+    ev.u.network_info.direction = inbound;
+    ev.u.network_info.protocol_type = IPPROTO_TCP;
+
+    u64 loaded = CRC_LOADED;
+    loaded = (u64)bpf_map_lookup_elem(&offsets, &loaded);
+    u64 family_offset = CRC_SOCK_COMMON_FAMILY;
+    family_offset = (u64)bpf_map_lookup_elem(&offsets, &family_offset);
+
+    if (family_offset == 0)
+    {
+        return 0;
+    }
+
+    bpf_probe_read(&ev.u.network_info.ip_type, sizeof(ev.u.network_info.ip_type), sk_base + *(u32 *)family_offset);
+    if (ev.u.network_info.ip_type == AF_INET && loaded)
+    {
+        u64 daddr_offset = CRC_SOCK_COMMON_DADDR;
+        u64 saddr_offset = CRC_SOCK_COMMON_SADDR;
+        u64 dport_offset = CRC_SOCK_COMMON_DPORT;
+        u64 sport_offset = CRC_SOCK_COMMON_SPORT;
+        daddr_offset = (u64)bpf_map_lookup_elem(&offsets, &daddr_offset);
+        saddr_offset = (u64)bpf_map_lookup_elem(&offsets, &saddr_offset);
+        dport_offset = (u64)bpf_map_lookup_elem(&offsets, &dport_offset);
+        sport_offset = (u64)bpf_map_lookup_elem(&offsets, &sport_offset);
+        if (daddr_offset &&
+            saddr_offset &&
+            dport_offset &&
+            sport_offset)
+        {
+            bpf_probe_read(&ev.u.network_info.protos.tcpv4.src_addr, sizeof(ev.u.network_info.protos.tcpv4.src_addr), sk_base + *(u32 *)daddr_offset);
+            bpf_probe_read(&ev.u.network_info.protos.tcpv4.dest_addr, sizeof(ev.u.network_info.protos.tcpv4.dest_addr), sk_base + *(u32 *)saddr_offset);
+            bpf_probe_read(&ev.u.network_info.protos.tcpv4.src_port, sizeof(ev.u.network_info.protos.tcpv4.src_port), sk_base + *(u32 *)dport_offset);
+            bpf_probe_read(&ev.u.network_info.protos.tcpv4.dest_port, sizeof(ev.u.network_info.protos.tcpv4.dest_port), sk_base + *(u32 *)sport_offset);
+            ev.u.network_info.protos.tcpv6.dest_port = SWAP_U16(ev.u.network_info.protos.tcpv6.dest_port);
+        }
+    }
+    else if (ev.u.network_info.ip_type == AF_INET6 && loaded)
+    {
+        u64 daddr_offset = CRC_SOCK_COMMON_DADDR6;
+        u64 saddr_offset = CRC_SOCK_COMMON_SADDR6;
+        u64 dport_offset = CRC_SOCK_COMMON_DPORT;
+        u64 sport_offset = CRC_SOCK_COMMON_SPORT;
+        daddr_offset = (u64)bpf_map_lookup_elem(&offsets, &daddr_offset);
+        saddr_offset = (u64)bpf_map_lookup_elem(&offsets, &saddr_offset);
+        dport_offset = (u64)bpf_map_lookup_elem(&offsets, &dport_offset);
+        sport_offset = (u64)bpf_map_lookup_elem(&offsets, &sport_offset);
+        if (daddr_offset && saddr_offset && dport_offset && sport_offset)
+        {
+            bpf_probe_read(&ev.u.network_info.protos.tcpv6.src_addr, sizeof(ev.u.network_info.protos.tcpv6.src_addr), sk_base + *(u32 *)daddr_offset);
+            bpf_probe_read(&ev.u.network_info.protos.tcpv6.dest_addr, sizeof(ev.u.network_info.protos.tcpv6.dest_addr), sk_base + *(u32 *)saddr_offset);
+            bpf_probe_read(&ev.u.network_info.protos.tcpv6.src_port, sizeof(ev.u.network_info.protos.tcpv6.src_port), sk_base + *(u32 *)dport_offset);
+            bpf_probe_read(&ev.u.network_info.protos.tcpv6.dest_port, sizeof(ev.u.network_info.protos.tcpv6.dest_port), sk_base + *(u32 *)sport_offset);
+            ev.u.network_info.protos.tcpv6.dest_port = SWAP_U16(ev.u.network_info.protos.tcpv6.dest_port);
+        }
+    }
+
+    // Get Process data and set pid and comm string
+    ev.u.network_info.process.pid = index;
+    bpf_get_current_comm(ev.u.network_info.process.comm, sizeof(ev.u.network_info.process.comm));
+
+    // Output data to generator
+    bpf_perf_event_output(ctx, &telemetry_events, bpf_get_smp_processor_id(), &ev, sizeof(ev));
+
+    return 0;
+}
+
+SEC("kretprobe/ret_tcp_v4_connect")
+int kretprobe__ret_tcp_v4_connect(struct pt_regs *ctx)
+{
+    // Get the return value from tcp_v4_connect
+    int ret = PT_REGS_RC(ctx);
+
+    /* if "loaded" doesn't exist in the map, we get NULL back and won't read from offsets              
+     * when offsets are loaded into the offsets map, "loaded" should be given any value                
+     */
+    u64 loaded = CRC_LOADED; // CRC64 of "loaded"
+    loaded = (u64)bpf_map_lookup_elem(&offsets, &loaded);
+
+    // Just to be safe 0 out the structs
+    telemetry_event_t ev;
+    memset(&ev, 0, sizeof(ev));
+
+    // Initialize some of the telemetry event
+    ev.id = bpf_get_prandom_u32();
+    ev.done = 0;
+    ev.telemetry_type = TE_NETWORK;
+    ev.u.network_info.mono_ns = bpf_ktime_get_ns();
+
+    // Get current pid
+    u32 index = (u32)bpf_get_current_pid_tgid();
+    struct sock **skpp;
+
+    // Lookup the corresponding *sk that we saved when tcp_v4_connect was called
+    skpp = bpf_map_lookup_elem(&tcpv4_connect, &index);
+    if (skpp == 0)
+    {
+        return 0;
+    }
+
+    // Deref
+    struct sock *skp = *skpp;
+    unsigned char *skp_base = (unsigned char *)skp;
+    if (skp_base == NULL)
+    {
+        return 0;
+    }
+
+    // failed to send SYNC packet, may not have populated
+    // socket __sk_common.{skc_rcv_saddr, ...}
+    if (ret != 0)
+    {
+        return 0;
+    }
+
+    // TODO: Need to integrate this with lkccb to get correct offsets
+    // TODO: Since we are tracking connect isn't this always outbound?
+    ev.u.network_info.direction = outbound;
+    ev.u.network_info.protocol_type = IPPROTO_TCP;
+    ev.u.network_info.ip_type = AF_INET;
+
+    if (loaded)
+    {
+        u64 daddr_offset = CRC_SOCK_COMMON_DADDR;
+        u64 saddr_offset = CRC_SOCK_COMMON_SADDR;
+        u64 dport_offset = CRC_SOCK_COMMON_DPORT;
+        u64 sport_offset = CRC_SOCK_COMMON_SPORT;
+        daddr_offset = (u64)bpf_map_lookup_elem(&offsets, &daddr_offset);
+        saddr_offset = (u64)bpf_map_lookup_elem(&offsets, &saddr_offset);
+        dport_offset = (u64)bpf_map_lookup_elem(&offsets, &dport_offset);
+        sport_offset = (u64)bpf_map_lookup_elem(&offsets, &sport_offset);
+        if (skp_base &&
+            daddr_offset &&
+            saddr_offset &&
+            dport_offset &&
+            sport_offset)
+        {
+            bpf_probe_read(&ev.u.network_info.protos.tcpv4.dest_addr, sizeof(ev.u.network_info.protos.tcpv4.dest_addr), skp_base + *(u32 *)daddr_offset);
+            bpf_probe_read(&ev.u.network_info.protos.tcpv4.src_addr, sizeof(ev.u.network_info.protos.tcpv4.src_addr), skp_base + *(u32 *)saddr_offset);
+            bpf_probe_read(&ev.u.network_info.protos.tcpv4.dest_port, sizeof(ev.u.network_info.protos.tcpv4.dest_port), skp_base + *(u32 *)dport_offset);
+            bpf_probe_read(&ev.u.network_info.protos.tcpv4.src_port, sizeof(ev.u.network_info.protos.tcpv4.src_port), skp_base + *(u32 *)sport_offset);
+        }
+    }
+
+    // Get Process data and set pid and comm string
+    ev.u.network_info.process.pid = index;
+    bpf_get_current_comm(ev.u.network_info.process.comm, sizeof(ev.u.network_info.process.comm));
+
+    // Output data to generator
+    bpf_perf_event_output(ctx, &telemetry_events, bpf_get_smp_processor_id(), &ev, sizeof(ev));
+
+    return 0;
+}
+
+// This handles both IPv4 and IPv6 udp packets
+SEC("kretprobe/ret___skb_recv_udp")
+int kretprobe__ret___skb_recv_udp(struct pt_regs *ctx)
+{
+    telemetry_event_t ev;
+    memset(&ev, 0, sizeof(ev));
+
+    // Initialize some of the telemetry event
+    ev.id = bpf_get_prandom_u32();
+    ev.done = 0;
+    ev.telemetry_type = TE_NETWORK;
+    ev.u.network_info.mono_ns = bpf_ktime_get_ns();
+
+    // // Get current pid
+    u32 index = (u32)bpf_get_current_pid_tgid();
+
+    struct sk_buff *skb = (struct sk_buff *)PT_REGS_RC_CORE(ctx);
+    unsigned char *skbuff_base = (unsigned char *)skb;
+
+    if (skbuff_base == NULL)
+    {
+        return 0;
+    }
+
+    ev.u.network_info.direction = inbound;
+    ev.u.network_info.protocol_type = IPPROTO_UDP;
+
+    unsigned char *skb_head = NULL;
+    unsigned short transport_header = 0;
+    unsigned short network_header = 0;
+    __be16 proto = 0;
+
+    u64 loaded = CRC_LOADED;
+    loaded = (u64)bpf_map_lookup_elem(&offsets, &loaded);
+
+    u64 skb_head_offset = CRC_SKBUFF_HEAD;
+    skb_head_offset = (u64)bpf_map_lookup_elem(&offsets, &skb_head_offset);
+
+    u64 transport_hdr_offset = CRC_TRANSPORT_HDR;
+    transport_hdr_offset = (u64)bpf_map_lookup_elem(&offsets, &transport_hdr_offset);
+
+    u64 network_hdr_offset = CRC_NETWORK_HDR;
+    network_hdr_offset = (u64)bpf_map_lookup_elem(&offsets, &network_hdr_offset);
+
+    u64 eth_proto_offset = CRC_SKBUFF_PROTO;
+    eth_proto_offset = (u64)bpf_map_lookup_elem(&offsets, &eth_proto_offset);
+
+    if (!loaded)
+    {
+        return 0;
+    }
+
+    if (!skb_head_offset || !transport_hdr_offset || !network_hdr_offset || !eth_proto_offset)
+    {
+        return 0;
+    }
+
+    // The proto field uses the protocol from the ethernet header
+    bpf_probe_read(&proto, sizeof(proto), skbuff_base + *(u32 *)eth_proto_offset);
+    bpf_probe_read(&skb_head, sizeof(skb_head), skbuff_base + *(u32 *)skb_head_offset);
+    bpf_probe_read(&transport_header, sizeof(transport_header), skbuff_base + *(u32 *)transport_hdr_offset);
+    bpf_probe_read(&network_header, sizeof(network_header), skbuff_base + *(u32 *)network_hdr_offset);
+
+    if (proto == 0xDD86) // ETH_P_IPv6
+    {
+        struct ipv6hdr *ip = (struct ipv6hdr *)(skb_head + network_header);
+        struct udphdr *udp = (struct udphdr *)(skb_head + transport_header);
+        ev.u.network_info.ip_type = AF_INET6;
+        bpf_probe_read(&ev.u.network_info.protos.udpv6.dest_addr, sizeof(ev.u.network_info.protos.udpv6.dest_addr), (void *)(&ip->daddr));
+        bpf_probe_read(&ev.u.network_info.protos.udpv6.src_addr, sizeof(ev.u.network_info.protos.udpv6.src_addr), (void *)(&ip->saddr));
+        bpf_probe_read(&ev.u.network_info.protos.udpv6.dest_port, sizeof(ev.u.network_info.protos.udpv6.dest_port), (void *)(&udp->dest));
+        bpf_probe_read(&ev.u.network_info.protos.udpv6.src_port, sizeof(ev.u.network_info.protos.udpv6.src_port), (void *)(&udp->source));
+        ev.u.network_info.protos.udpv6.src_port = SWAP_U16(ev.u.network_info.protos.udpv6.src_port);
+    }
+    else if (proto == 0x8) // ETH_P_IP
+    {
+        struct iphdr *ip = (struct iphdr *)(skb_head + network_header);
+        struct udphdr *udp = (struct udphdr *)(skb_head + transport_header);
+        ev.u.network_info.ip_type = AF_INET;
+        bpf_probe_read(&ev.u.network_info.protos.udpv4.dest_addr, sizeof(ev.u.network_info.protos.udpv4.dest_addr), (void *)(&ip->daddr));
+        bpf_probe_read(&ev.u.network_info.protos.udpv4.src_addr, sizeof(ev.u.network_info.protos.udpv4.src_addr), (void *)(&ip->saddr));
+        bpf_probe_read(&ev.u.network_info.protos.udpv4.dest_port, sizeof(ev.u.network_info.protos.udpv4.dest_port), (void *)(&udp->dest));
+        bpf_probe_read(&ev.u.network_info.protos.udpv4.src_port, sizeof(ev.u.network_info.protos.udpv4.src_port), (void *)(&udp->source));
+        ev.u.network_info.protos.udpv4.src_port = SWAP_U16(ev.u.network_info.protos.udpv4.src_port);
+    }
+    else // All other protocols we just ignore
+    {
+        return 0;
+    }
+
+    // Get Process data and set pid and comm string
+    ev.u.network_info.process.pid = index;
+    bpf_get_current_comm(ev.u.network_info.process.comm, sizeof(ev.u.network_info.process.comm));
+
+    // Output data to generator
+    bpf_perf_event_output(ctx, &telemetry_events, bpf_get_smp_processor_id(), &ev, sizeof(ev));
+
+    return 0;
+}
+
+// This handles outgoing udp packets
+SEC("kretprobe/ret_ip_local_out")
+int kretprobe__ret_ip_local_out(struct pt_regs *ctx)
+{
+    unsigned char *skb_head = NULL;
+    unsigned short transport_header = 0;
+    unsigned short network_header = 0;
+    unsigned char proto = 0;
+    struct sk_buff **skpp;
+
+    int ret = PT_REGS_RC(ctx);
+    if (ret < 0)
+    {
+        return 0;
+    }
+
+    // Just to be safe 0 out the structs
+    telemetry_event_t ev;
+    memset(&ev, 0, sizeof(ev));
+
+    // Initialize some of the telemetry event
+    ev.id = bpf_get_prandom_u32();
+    ev.done = 0;
+    ev.telemetry_type = TE_NETWORK;
+    ev.u.network_info.direction = outbound;
+    ev.u.network_info.ip_type = AF_INET;
+    ev.u.network_info.mono_ns = bpf_ktime_get_ns();
+
+    // Get current pid
+    u32 index = (u32)bpf_get_current_pid_tgid();
+
+    // Save the pid in the event structure
+    ev.u.network_info.process.pid = index;
+
+    // Lookup the corresponding sk_buff* that we saved when ip_local_out was called
+    skpp = bpf_map_lookup_elem(&udpv4_sendmsg_map, &index);
+    if (skpp == NULL)
+    {
+        return 0;
+    }
+
+    struct sk_buff *skp = *skpp;
+    unsigned char *skbuff_base = (unsigned char *)skp;
+    if (skbuff_base == NULL)
+    {
+        return 0;
+    }
+
+    u64 loaded = CRC_LOADED;
+    loaded = (u64)bpf_map_lookup_elem(&offsets, &loaded);
+
+    u64 skb_head_offset = CRC_SKBUFF_HEAD;
+    skb_head_offset = (u64)bpf_map_lookup_elem(&offsets, &skb_head_offset);
+
+    u64 transport_hdr_offset = CRC_TRANSPORT_HDR;
+    transport_hdr_offset = (u64)bpf_map_lookup_elem(&offsets, &transport_hdr_offset);
+
+    u64 network_hdr_offset = CRC_NETWORK_HDR;
+    network_hdr_offset = (u64)bpf_map_lookup_elem(&offsets, &network_hdr_offset);
+
+    if (!loaded)
+    {
+        return 0;
+    }
+
+    if (!skb_head_offset || !transport_hdr_offset || !network_hdr_offset)
+    {
+        return 0;
+    }
+
+    bpf_probe_read(&skb_head, sizeof(skb_head), skbuff_base + *(u32 *)skb_head_offset);
+    bpf_probe_read(&transport_header, sizeof(transport_header), skbuff_base + *(u32 *)transport_hdr_offset);
+    bpf_probe_read(&network_header, sizeof(network_header), skbuff_base + *(u32 *)network_hdr_offset);
+
+    struct iphdr *ip = (struct iphdr *)(skb_head + network_header);
+    bpf_probe_read(&proto, sizeof(proto), (void *)(&ip->protocol));
+
+    if (proto == IPPROTO_UDP)
+    {
+        struct udphdr *udp = (struct udphdr *)(skb_head + transport_header);
+        bpf_probe_read(&ev.u.network_info.protos.udpv4.dest_addr, sizeof(ev.u.network_info.protos.udpv4.dest_addr), (void *)(&ip->daddr));
+        bpf_probe_read(&ev.u.network_info.protos.udpv4.src_addr, sizeof(ev.u.network_info.protos.udpv4.src_addr), (void *)(&ip->saddr));
+        bpf_probe_read(&ev.u.network_info.protos.udpv4.dest_port, sizeof(ev.u.network_info.protos.udpv4.dest_port), (void *)(&udp->dest));
+        bpf_probe_read(&ev.u.network_info.protos.udpv4.src_port, sizeof(ev.u.network_info.protos.udpv4.src_port), (void *)(&udp->source));
+        ev.u.network_info.protocol_type = IPPROTO_UDP;
+        ev.u.network_info.protos.udpv4.src_port = SWAP_U16(ev.u.network_info.protos.udpv4.src_port);
+    }
+    else
+    {
+        // Not udp and therefore we ignore it. We only want udp packets
+        return 0;
+    }
+
+    // Get Process data and set pid and comm string
+    bpf_get_current_comm(ev.u.network_info.process.comm, sizeof(ev.u.network_info.process.comm));
+
+    // Output data to generator
+    bpf_perf_event_output(ctx, &telemetry_events, bpf_get_smp_processor_id(), &ev, sizeof(ev));
+
+    return 0;
+}
+
+SEC("kretprobe/ret_tcp_v6_connect")
+int kretprobe__ret_tcp_v6_connect(struct pt_regs *ctx)
+{
+    int ret = PT_REGS_RC(ctx);
+    /* if "loaded" doesn't exist in the map, we get NULL back and won't read from offsets              
+     * when offsets are loaded into the offsets map, "loaded" should be given any value                
+     */
+    u64 loaded = CRC_LOADED;
+    loaded = (u64)bpf_map_lookup_elem(&offsets, &loaded); /* squeezing out as much stack as possible */
+    /* since we're using offsets to read from the structs, we don't need to bother with                
+     * understanding their structure                                                                   
+     */
+
+    // Just to be safe 0 out the structs
+    telemetry_event_t ev;
+    memset(&ev, 0, sizeof(ev));
+
+    // Initialize some of the telemetry event
+    ev.id = bpf_get_prandom_u32();
+    ev.done = 0;
+    ev.telemetry_type = TE_NETWORK;
+    ev.u.network_info.mono_ns = bpf_ktime_get_ns();
+
+    // Get current pid
+    u32 index = (u32)bpf_get_current_pid_tgid();
+    struct sock **skpp;
+
+    skpp = bpf_map_lookup_elem(&tcpv6_connect, &index);
+    if (skpp == 0)
+    {
+        return 0;
+    }
+
+    // Deref
+    struct sock *skp = *skpp;
+    unsigned char *skp_base = (unsigned char *)skp;
+    if (skp_base == NULL)
+    {
+        return 0;
+    }
+
+    // failed to send SYNC packet, may not have populated
+    // socket __sk_common.{skc_rcv_saddr, ...}
+    if (ret != 0)
+    {
+        return 0;
+    }
+
+    ev.u.network_info.direction = outbound;
+    ev.u.network_info.protocol_type = IPPROTO_TCP;
+    ev.u.network_info.ip_type = AF_INET6;
+
+    if (loaded)
+    {
+        u64 daddr_offset = CRC_SOCK_COMMON_DADDR6;
+        u64 saddr_offset = CRC_SOCK_COMMON_SADDR6;
+        u64 dport_offset = CRC_SOCK_COMMON_DPORT;
+        u64 sport_offset = CRC_SOCK_COMMON_SPORT;
+        daddr_offset = (u64)bpf_map_lookup_elem(&offsets, &daddr_offset);
+        saddr_offset = (u64)bpf_map_lookup_elem(&offsets, &saddr_offset);
+        dport_offset = (u64)bpf_map_lookup_elem(&offsets, &dport_offset);
+        sport_offset = (u64)bpf_map_lookup_elem(&offsets, &sport_offset);
+        if (daddr_offset && saddr_offset && dport_offset && sport_offset)
+        {
+            bpf_probe_read(&ev.u.network_info.protos.tcpv6.dest_addr, sizeof(ev.u.network_info.protos.tcpv6.dest_addr), skp_base + *(u32 *)daddr_offset);
+            bpf_probe_read(&ev.u.network_info.protos.tcpv6.src_addr, sizeof(ev.u.network_info.protos.tcpv6.src_addr), skp_base + *(u32 *)saddr_offset);
+            bpf_probe_read(&ev.u.network_info.protos.tcpv6.dest_port, sizeof(ev.u.network_info.protos.tcpv6.dest_port), skp_base + *(u32 *)dport_offset);
+            bpf_probe_read(&ev.u.network_info.protos.tcpv6.src_port, sizeof(ev.u.network_info.protos.tcpv6.src_port), skp_base + *(u32 *)sport_offset);
+        }
+    }
+
+    // Get Process data and set pid and comm string
+    ev.u.network_info.process.pid = index;
+    bpf_get_current_comm(ev.u.network_info.process.comm, sizeof(ev.u.network_info.process.comm));
+
+    // Output data to generator
+    bpf_perf_event_output(ctx, &telemetry_events, bpf_get_smp_processor_id(), &ev, sizeof(ev));
+
+    return 0;
+}
+
 SEC("kretprobe/ret_sys_execve")
 int kretprobe__ret_sys_execve(struct pt_regs *ctx)
 {
@@ -1172,14 +1819,13 @@ int kretprobe__ret_sys_execveat(struct pt_regs *ctx)
     return exit_exec(ctx);
 }
 
-
 static __always_inline int enter_clone(syscall_pattern_type_t sp, unsigned long flags,
                                        void __user *stack, int __user *parent_tid,
                                        int __user *child_tid, unsigned long tls,
                                        struct pt_regs *ctx, u32 ppid, u32 luid)
 {
     u64 id = 0; // reuse ID to save space
-    ptelemetry_event_t pev = bpf_map_lookup_elem(&telemetry_stack, (u32 *) &id);
+    ptelemetry_event_t pev = bpf_map_lookup_elem(&telemetry_stack, (u32 *)&id);
     if (!pev) // this should never happen, but the verifier complains otherwise
     {
         return -1;
@@ -1204,13 +1850,13 @@ static __always_inline int enter_clone(syscall_pattern_type_t sp, unsigned long 
     push_telemetry_event(ev);
 
     clone_info_t clone_info = {
-            .flags = flags,
-            .stack = (u64) stack,
-            .parent_tid = -1,
-            .child_tid = -1,
-            .tls = tls,
-            .p_ptr = (u64) parent_tid,
-            .c_ptr = (u64) child_tid,
+        .flags = flags,
+        .stack = (u64)stack,
+        .parent_tid = -1,
+        .child_tid = -1,
+        .tls = tls,
+        .p_ptr = (u64)parent_tid,
+        .c_ptr = (u64)child_tid,
     };
 
     u32 key = 0;
@@ -1231,14 +1877,14 @@ static __always_inline int exit_clone(struct pt_regs *ctx)
     if (!id)
         goto Flush;
 
-    ptelemetry_event_t ev = &(telemetry_event_t) {
-            .id = 0,
-            .done = TRUE,
-            .telemetry_type = 0,
-            .u.v = {
-                    .value[0] = '\0',
-                    .truncated = FALSE,
-            },
+    ptelemetry_event_t ev = &(telemetry_event_t){
+        .id = 0,
+        .done = TRUE,
+        .telemetry_type = 0,
+        .u.v = {
+            .value[0] = '\0',
+            .truncated = FALSE,
+        },
     };
 
     ev->id = *id;
@@ -1251,17 +1897,17 @@ static __always_inline int exit_clone(struct pt_regs *ctx)
         goto Flush;
 
     clone_info_t clone_info = {
-            .flags = pclone_info->flags,
-            .stack = (u64) pclone_info->stack,
-            .parent_tid = -1,
-            .child_tid = -1,
-            .tls = pclone_info->tls,
-            .p_ptr = pclone_info->p_ptr,
-            .c_ptr = pclone_info->c_ptr,
+        .flags = pclone_info->flags,
+        .stack = (u64)pclone_info->stack,
+        .parent_tid = -1,
+        .child_tid = -1,
+        .tls = pclone_info->tls,
+        .p_ptr = pclone_info->p_ptr,
+        .c_ptr = pclone_info->c_ptr,
     };
 
-    bpf_probe_read(&clone_info.parent_tid, sizeof(u32), (void*) pclone_info->p_ptr);
-    bpf_probe_read(&clone_info.child_tid, sizeof(u32), (void*) pclone_info->c_ptr);
+    bpf_probe_read(&clone_info.parent_tid, sizeof(u32), (void *)pclone_info->p_ptr);
+    bpf_probe_read(&clone_info.child_tid, sizeof(u32), (void *)pclone_info->c_ptr);
     ev->u.clone_info = clone_info;
     push_telemetry_event(ev);
 
@@ -1272,7 +1918,6 @@ static __always_inline int exit_clone(struct pt_regs *ctx)
     ev->u.retcode = (u32)PT_REGS_RC(ctx);
     push_telemetry_event(ev);
 
-
 Flush:
     flush_telemetry_events(ctx);
     bpf_tail_call(ctx, &tail_call_table, 3);
@@ -1280,7 +1925,6 @@ Flush:
 
     return 0;
 }
-
 
 SEC("kprobe/sys_clone_4_8")
 #if defined(__TARGET_ARCH_x86)
@@ -1297,7 +1941,6 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_clone_4_8, unsigned long flags, void __user *
     return enter_clone(SP_CLONE, flags, stack, parent_tid, child_tid, tls, ctx, ppid, luid);
 }
 
-
 SEC("kprobe/sys_clone")
 #if defined(__TARGET_ARCH_x86)
 int BPF_KPROBE_SYSCALL(kprobe__sys_clone, unsigned long flags, void *stack,
@@ -1310,12 +1953,11 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_clone, unsigned long flags, void *stack,
     return enter_clone(SP_CLONE, flags, stack, parent_tid, child_tid, tls, ctx, -1, -1);
 }
 
-
 static __always_inline int enter_clone3(syscall_pattern_type_t sp, struct clone_args __user *uargs,
                                         size_t size, struct pt_regs *ctx, u32 ppid, u32 luid)
 {
     u64 id = 0; // reuse ID to save space
-    ptelemetry_event_t ev = bpf_map_lookup_elem(&telemetry_stack, (u32 *) &id);
+    ptelemetry_event_t ev = bpf_map_lookup_elem(&telemetry_stack, (u32 *)&id);
     if (!ev) // this should never happen, but the verifier complains otherwise
     {
         return -1;
@@ -1340,7 +1982,7 @@ static __always_inline int enter_clone3(syscall_pattern_type_t sp, struct clone_
     bpf_map_update_elem(&telemetry_ids, (u32 *)&pid_tgid, &id, BPF_ANY);
 
     clone3_info_t clone3_info = {0};
-    clone3_info.size = (u64) size;
+    clone3_info.size = (u64)size;
 
     bpf_probe_read(&clone3_info.flags, sizeof(u64), &uargs->flags);
     bpf_probe_read(&clone3_info.c_ptr, sizeof(u64), &uargs->child_tid);
@@ -1373,14 +2015,14 @@ static __always_inline int exit_clone3(struct pt_regs *ctx)
     if (!id)
         goto Flush;
 
-    ptelemetry_event_t ev = &(telemetry_event_t) {
-            .id = 0,
-            .done = TRUE,
-            .telemetry_type = 0,
-            .u.v = {
-                    .value[0] = '\0',
-                    .truncated = FALSE,
-            },
+    ptelemetry_event_t ev = &(telemetry_event_t){
+        .id = 0,
+        .done = TRUE,
+        .telemetry_type = 0,
+        .u.v = {
+            .value[0] = '\0',
+            .truncated = FALSE,
+        },
     };
 
     ev->id = *id;
@@ -1395,7 +2037,7 @@ static __always_inline int exit_clone3(struct pt_regs *ctx)
     clone3_info_t clone_info = {0};
 
     clone_info.flags = pclone3_info->flags;
-    clone_info.stack = (u64) pclone3_info->stack;
+    clone_info.stack = (u64)pclone3_info->stack;
     clone_info.parent_tid = -1;
     clone_info.child_tid = -1;
     clone_info.tls = pclone3_info->tls;
@@ -1412,8 +2054,8 @@ static __always_inline int exit_clone3(struct pt_regs *ctx)
         clone_info.cgroup = pclone3_info->cgroup;
     }
 
-    bpf_probe_read(&clone_info.parent_tid, sizeof(u32), (void*) clone_info.p_ptr);
-    bpf_probe_read(&clone_info.child_tid, sizeof(u32), (void*) clone_info.c_ptr);
+    bpf_probe_read(&clone_info.parent_tid, sizeof(u32), (void *)clone_info.p_ptr);
+    bpf_probe_read(&clone_info.child_tid, sizeof(u32), (void *)clone_info.c_ptr);
     ev->u.clone3_info = clone_info;
     push_telemetry_event(ev);
 
@@ -1447,7 +2089,6 @@ int kretprobe__ret_sys_clone3(struct pt_regs *ctx)
 {
     return exit_clone3(ctx);
 }
-
 
 SEC("kprobe/sys_fork")
 int BPF_KPROBE_SYSCALL(kprobe__sys_fork)
@@ -1501,7 +2142,7 @@ static __always_inline int enter_unshare(syscall_pattern_type_t sp, int flags,
                                          struct pt_regs *ctx, u32 ppid, u32 luid)
 {
     u64 id = 0; // reuse ID to save space
-    ptelemetry_event_t pev = bpf_map_lookup_elem(&telemetry_stack, (u32 *) &id);
+    ptelemetry_event_t pev = bpf_map_lookup_elem(&telemetry_stack, (u32 *)&id);
     if (!pev) // this should never happen, but the verifier complains otherwise
     {
         return -1;
@@ -1544,14 +2185,14 @@ static __always_inline int exit_unshare(struct pt_regs *ctx)
     if (!id)
         goto Flush;
 
-    ptelemetry_event_t ev = &(telemetry_event_t) {
-            .id = 0,
-            .done = TRUE,
-            .telemetry_type = 0,
-            .u.v = {
-                    .value[0] = '\0',
-                    .truncated = FALSE,
-            },
+    ptelemetry_event_t ev = &(telemetry_event_t){
+        .id = 0,
+        .done = TRUE,
+        .telemetry_type = 0,
+        .u.v = {
+            .value[0] = '\0',
+            .truncated = FALSE,
+        },
     };
     ev->id = *id;
     bpf_map_delete_elem(&telemetry_ids, &pid);
@@ -1589,12 +2230,11 @@ int kretprobe__ret_sys_unshare(struct pt_regs *ctx)
     return exit_unshare(ctx);
 }
 
-
 static __always_inline int enter_exit(syscall_pattern_type_t sp, int status,
-                                         struct pt_regs *ctx, u32 ppid, u32 luid)
+                                      struct pt_regs *ctx, u32 ppid, u32 luid)
 {
     u64 id = 0; // reuse ID to save space
-    ptelemetry_event_t pev = bpf_map_lookup_elem(&telemetry_stack, (u32 *) &id);
+    ptelemetry_event_t pev = bpf_map_lookup_elem(&telemetry_stack, (u32 *)&id);
     if (!pev) // this should never happen, but the verifier complains otherwise
     {
         return -1;
@@ -1604,7 +2244,6 @@ static __always_inline int enter_exit(syscall_pattern_type_t sp, int status,
     telemetry_event_t sev = {0};
     __builtin_memcpy(&sev, pev, sizeof(telemetry_event_t));
     ptelemetry_event_t ev = &sev;
-
 
     id = bpf_get_prandom_u32();
     ev->id = id;
@@ -1639,14 +2278,14 @@ static __always_inline int exit_exit(struct pt_regs *ctx)
     if (!id)
         goto Flush;
 
-    ptelemetry_event_t ev = &(telemetry_event_t) {
-            .id = 0,
-            .done = TRUE,
-            .telemetry_type = 0,
-            .u.v = {
-                    .value[0] = '\0',
-                    .truncated = FALSE,
-            },
+    ptelemetry_event_t ev = &(telemetry_event_t){
+        .id = 0,
+        .done = TRUE,
+        .telemetry_type = 0,
+        .u.v = {
+            .value[0] = '\0',
+            .truncated = FALSE,
+        },
     };
     ev->id = *id;
     bpf_map_delete_elem(&telemetry_ids, &pid);
