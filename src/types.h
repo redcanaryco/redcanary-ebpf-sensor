@@ -8,6 +8,22 @@
 #define TRUE 1
 #define FALSE 0
 
+// Had to add these for some reason
+#define TASK_COMM_LEN 16
+typedef __u16 u16;
+
+#ifndef _UAPI_LINUX_IN6_H
+struct in6_addr
+{
+    union
+    {
+        __u8 u6_addr8[16];
+        __be16 u6_addr16[8];
+        __be32 u6_addr32[4];
+    } in6_u;
+};
+#endif
+
 /*
  * This number was determined experimentally, setting it higher will exceed
  * the BPF 512 byte stack limit.
@@ -76,6 +92,7 @@ typedef enum
     TE_CURRENT_WORKING_DIRECTORY,
     TE_FILE_INFO,
     TE_RETCODE,
+    TE_NETWORK,
     TE_CLONE_INFO,
     TE_CLONE3_INFO,
     TE_UNSHARE_FLAGS,
@@ -178,12 +195,13 @@ typedef struct
     char value[384];
 } read_return_string_event_t;
 
-typedef struct {
+typedef struct
+{
     u64 inode;
     u32 devmajor;
     u32 devminor;
     char value[VALUE_SIZE];
-} file_info_t;
+} file_info_t, *pfile_info_t;
 
 typedef struct
 {
@@ -193,21 +211,65 @@ typedef struct
 
 typedef struct
 {
-
-} netconn_info_t;
-
-typedef struct 
-{
     COMMON_FIELDS;
     u32 luid;
     u32 euid;
     u32 egid;
     char comm[16];
-    union {
-        process_fork_info_t fork_info;
-        netconn_info_t netconn_info;
-    } u;
 } syscall_info_t, *psyscall_info_t;
+
+enum direction_t
+{
+    inbound,
+    outbound,
+    nowhere
+};
+
+struct process_data
+{
+    u32 pid;
+    char comm[TASK_COMM_LEN];
+};
+
+typedef struct
+{
+    u16 protocol_type;           // Something like IPPROTO_TCP or IPPROTO_UDP
+    u16 ip_type;                 // AF_INET or AF_INET6
+    enum direction_t direction;  // inbound or outbound
+    struct process_data process; // pid and comm string
+    u64 mono_ns;                 // Timestamp
+    union
+    {
+        struct
+        {
+            u16 dest_port;
+            u16 src_port;
+            __be32 dest_addr;
+            __be32 src_addr;
+        } tcpv4;
+        struct
+        {
+            u16 dest_port;
+            u16 src_port;
+            struct in6_addr dest_addr;
+            struct in6_addr src_addr;
+        } tcpv6;
+        struct
+        {
+            u16 dest_port;
+            u16 src_port;
+            __be32 dest_addr;
+            __be32 src_addr;
+        } udpv4;
+        struct
+        {
+            u16 dest_port;
+            u16 src_port;
+            struct in6_addr dest_addr;
+            struct in6_addr src_addr;
+        } udpv6;
+    } protos;
+} network_info_t, *pnetwork_info_t;
 
 typedef struct
 {
@@ -243,14 +305,17 @@ typedef struct
     u64 id;
     u32 done;
     telemetry_event_type_t telemetry_type;
-    union {
-        syscall_info_t syscall_info; 
+    union
+    {
+        syscall_info_t syscall_info;
         file_info_t file_info;
         clone_info_t clone_info;
         clone3_info_t clone3_info;
+        network_info_t network_info;
         int unshare_flags;
         int exit_status;
-        struct {
+        struct
+        {
             char value[VALUE_SIZE];
             char truncated;
         } v;
@@ -259,7 +324,8 @@ typedef struct
 } telemetry_event_t, *ptelemetry_event_t;
 
 // clone3 args are not available in sched.h until 5.3, and we build against 4.4
-struct clone_args {
+struct clone_args
+{
     __aligned_u64 flags;
     __aligned_u64 pidfd;
     __aligned_u64 child_tid;
