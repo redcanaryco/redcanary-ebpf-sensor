@@ -182,8 +182,13 @@ typedef struct
 } read_return_string_event_t;
 
 
+#ifndef MAJOR
 #define MAJOR(dev)	((dev)>>8)
+#endif
+
+#ifndef MINOR
 #define MINOR(dev)	((dev) & 0xff)
+#endif
 
 typedef struct {
     u64 inode;
