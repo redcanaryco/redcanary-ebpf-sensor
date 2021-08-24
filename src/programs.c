@@ -8,8 +8,8 @@
 #include <linux/uio.h>
 #include <linux/fcntl.h>
 #include <linux/skbuff.h>
-#include <linux/udp.h>
-#include <linux/ip.h>
+#include <uapi/linux/udp.h>
+#include <uapi/linux/ip.h>
 #include <net/sock.h>
 #include "bpf_helpers.h"
 #include "types.h"
@@ -361,6 +361,19 @@ static __always_inline syscall_pattern_type_t ptrace_syscall_pattern(u32 request
             bpf_probe_read(&luid, sizeof(luid), ts + *(u32 *)luid_offset);                              \
         }                                                                                               \
     }
+
+/**
+ * A helper function for reading a value from a structure using the offsets map
+ */
+static __always_inline int read_value(void *base, u64 offset, void *dest, size_t dest_size)
+{
+    u64 _offset = (u64)bpf_map_lookup_elem(&offsets, &offset);
+    if (_offset)
+    {
+        return bpf_probe_read(dest, dest_size, base + *(u32 *)_offset);
+    }
+    return -1;
+}
 
 SEC("kprobe/sys_ptrace_write")
 int BPF_KPROBE_SYSCALL(kprobe__sys_ptrace_write,
@@ -1283,8 +1296,7 @@ int kretprobe__ret_ip6_local_out(struct pt_regs *ctx)
         return 0;
     }
 
-    struct sk_buff *skp = *skpp;
-    unsigned char *skbuff_base = (unsigned char *)skp;
+    unsigned char *skbuff_base = (unsigned char *)*skpp;
     if (skbuff_base == NULL)
     {
         return 0;
@@ -1293,28 +1305,28 @@ int kretprobe__ret_ip6_local_out(struct pt_regs *ctx)
     u64 loaded = CRC_LOADED;
     loaded = (u64)bpf_map_lookup_elem(&offsets, &loaded);
 
-    u64 skb_head_offset = CRC_SKBUFF_HEAD;
-    skb_head_offset = (u64)bpf_map_lookup_elem(&offsets, &skb_head_offset);
+    ret = read_value(skbuff_base, CRC_SKBUFF_HEAD, &skb_head, sizeof(skb_head));
+    if (ret == -1)
+    {
+        return 0;
+    }
 
-    u64 transport_hdr_offset = CRC_TRANSPORT_HDR;
-    transport_hdr_offset = (u64)bpf_map_lookup_elem(&offsets, &transport_hdr_offset);
+    ret = read_value(skbuff_base, CRC_TRANSPORT_HDR, &transport_header, sizeof(transport_header));
+    if (ret == -1)
+    {
+        return 0;
+    }
 
-    u64 network_hdr_offset = CRC_NETWORK_HDR;
-    network_hdr_offset = (u64)bpf_map_lookup_elem(&offsets, &network_hdr_offset);
+    ret = read_value(skbuff_base, CRC_NETWORK_HDR, &network_header, sizeof(network_header));
+    if (ret == -1)
+    {
+        return 0;
+    }
 
     if (!loaded)
     {
         return 0;
     }
-
-    if (!skb_head_offset || !transport_hdr_offset || !network_hdr_offset)
-    {
-        return 0;
-    }
-
-    bpf_probe_read(&skb_head, sizeof(skb_head), skbuff_base + *(u32 *)skb_head_offset);
-    bpf_probe_read(&transport_header, sizeof(transport_header), skbuff_base + *(u32 *)transport_hdr_offset);
-    bpf_probe_read(&network_header, sizeof(network_header), skbuff_base + *(u32 *)network_hdr_offset);
 
     struct ipv6hdr *ip = (struct ipv6hdr *)(skb_head + network_header);
     bpf_probe_read(&proto, sizeof(proto), (void *)(&ip->nexthdr));
@@ -1347,7 +1359,7 @@ SEC("kretprobe/ret_inet_csk_accept")
 int kretprobe__ret_inet_csk_accept(struct pt_regs *ctx)
 {
     // Get the return value from inet_csk_accept
-    struct sock *sk = (struct sock *)PT_REGS_RC(ctx);
+    unsigned char *sk_base = (unsigned char *)PT_REGS_RC(ctx);
 
     // Just to be safe 0 out the structs
     telemetry_event_t ev;
@@ -1359,13 +1371,6 @@ int kretprobe__ret_inet_csk_accept(struct pt_regs *ctx)
     ev.telemetry_type = TE_NETWORK;
     ev.u.network_info.mono_ns = bpf_ktime_get_ns();
 
-    // For this one the return value is the socket we are interested.
-    // We might not need to track the pid on this one
-    // Get current pid
-    u32 index = (u32)bpf_get_current_pid_tgid();
-
-    // If getting the socket from the listening queue fails it returns a NULL pointer
-    unsigned char *sk_base = (unsigned char *)sk;
     if (sk_base == NULL)
     {
         return 0;
@@ -1376,59 +1381,31 @@ int kretprobe__ret_inet_csk_accept(struct pt_regs *ctx)
 
     u64 loaded = CRC_LOADED;
     loaded = (u64)bpf_map_lookup_elem(&offsets, &loaded);
-    u64 family_offset = CRC_SOCK_COMMON_FAMILY;
-    family_offset = (u64)bpf_map_lookup_elem(&offsets, &family_offset);
-
-    if (family_offset == 0)
+    int ret = read_value(sk_base, CRC_SOCK_COMMON_FAMILY, &ev.u.network_info.ip_type, sizeof(ev.u.network_info.ip_type));
+    if (ret == -1)
     {
         return 0;
     }
 
-    bpf_probe_read(&ev.u.network_info.ip_type, sizeof(ev.u.network_info.ip_type), sk_base + *(u32 *)family_offset);
     if (ev.u.network_info.ip_type == AF_INET && loaded)
     {
-        u64 daddr_offset = CRC_SOCK_COMMON_DADDR;
-        u64 saddr_offset = CRC_SOCK_COMMON_SADDR;
-        u64 dport_offset = CRC_SOCK_COMMON_DPORT;
-        u64 sport_offset = CRC_SOCK_COMMON_SPORT;
-        daddr_offset = (u64)bpf_map_lookup_elem(&offsets, &daddr_offset);
-        saddr_offset = (u64)bpf_map_lookup_elem(&offsets, &saddr_offset);
-        dport_offset = (u64)bpf_map_lookup_elem(&offsets, &dport_offset);
-        sport_offset = (u64)bpf_map_lookup_elem(&offsets, &sport_offset);
-        if (daddr_offset &&
-            saddr_offset &&
-            dport_offset &&
-            sport_offset)
-        {
-            bpf_probe_read(&ev.u.network_info.protos.tcpv4.src_addr, sizeof(ev.u.network_info.protos.tcpv4.src_addr), sk_base + *(u32 *)daddr_offset);
-            bpf_probe_read(&ev.u.network_info.protos.tcpv4.dest_addr, sizeof(ev.u.network_info.protos.tcpv4.dest_addr), sk_base + *(u32 *)saddr_offset);
-            bpf_probe_read(&ev.u.network_info.protos.tcpv4.src_port, sizeof(ev.u.network_info.protos.tcpv4.src_port), sk_base + *(u32 *)dport_offset);
-            bpf_probe_read(&ev.u.network_info.protos.tcpv4.dest_port, sizeof(ev.u.network_info.protos.tcpv4.dest_port), sk_base + *(u32 *)sport_offset);
-            ev.u.network_info.protos.tcpv6.dest_port = SWAP_U16(ev.u.network_info.protos.tcpv6.dest_port);
-        }
+        read_value(sk_base, CRC_SOCK_COMMON_SADDR, &ev.u.network_info.protos.tcpv4.dest_addr, sizeof(ev.u.network_info.protos.tcpv4.dest_addr));
+        read_value(sk_base, CRC_SOCK_COMMON_DADDR, &ev.u.network_info.protos.tcpv4.src_addr, sizeof(ev.u.network_info.protos.tcpv4.src_addr));
+        read_value(sk_base, CRC_SOCK_COMMON_SPORT, &ev.u.network_info.protos.tcpv4.dest_port, sizeof(ev.u.network_info.protos.tcpv4.dest_port));
+        read_value(sk_base, CRC_SOCK_COMMON_DPORT, &ev.u.network_info.protos.tcpv4.src_port, sizeof(ev.u.network_info.protos.tcpv4.src_port));
+        ev.u.network_info.protos.tcpv4.src_port = SWAP_U16(ev.u.network_info.protos.tcpv4.src_port);
     }
     else if (ev.u.network_info.ip_type == AF_INET6 && loaded)
     {
-        u64 daddr_offset = CRC_SOCK_COMMON_DADDR6;
-        u64 saddr_offset = CRC_SOCK_COMMON_SADDR6;
-        u64 dport_offset = CRC_SOCK_COMMON_DPORT;
-        u64 sport_offset = CRC_SOCK_COMMON_SPORT;
-        daddr_offset = (u64)bpf_map_lookup_elem(&offsets, &daddr_offset);
-        saddr_offset = (u64)bpf_map_lookup_elem(&offsets, &saddr_offset);
-        dport_offset = (u64)bpf_map_lookup_elem(&offsets, &dport_offset);
-        sport_offset = (u64)bpf_map_lookup_elem(&offsets, &sport_offset);
-        if (daddr_offset && saddr_offset && dport_offset && sport_offset)
-        {
-            bpf_probe_read(&ev.u.network_info.protos.tcpv6.src_addr, sizeof(ev.u.network_info.protos.tcpv6.src_addr), sk_base + *(u32 *)daddr_offset);
-            bpf_probe_read(&ev.u.network_info.protos.tcpv6.dest_addr, sizeof(ev.u.network_info.protos.tcpv6.dest_addr), sk_base + *(u32 *)saddr_offset);
-            bpf_probe_read(&ev.u.network_info.protos.tcpv6.src_port, sizeof(ev.u.network_info.protos.tcpv6.src_port), sk_base + *(u32 *)dport_offset);
-            bpf_probe_read(&ev.u.network_info.protos.tcpv6.dest_port, sizeof(ev.u.network_info.protos.tcpv6.dest_port), sk_base + *(u32 *)sport_offset);
-            ev.u.network_info.protos.tcpv6.dest_port = SWAP_U16(ev.u.network_info.protos.tcpv6.dest_port);
-        }
+        read_value(sk_base, CRC_SOCK_COMMON_DADDR6, &ev.u.network_info.protos.tcpv6.dest_addr, sizeof(ev.u.network_info.protos.tcpv6.dest_addr));
+        read_value(sk_base, CRC_SOCK_COMMON_SADDR6, &ev.u.network_info.protos.tcpv6.src_addr, sizeof(ev.u.network_info.protos.tcpv6.src_addr));
+        read_value(sk_base, CRC_SOCK_COMMON_SPORT, &ev.u.network_info.protos.tcpv6.dest_port, sizeof(ev.u.network_info.protos.tcpv6.dest_port));
+        read_value(sk_base, CRC_SOCK_COMMON_DPORT, &ev.u.network_info.protos.tcpv6.src_port, sizeof(ev.u.network_info.protos.tcpv6.src_port));
+        ev.u.network_info.protos.tcpv6.src_port = SWAP_U16(ev.u.network_info.protos.tcpv6.src_port);
     }
 
     // Get Process data and set pid and comm string
-    ev.u.network_info.process.pid = index;
+    ev.u.network_info.process.pid = (u32)bpf_get_current_pid_tgid();
     bpf_get_current_comm(ev.u.network_info.process.comm, sizeof(ev.u.network_info.process.comm));
 
     // Output data to generator
@@ -1491,27 +1468,12 @@ int kretprobe__ret_tcp_v4_connect(struct pt_regs *ctx)
     ev.u.network_info.protocol_type = IPPROTO_TCP;
     ev.u.network_info.ip_type = AF_INET;
 
-    if (loaded)
+    if (loaded && skp_base)
     {
-        u64 daddr_offset = CRC_SOCK_COMMON_DADDR;
-        u64 saddr_offset = CRC_SOCK_COMMON_SADDR;
-        u64 dport_offset = CRC_SOCK_COMMON_DPORT;
-        u64 sport_offset = CRC_SOCK_COMMON_SPORT;
-        daddr_offset = (u64)bpf_map_lookup_elem(&offsets, &daddr_offset);
-        saddr_offset = (u64)bpf_map_lookup_elem(&offsets, &saddr_offset);
-        dport_offset = (u64)bpf_map_lookup_elem(&offsets, &dport_offset);
-        sport_offset = (u64)bpf_map_lookup_elem(&offsets, &sport_offset);
-        if (skp_base &&
-            daddr_offset &&
-            saddr_offset &&
-            dport_offset &&
-            sport_offset)
-        {
-            bpf_probe_read(&ev.u.network_info.protos.tcpv4.dest_addr, sizeof(ev.u.network_info.protos.tcpv4.dest_addr), skp_base + *(u32 *)daddr_offset);
-            bpf_probe_read(&ev.u.network_info.protos.tcpv4.src_addr, sizeof(ev.u.network_info.protos.tcpv4.src_addr), skp_base + *(u32 *)saddr_offset);
-            bpf_probe_read(&ev.u.network_info.protos.tcpv4.dest_port, sizeof(ev.u.network_info.protos.tcpv4.dest_port), skp_base + *(u32 *)dport_offset);
-            bpf_probe_read(&ev.u.network_info.protos.tcpv4.src_port, sizeof(ev.u.network_info.protos.tcpv4.src_port), skp_base + *(u32 *)sport_offset);
-        }
+        read_value(skp_base, CRC_SOCK_COMMON_DADDR, &ev.u.network_info.protos.tcpv4.dest_addr, sizeof(ev.u.network_info.protos.tcpv4.dest_addr));
+        read_value(skp_base, CRC_SOCK_COMMON_SADDR, &ev.u.network_info.protos.tcpv4.src_addr, sizeof(ev.u.network_info.protos.tcpv4.src_addr));
+        read_value(skp_base, CRC_SOCK_COMMON_DPORT, &ev.u.network_info.protos.tcpv4.dest_port, sizeof(ev.u.network_info.protos.tcpv4.dest_port));
+        read_value(skp_base, CRC_SOCK_COMMON_SPORT, &ev.u.network_info.protos.tcpv4.src_port, sizeof(ev.u.network_info.protos.tcpv4.src_port));
     }
 
     // Get Process data and set pid and comm string
@@ -1559,14 +1521,29 @@ int kretprobe__ret___skb_recv_udp(struct pt_regs *ctx)
     u64 loaded = CRC_LOADED;
     loaded = (u64)bpf_map_lookup_elem(&offsets, &loaded);
 
-    u64 skb_head_offset = CRC_SKBUFF_HEAD;
-    skb_head_offset = (u64)bpf_map_lookup_elem(&offsets, &skb_head_offset);
+    int ret = read_value(skbuff_base, CRC_SKBUFF_HEAD, &skb_head, sizeof(skb_head));
+    if (ret == -1)
+    {
+        return 0;
+    }
 
-    u64 transport_hdr_offset = CRC_TRANSPORT_HDR;
-    transport_hdr_offset = (u64)bpf_map_lookup_elem(&offsets, &transport_hdr_offset);
+    ret = read_value(skbuff_base, CRC_TRANSPORT_HDR, &transport_header, sizeof(transport_header));
+    if (ret == -1)
+    {
+        return 0;
+    }
 
-    u64 network_hdr_offset = CRC_NETWORK_HDR;
-    network_hdr_offset = (u64)bpf_map_lookup_elem(&offsets, &network_hdr_offset);
+    ret = read_value(skbuff_base, CRC_NETWORK_HDR, &network_header, sizeof(network_header));
+    if (ret == -1)
+    {
+        return 0;
+    }
+
+    ret = read_value(skbuff_base, CRC_SKBUFF_PROTO, &proto, sizeof(proto));
+    if (ret == -1)
+    {
+        return 0;
+    }
 
     u64 eth_proto_offset = CRC_SKBUFF_PROTO;
     eth_proto_offset = (u64)bpf_map_lookup_elem(&offsets, &eth_proto_offset);
@@ -1575,17 +1552,6 @@ int kretprobe__ret___skb_recv_udp(struct pt_regs *ctx)
     {
         return 0;
     }
-
-    if (!skb_head_offset || !transport_hdr_offset || !network_hdr_offset || !eth_proto_offset)
-    {
-        return 0;
-    }
-
-    // The proto field uses the protocol from the ethernet header
-    bpf_probe_read(&proto, sizeof(proto), skbuff_base + *(u32 *)eth_proto_offset);
-    bpf_probe_read(&skb_head, sizeof(skb_head), skbuff_base + *(u32 *)skb_head_offset);
-    bpf_probe_read(&transport_header, sizeof(transport_header), skbuff_base + *(u32 *)transport_hdr_offset);
-    bpf_probe_read(&network_header, sizeof(network_header), skbuff_base + *(u32 *)network_hdr_offset);
 
     if (proto == 0xDD86) // ETH_P_IPv6
     {
@@ -1675,28 +1641,28 @@ int kretprobe__ret_ip_local_out(struct pt_regs *ctx)
     u64 loaded = CRC_LOADED;
     loaded = (u64)bpf_map_lookup_elem(&offsets, &loaded);
 
-    u64 skb_head_offset = CRC_SKBUFF_HEAD;
-    skb_head_offset = (u64)bpf_map_lookup_elem(&offsets, &skb_head_offset);
+    ret = read_value(skbuff_base, CRC_SKBUFF_HEAD, &skb_head, sizeof(skb_head));
+    if (ret == -1)
+    {
+        return 0;
+    }
 
-    u64 transport_hdr_offset = CRC_TRANSPORT_HDR;
-    transport_hdr_offset = (u64)bpf_map_lookup_elem(&offsets, &transport_hdr_offset);
+    ret = read_value(skbuff_base, CRC_TRANSPORT_HDR, &transport_header, sizeof(transport_header));
+    if (ret == -1)
+    {
+        return 0;
+    }
 
-    u64 network_hdr_offset = CRC_NETWORK_HDR;
-    network_hdr_offset = (u64)bpf_map_lookup_elem(&offsets, &network_hdr_offset);
+    ret = read_value(skbuff_base, CRC_NETWORK_HDR, &network_header, sizeof(network_header));
+    if (ret == -1)
+    {
+        return 0;
+    }
 
     if (!loaded)
     {
         return 0;
     }
-
-    if (!skb_head_offset || !transport_hdr_offset || !network_hdr_offset)
-    {
-        return 0;
-    }
-
-    bpf_probe_read(&skb_head, sizeof(skb_head), skbuff_base + *(u32 *)skb_head_offset);
-    bpf_probe_read(&transport_header, sizeof(transport_header), skbuff_base + *(u32 *)transport_hdr_offset);
-    bpf_probe_read(&network_header, sizeof(network_header), skbuff_base + *(u32 *)network_hdr_offset);
 
     struct iphdr *ip = (struct iphdr *)(skb_head + network_header);
     bpf_probe_read(&proto, sizeof(proto), (void *)(&ip->protocol));
@@ -1706,8 +1672,8 @@ int kretprobe__ret_ip_local_out(struct pt_regs *ctx)
         struct udphdr *udp = (struct udphdr *)(skb_head + transport_header);
         bpf_probe_read(&ev.u.network_info.protos.udpv4.dest_addr, sizeof(ev.u.network_info.protos.udpv4.dest_addr), (void *)(&ip->daddr));
         bpf_probe_read(&ev.u.network_info.protos.udpv4.src_addr, sizeof(ev.u.network_info.protos.udpv4.src_addr), (void *)(&ip->saddr));
-        bpf_probe_read(&ev.u.network_info.protos.udpv4.dest_port, sizeof(ev.u.network_info.protos.udpv4.dest_port), (void *)(&udp->dest));
-        bpf_probe_read(&ev.u.network_info.protos.udpv4.src_port, sizeof(ev.u.network_info.protos.udpv4.src_port), (void *)(&udp->source));
+        bpf_probe_read(&ev.u.network_info.protos.udpv4.dest_port, sizeof(ev.u.network_info.protos.udpv4.dest_port), (void *)(&udp->source));
+        bpf_probe_read(&ev.u.network_info.protos.udpv4.src_port, sizeof(ev.u.network_info.protos.udpv4.src_port), (void *)(&udp->dest));
         ev.u.network_info.protocol_type = IPPROTO_UDP;
         ev.u.network_info.protos.udpv4.src_port = SWAP_U16(ev.u.network_info.protos.udpv4.src_port);
     }
@@ -1780,21 +1746,11 @@ int kretprobe__ret_tcp_v6_connect(struct pt_regs *ctx)
 
     if (loaded)
     {
-        u64 daddr_offset = CRC_SOCK_COMMON_DADDR6;
-        u64 saddr_offset = CRC_SOCK_COMMON_SADDR6;
-        u64 dport_offset = CRC_SOCK_COMMON_DPORT;
-        u64 sport_offset = CRC_SOCK_COMMON_SPORT;
-        daddr_offset = (u64)bpf_map_lookup_elem(&offsets, &daddr_offset);
-        saddr_offset = (u64)bpf_map_lookup_elem(&offsets, &saddr_offset);
-        dport_offset = (u64)bpf_map_lookup_elem(&offsets, &dport_offset);
-        sport_offset = (u64)bpf_map_lookup_elem(&offsets, &sport_offset);
-        if (daddr_offset && saddr_offset && dport_offset && sport_offset)
-        {
-            bpf_probe_read(&ev.u.network_info.protos.tcpv6.dest_addr, sizeof(ev.u.network_info.protos.tcpv6.dest_addr), skp_base + *(u32 *)daddr_offset);
-            bpf_probe_read(&ev.u.network_info.protos.tcpv6.src_addr, sizeof(ev.u.network_info.protos.tcpv6.src_addr), skp_base + *(u32 *)saddr_offset);
-            bpf_probe_read(&ev.u.network_info.protos.tcpv6.dest_port, sizeof(ev.u.network_info.protos.tcpv6.dest_port), skp_base + *(u32 *)dport_offset);
-            bpf_probe_read(&ev.u.network_info.protos.tcpv6.src_port, sizeof(ev.u.network_info.protos.tcpv6.src_port), skp_base + *(u32 *)sport_offset);
-        }
+        read_value(skp_base, CRC_SOCK_COMMON_DADDR6, &ev.u.network_info.protos.tcpv6.dest_addr, sizeof(ev.u.network_info.protos.tcpv6.dest_addr));
+        read_value(skp_base, CRC_SOCK_COMMON_SADDR6, &ev.u.network_info.protos.tcpv6.src_addr, sizeof(ev.u.network_info.protos.tcpv6.src_addr));
+        read_value(skp_base, CRC_SOCK_COMMON_DPORT, &ev.u.network_info.protos.tcpv6.dest_port, sizeof(ev.u.network_info.protos.tcpv6.dest_port));
+        read_value(skp_base, CRC_SOCK_COMMON_SPORT, &ev.u.network_info.protos.tcpv6.src_port, sizeof(ev.u.network_info.protos.tcpv6.src_port));
+        ev.u.network_info.protos.tcpv6.dest_port = SWAP_U16(ev.u.network_info.protos.tcpv6.dest_port);
     }
 
     // Get Process data and set pid and comm string
