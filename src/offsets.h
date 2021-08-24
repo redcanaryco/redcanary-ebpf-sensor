@@ -57,3 +57,36 @@ const u64 CRC_DENTRY_D_PARENT = 0x7f8acf45f8bb14fa;
 
 /* qstr->len */
 const u64 CRC_QSTR_LEN = 0xce592db861f9588;
+
+/* sk_buff->head */
+const u64 CRC_SKBUFF_HEAD = 0xffd66a9e550dcbac;
+
+/* sk_buff->transport_header */
+const u64 CRC_TRANSPORT_HDR = 0xeff48bcd3179818c;
+
+/* sk_buff->network_header */
+const u64 CRC_NETWORK_HDR = 0x94847ef2e8239ef0;
+
+/* sock_common->sk_family */
+const u64 CRC_SOCK_COMMON_FAMILY = 0x58cc07362e5acf26;
+
+/* sock_common->skc_daddr */
+const u64 CRC_SOCK_COMMON_DADDR = 0xb8a7fa611ded721c;
+
+/* sock_common->skc_rcv_saddr */
+const u64 CRC_SOCK_COMMON_SADDR = 0x1e84b894d59120b4;
+
+/* sock_common->skc_dport */
+const u64 CRC_SOCK_COMMON_DPORT = 0x5fad6a2ba671e214;
+
+/* sock_common->skc_num */
+const u64 CRC_SOCK_COMMON_SPORT = 0xe962a62fbff22f42;
+
+/* sock_common->skc_v6_daddr */
+const u64 CRC_SOCK_COMMON_DADDR6 = 0x726604a3fe67d262;
+
+/* sock_common->skc_v6_rcv_saddr */
+const u64 CRC_SOCK_COMMON_SADDR6 = 0xb7848cfc7c751cae;
+
+/* sk_buff->protocol */
+const u64 CRC_SKBUFF_PROTO = 0x42a761c8a2a2b084;
