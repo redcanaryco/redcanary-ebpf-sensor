@@ -359,6 +359,7 @@ static __always_inline syscall_pattern_type_t ptrace_syscall_pattern(u32 request
         FOLLOW_PTR(offset); /* ptr to dentry */                                                                     \
         SET_OFFSET(CRC_DENTRY_D_NAME);                                                                              \
         ptr = ptr + *(u32*) offset; /* ptr to d_name */                                                             \
+        SET_OFFSET(CRC_QSTR_LEN);                                                                                   \
         bpf_probe_read(&length, sizeof(length), ptr + *(u32*)offset ); /* length in lower 32 bits */                \
         if (!length) goto Skip;                                                                                     \
         SET_OFFSET(CRC_QSTR_NAME);                                                                                  \
@@ -1131,7 +1132,7 @@ Pwd:;
     if (!offset) goto PwdRead;
     qstr_len = qstr_len + *(u32*)offset;
     u32 temp = 0;
-    SEND_PATH_N(14);
+    SEND_PATH_N(9);
     bpf_tail_call(ctx, &tail_call_table, SYS_EXECVE_4_8);
 
 PwdRead:;
@@ -1266,17 +1267,6 @@ Exit:;
     return 0;
 }
 
-// hook begin_new_exec https://elixir.bootlin.com/linux/latest/source/fs/exec.c#L1239
-// get fdpath https://elixir.bootlin.com/linux/latest/source/include/linux/binfmts.h#L17
-// for dave:
-// - we have `offsets.h` header now
-// - we have the taill_call_slot_t
-// - we have all the struct offsets on x64 and ARM (EXCEPT rhel and suse b/c licensing)
-// - we're grabbing full strings on plugins side, w/ truncation
-// TODO: differentiate truncate b/c gave up
-// - I'm having trouble w/ rel path pwd
-// - I got an rpi for testing so if you have some stuff pushed up I can test it
-// - Carl is working on FB stuff still, he was running into issues that I don't remember (Brandon is helping him)
 
 SEC("kprobe/sys_execveat_4_8")
 int BPF_KPROBE_SYSCALL(kprobe__sys_execveat_4_8,
