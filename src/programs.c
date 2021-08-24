@@ -8,8 +8,8 @@
 #include <linux/uio.h>
 #include <linux/fcntl.h>
 #include <linux/skbuff.h>
-#include <linux/udp.h>
-#include <linux/ip.h>
+#include <uapi/linux/udp.h>
+#include <uapi/linux/ip.h>
 #include <net/sock.h>
 #include "bpf_helpers.h"
 #include "types.h"
@@ -1305,7 +1305,7 @@ int kretprobe__ret_ip6_local_out(struct pt_regs *ctx)
     u64 loaded = CRC_LOADED;
     loaded = (u64)bpf_map_lookup_elem(&offsets, &loaded);
 
-    int ret = read_value(skbuff_base, CRC_SKBUFF_HEAD, &skb_head, sizeof(skb_head));
+    ret = read_value(skbuff_base, CRC_SKBUFF_HEAD, &skb_head, sizeof(skb_head));
     if (ret == -1)
     {
         return 0;
@@ -1399,8 +1399,8 @@ int kretprobe__ret_inet_csk_accept(struct pt_regs *ctx)
     {
         read_value(sk_base, CRC_SOCK_COMMON_DADDR6, &ev.u.network_info.protos.tcpv6.dest_addr, sizeof(ev.u.network_info.protos.tcpv6.dest_addr));
         read_value(sk_base, CRC_SOCK_COMMON_SADDR6, &ev.u.network_info.protos.tcpv6.src_addr, sizeof(ev.u.network_info.protos.tcpv6.src_addr));
-        read_value(sk_base, CRC_SOCK_COMMON_DPORT, &ev.u.network_info.protos.tcpv6.dest_port, sizeof(ev.u.network_info.protos.tcpv6.dest_port));
-        read_value(sk_base, CRC_SOCK_COMMON_SPORT, &ev.u.network_info.protos.tcpv6.src_port, sizeof(ev.u.network_info.protos.tcpv6.src_port));
+        read_value(sk_base, CRC_SOCK_COMMON_SPORT, &ev.u.network_info.protos.tcpv6.dest_port, sizeof(ev.u.network_info.protos.tcpv6.dest_port));
+        read_value(sk_base, CRC_SOCK_COMMON_DPORT, &ev.u.network_info.protos.tcpv6.src_port, sizeof(ev.u.network_info.protos.tcpv6.src_port));
         ev.u.network_info.protos.tcpv6.src_port = SWAP_U16(ev.u.network_info.protos.tcpv6.src_port);
     }
 
@@ -1641,7 +1641,7 @@ int kretprobe__ret_ip_local_out(struct pt_regs *ctx)
     u64 loaded = CRC_LOADED;
     loaded = (u64)bpf_map_lookup_elem(&offsets, &loaded);
 
-    int ret = read_value(skbuff_base, CRC_SKBUFF_HEAD, &skb_head, sizeof(skb_head));
+    ret = read_value(skbuff_base, CRC_SKBUFF_HEAD, &skb_head, sizeof(skb_head));
     if (ret == -1)
     {
         return 0;
@@ -1750,6 +1750,7 @@ int kretprobe__ret_tcp_v6_connect(struct pt_regs *ctx)
         read_value(skp_base, CRC_SOCK_COMMON_SADDR6, &ev.u.network_info.protos.tcpv6.src_addr, sizeof(ev.u.network_info.protos.tcpv6.src_addr));
         read_value(skp_base, CRC_SOCK_COMMON_DPORT, &ev.u.network_info.protos.tcpv6.dest_port, sizeof(ev.u.network_info.protos.tcpv6.dest_port));
         read_value(skp_base, CRC_SOCK_COMMON_SPORT, &ev.u.network_info.protos.tcpv6.src_port, sizeof(ev.u.network_info.protos.tcpv6.src_port));
+        ev.u.network_info.protos.tcpv6.dest_port = SWAP_U16(ev.u.network_info.protos.tcpv6.dest_port);
     }
 
     // Get Process data and set pid and comm string
