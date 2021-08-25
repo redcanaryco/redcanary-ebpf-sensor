@@ -339,10 +339,6 @@ static __always_inline syscall_pattern_type_t ptrace_syscall_pattern(u32 request
     offset = (u64) bpf_map_lookup_elem(&offsets, &offset);      \
     if (!offset) goto Skip;
 
-#define FOLLOW_PTR(O) \
-    bpf_probe_read(&ptr, sizeof(ptr), ptr + *(u32*) O); \
-    if (!ptr) goto Skip;
-
 /* this must go in the kretprobe so we can grab the new process from `task_struct` */
 #define GET_OFFSETS_4_8_RET_EXEC \
     /* if "loaded" doesn't exist in the map, we get NULL back and won't read from offsets                           \
@@ -356,18 +352,13 @@ static __always_inline syscall_pattern_type_t ptrace_syscall_pattern(u32 request
     u32 i_rdev = 0;                                                                                                 \
     u64 i_ino = 0;                                                                                                  \
     void *ts = (void *)bpf_get_current_task();                                                                      \
-    void *ptr = NULL;            \
+    void *ptr = NULL;                                                                                               \
     if (ts && offset) {                                                                                             \
-        SET_OFFSET(CRC_TASK_STRUCT_MM);                                                                             \
-        bpf_probe_read(&ptr, sizeof(ptr), ts + *(u32*)offset);                                                      \
-        SET_OFFSET(CRC_MM_STRUCT_EXE_FILE);                                                                         \
-        FOLLOW_PTR(offset);      \
-        SET_OFFSET(CRC_FILE_F_INODE);                                                                               \
-        FOLLOW_PTR(offset);      \
-        SET_OFFSET(CRC_INODE_I_RDEV);                                                                               \
-        bpf_probe_read(&i_rdev, sizeof(i_rdev), ptr + *(u32*)offset);                                               \
-        SET_OFFSET(CRC_INODE_I_INO);                                                                                \
-        bpf_probe_read(&i_ino, sizeof(i_rdev), ptr + *(u32*)offset);                                                \
+        read_value(ts, CRC_TASK_STRUCT_MM, &ptr, sizeof(ptr));                                                      \
+        read_value(ptr, CRC_MM_STRUCT_EXE_FILE, &ptr, sizeof(ptr));                                                 \
+        read_value(ptr, CRC_FILE_F_INODE, &ptr, sizeof(ptr));                                                       \
+        read_value(ptr, CRC_INODE_I_RDEV, &i_rdev, sizeof(i_rdev));                                                 \
+        read_value(ptr, CRC_INODE_I_INO, &i_ino, sizeof(i_ino));                                                    \
     }
 
 
@@ -383,31 +374,23 @@ static __always_inline syscall_pattern_type_t ptrace_syscall_pattern(u32 request
     void *ts = (void *)bpf_get_current_task();                                                                      \
     void *ptr = NULL;                                                                                               \
     if (ts && offset) {                                                                                             \
-        SET_OFFSET(CRC_TASK_STRUCT_REAL_PARENT);                                                                    \
-        bpf_probe_read(&ptr, sizeof(ptr), ts + *(u32*)offset);                                                      \
+        read_value(ts, CRC_TASK_STRUCT_REAL_PARENT, &ptr, sizeof(ptr));                                             \
         if (!ptr) goto Skip;                                                                                        \
-        SET_OFFSET(CRC_TASK_STRUCT_PID);                                                                            \
-        bpf_probe_read(&ppid, sizeof(ppid), ptr + *(u32*)offset);                                                   \
+        read_value(ptr, CRC_TASK_STRUCT_PID, &ppid, sizeof(ppid));                                                  \
         if (!ppid) goto Skip;                                                                                       \
-        SET_OFFSET(CRC_TASK_STRUCT_LOGINUID);                                                                       \
-        bpf_probe_read(&luid, sizeof(luid), ts + *(u32*)offset);                                                    \
+        read_value(ts, CRC_TASK_STRUCT_LOGINUID, &luid, sizeof(luid));                                              \
         if (!luid) goto Skip;                                                                                       \
-        SET_OFFSET(CRC_TASK_STRUCT_MM);                                                                             \
-        bpf_probe_read(&ptr, sizeof(ptr), ts + *(u32*) offset); /* ptr to mm */                                     \
+        read_value(ts, CRC_TASK_STRUCT_MM, &ptr, sizeof(ptr));                                                      \
         if (!ptr) goto Skip;                                                                                        \
-        SET_OFFSET(CRC_MM_STRUCT_EXE_FILE);                                                                         \
-        FOLLOW_PTR(offset); /* ptr to exe_file */                                                                   \
+        read_value(ptr, CRC_MM_STRUCT_EXE_FILE, &ptr, sizeof(ptr));                                                 \
         SET_OFFSET(CRC_FILE_F_PATH);                                                                                \
         ptr = ptr + *(u32*) offset;  /* ptr to f_path */                                                            \
-        SET_OFFSET(CRC_PATH_DENTRY);                                                                                \
-        FOLLOW_PTR(offset); /* ptr to dentry */                                                                     \
+        read_value(ptr, CRC_PATH_DENTRY, &ptr, sizeof(ptr));                                                        \
         SET_OFFSET(CRC_DENTRY_D_NAME);                                                                              \
         ptr = ptr + *(u32*) offset; /* ptr to d_name */                                                             \
-        SET_OFFSET(CRC_QSTR_LEN);                                                                                   \
-        bpf_probe_read(&length, sizeof(length), ptr + *(u32*)offset ); /* length in lower 32 bits */                \
+        read_value(ptr, CRC_QSTR_LEN, &length, sizeof(length));                                                     \
         if (!length) goto Skip;                                                                                     \
-        SET_OFFSET(CRC_QSTR_NAME);                                                                                  \
-        bpf_probe_read(&exe, sizeof(exe), ptr + *(u32*) offset); /* ptr to name string */                           \
+        read_value(ptr, CRC_QSTR_NAME, &exe, sizeof(exe));                                                          \
         if (!exe) goto Skip;                                                                                        \
     }
 
@@ -1038,7 +1021,7 @@ static __always_inline void flush_telemetry_events(struct pt_regs *ctx)
     if (br == 0)                                                            \
     {                                                                       \
         bpf_probe_read(&offset, sizeof(offset), ptr + name);                \
-        if (!offset) goto PwdRead;                                          \
+        if (!offset) goto Skip;                                             \
         bpf_probe_read(&count, sizeof(count), ptr + qstr_len);              \
     }                                                                       \
     temp = 0;                                                               \
@@ -1059,8 +1042,8 @@ static __always_inline void flush_telemetry_events(struct pt_regs *ctx)
         }                                                                   \
         /* we're done here, follow the pointer */                           \
         bpf_probe_read(&ptr, sizeof(ptr), ptr + parent);                    \
-        if (!ptr) goto PwdRead;                                             \
-        if (br == '/') goto PwdRead;                                        \
+        if (!ptr) goto Skip;                                                \
+        if (br == '/') goto Skip;                                           \
         br = 0;                                                             \
     }
 
@@ -1119,7 +1102,6 @@ static __always_inline ptelemetry_event_t enter_exec_4_8(syscall_pattern_type_t 
     ptelemetry_event_t pev = bpf_map_lookup_elem(&telemetry_stack, (u32 *) &id);
     if (!pev) // this should never happen, but the verifier complains otherwise
     {
-
         goto Exit;
     }
     // this pointer passing and memcpy is to put the struct on the stack and satisfy the verifier
@@ -1153,47 +1135,36 @@ static __always_inline ptelemetry_event_t enter_exec_4_8(syscall_pattern_type_t 
 
     u32 count = 0;
     char br = 0;
-    //READ_VALUE_N(ev, TE_EXE_PATH, exe, 5); // TODO: is this necessary?
 
 Pwd:;
     u64 offset = 0;
     void *ptr = (void*)bpf_get_current_task();
-    offset = CRC_TASK_STRUCT_FS;
-    offset = (u64) bpf_map_lookup_elem(&offsets, &offset);
-    if (!offset) goto PwdRead;
-    bpf_probe_read(&ptr, sizeof(ptr), ptr + *(u32*)offset); // ptr to fs
-    if (!ptr) goto PwdRead;
+    if (read_value(ptr, CRC_TASK_STRUCT_FS, &ptr, sizeof(ptr)) < 0) goto Skip;
+
     offset = CRC_FS_STRUCT_PWD;
     offset = (u64) bpf_map_lookup_elem(&offsets, &offset);
-    if (!offset) goto PwdRead;
+    if (!offset) goto Skip;
     ptr = ptr + *(u32*)offset; // ptr to pwd
-    offset = CRC_PATH_DENTRY;
-    offset = (u64) bpf_map_lookup_elem(&offsets, &offset);
-    if (!offset) goto PwdRead;
-    bpf_probe_read(&ptr, sizeof(ptr), ptr + *(u32*)offset); // ptr to first dentry
-    if (!ptr) goto PwdRead;
-    // name = name offset in qstr (d_name + name)
-    offset = CRC_DENTRY_D_NAME;
-    offset = (u64) bpf_map_lookup_elem(&offsets, &offset);
-    if (!offset) goto PwdRead;
+
+    if (read_value(ptr, CRC_PATH_DENTRY, &ptr, sizeof(ptr)) < 0) goto Skip;
+
+    SET_OFFSET(CRC_DENTRY_D_NAME);
     u32 qstr_len = *(u32*) offset; // variable name doesn't match here, we're reusing it to preserve stack
-    offset = CRC_QSTR_NAME;
-    offset = (u64) bpf_map_lookup_elem(&offsets, &offset);
-    if (!offset) goto PwdRead;
+
+    SET_OFFSET(CRC_QSTR_NAME);
     u32 name = qstr_len + *(u32*) offset; // offset to name char ptr within qstr of dentry
-    offset = CRC_DENTRY_D_PARENT;
-    offset = (u64) bpf_map_lookup_elem(&offsets, &offset);
-    if (!offset) goto PwdRead;
+
+    SET_OFFSET(CRC_DENTRY_D_PARENT);
     u32 parent = *(u32*) offset; // offset of d_parent
-    offset = CRC_QSTR_LEN;
-    offset = (u64) bpf_map_lookup_elem(&offsets, &offset);
-    if (!offset) goto PwdRead;
-    qstr_len = qstr_len + *(u32*)offset;
+
+    SET_OFFSET(CRC_QSTR_LEN);
+    qstr_len = qstr_len + *(u32*)offset; // offset of qstr length within qstr of dentry
+
     u32 temp = 0;
     SEND_PATH_N(9);
     bpf_tail_call(ctx, &tail_call_table, SYS_EXECVE_4_8);
 
-PwdRead:;
+Skip:
 Exit:
     ev->id = id;
     return ev;
@@ -2052,8 +2023,6 @@ int kretprobe__ret_sys_execve_4_8(struct pt_regs *ctx)
 {
     GET_OFFSETS_4_8_RET_EXEC;
     return exit_exec(ctx, i_rdev, i_ino);
-Skip:;
-    return -1;
 }
 
 SEC("kretprobe/ret_sys_execveat_4_8")
@@ -2061,8 +2030,6 @@ int kretprobe__ret_sys_execveat_4_8(struct pt_regs *ctx)
 {
     GET_OFFSETS_4_8_RET_EXEC;
     return exit_exec(ctx, i_rdev, i_ino);
-Skip:;
-    return -1;
 }
 
 static __always_inline int enter_clone(syscall_pattern_type_t sp, unsigned long flags,
