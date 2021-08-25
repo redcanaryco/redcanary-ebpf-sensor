@@ -10,7 +10,6 @@
 #include <uapi/linux/in.h>
 #include <linux/uio.h>
 #include <linux/fcntl.h>
-#include <net/sock.h>
 #include "bpf_helpers.h"
 #include "types.h"
 #include "offsets.h"
