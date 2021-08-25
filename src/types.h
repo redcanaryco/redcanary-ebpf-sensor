@@ -3,6 +3,7 @@
 #pragma once
 
 #include <linux/types.h>
+#include <linux/limits.h>
 
 #define MAX_ADDRESSES 16
 #define TRUE 1
@@ -28,7 +29,7 @@ struct in6_addr
  * This number was determined experimentally, setting it higher will exceed
  * the BPF 512 byte stack limit.
  */
-#define VALUE_SIZE 176
+#define VALUE_SIZE 144UL
 
 typedef enum
 {
@@ -97,6 +98,8 @@ typedef enum
     TE_CLONE3_INFO,
     TE_UNSHARE_FLAGS,
     TE_EXIT_STATUS,
+    TE_EXEC_FILENAME,
+    TE_PWD,
 } telemetry_event_type_t;
 
 #define COMMON_FIELDS \
@@ -194,6 +197,15 @@ typedef struct
     COMMON_FIELDS;
     char value[384];
 } read_return_string_event_t;
+
+
+#ifndef MAJOR
+#define MAJOR(dev)	((dev)>>8)
+#endif
+
+#ifndef MINOR
+#define MINOR(dev)	((dev) & 0xff)
+#endif
 
 typedef struct
 {
@@ -340,3 +352,15 @@ struct clone_args
     // version 3
     __aligned_u64 cgroup;
 };
+
+typedef enum {
+    SYS_EXECVE_4_8,
+    SYS_EXECVEAT_4_8,
+    SYS_EXEC_TC_ARGV,
+    SYS_EXEC_TC_ENVP,
+    RET_SYS_EXECVE,
+    RET_SYS_CLONE,
+    RET_SYS_CLONE3,
+    RET_SYS_UNSHARE,
+    RET_SYS_EXIT,
+} tail_call_slot_t;

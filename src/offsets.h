@@ -43,6 +43,21 @@ const u64 CRC_INODE_I_RDEV = 0x51b3c613c3a6c688;
 /* inode->i_ino */
 const u64 CRC_INODE_I_INO = 0xa9a6f8a386ba140e;
 
+/* inode->fs */
+const u64 CRC_INODE_FS = 0x61ac74b5c543f248;
+
+/* task_struct->fs */
+const u64 CRC_TASK_STRUCT_FS = 0x7e927c27fc9f401f;
+
+/* fs_struct->pwd */
+const u64 CRC_FS_STRUCT_PWD = 0xc5d27f658a888649;
+
+/* dentry->d_parent */
+const u64 CRC_DENTRY_D_PARENT = 0x7f8acf45f8bb14fa;
+
+/* qstr->len */
+const u64 CRC_QSTR_LEN = 0xce592db861f9588;
+
 /* sk_buff->head */
 const u64 CRC_SKBUFF_HEAD = 0xffd66a9e550dcbac;
 
