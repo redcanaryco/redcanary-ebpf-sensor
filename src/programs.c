@@ -5,11 +5,11 @@
 #include <linux/version.h>
 #include <uapi/linux/bpf.h>
 #include <uapi/linux/ipv6.h>
-#include <linux/uio.h>
-#include <linux/fcntl.h>
-#include <linux/skbuff.h>
 #include <uapi/linux/udp.h>
 #include <uapi/linux/ip.h>
+#include <uapi/linux/in.h>
+#include <linux/uio.h>
+#include <linux/fcntl.h>
 #include <net/sock.h>
 #include "bpf_helpers.h"
 #include "types.h"
@@ -29,6 +29,9 @@ typedef struct
     void *iov_base; /* Starting address */
     size_t iov_len; /* Number of bytes to transfer */
 } iovec_t, *piovec_t;
+
+typedef void * _skbuff;
+typedef void * _sock;
 
 /*
 ***** MAPS
@@ -1457,7 +1460,7 @@ Flush:
 SEC("kprobe/tcp_v4_connect")
 int kprobe__tcp_v4_connect(struct pt_regs *ctx)
 {
-    struct sock *sk = (struct sock *)PT_REGS_PARM1(ctx);
+    _sock sk = (_sock )PT_REGS_PARM1(ctx);
     u32 index = (u32)bpf_get_current_pid_tgid();
 
     bpf_map_update_elem(&tcpv4_connect, &index, &sk, BPF_ANY);
@@ -1468,7 +1471,7 @@ int kprobe__tcp_v4_connect(struct pt_regs *ctx)
 SEC("kprobe/ip_local_out")
 int kprobe__ip_local_out(struct pt_regs *ctx)
 {
-    struct sk_buff *sk = (struct sk_buff *)PT_REGS_PARM3(ctx);
+    _skbuff sk = (_skbuff )PT_REGS_PARM3(ctx);
     u32 index = (u32)bpf_get_current_pid_tgid();
 
     bpf_map_update_elem(&udpv4_sendmsg_map, &index, &sk, BPF_ANY);
@@ -1479,7 +1482,7 @@ int kprobe__ip_local_out(struct pt_regs *ctx)
 SEC("kprobe/ip6_local_out")
 int kprobe__ip6_local_out(struct pt_regs *ctx)
 {
-    struct sk_buff *sk = (struct sk_buff *)PT_REGS_PARM3(ctx);
+    _skbuff sk = (_skbuff )PT_REGS_PARM3(ctx);
     u32 index = (u32)bpf_get_current_pid_tgid();
 
     bpf_map_update_elem(&udpv6_sendmsg_map, &index, &sk, BPF_ANY);
@@ -1490,7 +1493,7 @@ int kprobe__ip6_local_out(struct pt_regs *ctx)
 SEC("kprobe/tcp_v6_connect")
 int kprobe__tcp_v6_connect(struct pt_regs *ctx)
 {
-    struct sock *sk = (struct sock *)PT_REGS_PARM1(ctx);
+    _sock sk = (_sock )PT_REGS_PARM1(ctx);
     u32 index = (u32)bpf_get_current_pid_tgid();
 
     bpf_map_update_elem(&tcpv6_connect, &index, &sk, BPF_ANY);
@@ -1506,7 +1509,7 @@ int kretprobe__ret_ip6_local_out(struct pt_regs *ctx)
     unsigned short transport_header = 0;
     unsigned short network_header = 0;
     unsigned char proto = 0;
-    struct sk_buff **skpp;
+    _skbuff *skpp;
 
     int ret = PT_REGS_RC(ctx);
     if (ret < 0)
@@ -1681,7 +1684,7 @@ int kretprobe__ret_tcp_v4_connect(struct pt_regs *ctx)
 
     // Get current pid
     u32 index = (u32)bpf_get_current_pid_tgid();
-    struct sock **skpp;
+    _sock *skpp;
 
     // Lookup the corresponding *sk that we saved when tcp_v4_connect was called
     skpp = bpf_map_lookup_elem(&tcpv4_connect, &index);
@@ -1691,7 +1694,7 @@ int kretprobe__ret_tcp_v4_connect(struct pt_regs *ctx)
     }
 
     // Deref
-    struct sock *skp = *skpp;
+    _sock skp = *skpp;
     unsigned char *skp_base = (unsigned char *)skp;
     if (skp_base == NULL)
     {
@@ -1745,7 +1748,7 @@ int kretprobe__ret___skb_recv_udp(struct pt_regs *ctx)
     // // Get current pid
     u32 index = (u32)bpf_get_current_pid_tgid();
 
-    struct sk_buff *skb = (struct sk_buff *)PT_REGS_RC_CORE(ctx);
+    _skbuff skb = (_skbuff )PT_REGS_RC_CORE(ctx);
     unsigned char *skbuff_base = (unsigned char *)skb;
 
     if (skbuff_base == NULL)
@@ -1841,7 +1844,7 @@ int kretprobe__ret_ip_local_out(struct pt_regs *ctx)
     unsigned short transport_header = 0;
     unsigned short network_header = 0;
     unsigned char proto = 0;
-    struct sk_buff **skpp;
+    _skbuff *skpp;
 
     int ret = PT_REGS_RC(ctx);
     if (ret < 0)
@@ -1874,7 +1877,7 @@ int kretprobe__ret_ip_local_out(struct pt_regs *ctx)
         return 0;
     }
 
-    struct sk_buff *skp = *skpp;
+    _skbuff skp = *skpp;
     unsigned char *skbuff_base = (unsigned char *)skp;
     if (skbuff_base == NULL)
     {
@@ -1960,7 +1963,7 @@ int kretprobe__ret_tcp_v6_connect(struct pt_regs *ctx)
 
     // Get current pid
     u32 index = (u32)bpf_get_current_pid_tgid();
-    struct sock **skpp;
+    _sock *skpp;
 
     skpp = bpf_map_lookup_elem(&tcpv6_connect, &index);
     if (skpp == 0)
@@ -1969,7 +1972,7 @@ int kretprobe__ret_tcp_v6_connect(struct pt_regs *ctx)
     }
 
     // Deref
-    struct sock *skp = *skpp;
+    _sock skp = *skpp;
     unsigned char *skp_base = (unsigned char *)skp;
     if (skp_base == NULL)
     {
