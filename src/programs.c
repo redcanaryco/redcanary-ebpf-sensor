@@ -1211,7 +1211,6 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execve_4_11,
                        const char __user *const __user *argv,
                        const char __user *const __user *envp)
 {
-    bpf_printk("enter_exec_4_11\n");
     u32 ppid = -1;
     u32 luid = -1;
     const char __user *exe = NULL;
@@ -1268,7 +1267,6 @@ static __always_inline int exit_exec(struct pt_regs *__ctx, u32 i_rdev, u64 i_in
     if (!id)
         goto Flush;
 
-    bpf_printk("got id\n");
     ptelemetry_event_t ev = &(telemetry_event_t) {
             .id = 0,
             .done = FALSE,
@@ -1288,20 +1286,17 @@ static __always_inline int exit_exec(struct pt_regs *__ctx, u32 i_rdev, u64 i_in
         .value[0] = '\0',
     };
 
-    bpf_printk("te_file_info\n");
     ev->telemetry_type = TE_FILE_INFO;
     __builtin_memcpy(&ev->u.file_info, &fi, sizeof(fi));
     push_telemetry_event(__ctx, ev);
 
     ev->id = *id;
     ev->done = TRUE;
-    bpf_printk("te_retcode\n");
     ev->telemetry_type = TE_RETCODE;
     ev->u.retcode = (u32)PT_REGS_RC(__ctx);
     push_telemetry_event(__ctx, ev);
 
 Flush:
-    bpf_printk("flushing exec\n");
     return 0;
 }
 
@@ -1872,7 +1867,6 @@ int kretprobe__ret_sys_execveat(struct pt_regs *ctx)
 SEC("kretprobe/ret_sys_execve_4_8")
 int kretprobe__ret_sys_execve_4_8(struct pt_regs *ctx)
 {
-    bpf_printk("ret_sys_execve_4_8\n");
     GET_OFFSETS_4_8_RET_EXEC;
     return exit_exec(ctx, i_rdev, i_ino);
 }
@@ -1880,7 +1874,6 @@ int kretprobe__ret_sys_execve_4_8(struct pt_regs *ctx)
 SEC("kretprobe/ret_sys_execveat_4_8")
 int kretprobe__ret_sys_execveat_4_8(struct pt_regs *ctx)
 {
-    bpf_printk("ret_sys_execveat_4_8\n");
     GET_OFFSETS_4_8_RET_EXEC;
     return exit_exec(ctx, i_rdev, i_ino);
 }
