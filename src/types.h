@@ -198,13 +198,12 @@ typedef struct
     char value[384];
 } read_return_string_event_t;
 
-
 #ifndef MAJOR
-#define MAJOR(dev)	((dev)>>8)
+#define MAJOR(dev) ((dev) >> 8)
 #endif
 
 #ifndef MINOR
-#define MINOR(dev)	((dev) & 0xff)
+#define MINOR(dev) ((dev)&0xff)
 #endif
 
 typedef struct
@@ -250,36 +249,20 @@ typedef struct
     enum direction_t direction;  // inbound or outbound
     struct process_data process; // pid and comm string
     u64 mono_ns;                 // Timestamp
+    u16 dest_port;
+    u16 src_port;
     union
     {
         struct
         {
-            u16 dest_port;
-            u16 src_port;
             __be32 dest_addr;
             __be32 src_addr;
-        } tcpv4;
+        } ipv4;
         struct
         {
-            u16 dest_port;
-            u16 src_port;
             struct in6_addr dest_addr;
             struct in6_addr src_addr;
-        } tcpv6;
-        struct
-        {
-            u16 dest_port;
-            u16 src_port;
-            __be32 dest_addr;
-            __be32 src_addr;
-        } udpv4;
-        struct
-        {
-            u16 dest_port;
-            u16 src_port;
-            struct in6_addr dest_addr;
-            struct in6_addr src_addr;
-        } udpv6;
+        } ipv6;
     } protos;
 } network_info_t, *pnetwork_info_t;
 
@@ -353,7 +336,8 @@ struct clone_args
     __aligned_u64 cgroup;
 };
 
-typedef enum {
+typedef enum
+{
     SYS_EXECVE_4_8,
     SYS_EXECVEAT_4_8,
     SYS_EXEC_TC_ARGV,
