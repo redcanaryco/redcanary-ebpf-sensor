@@ -356,17 +356,9 @@ static __always_inline syscall_pattern_type_t ptrace_syscall_pattern(u32 request
     if (ts && offset)                                                                                   \
     {                                                                                                   \
         read_value(ts, CRC_TASK_STRUCT_REAL_PARENT, &ptr, sizeof(ptr));                                 \
-        if (!ptr)                                                                                       \
-            goto Skip;                                                                                  \
         read_value(ptr, CRC_TASK_STRUCT_PID, &ppid, sizeof(ppid));                                      \
-        if (!ppid)                                                                                      \
-            goto Skip;                                                                                  \
         read_value(ts, CRC_TASK_STRUCT_LOGINUID, &luid, sizeof(luid));                                  \
-        if (!luid)                                                                                      \
-            goto Skip;                                                                                  \
         read_value(ts, CRC_TASK_STRUCT_MM, &ptr, sizeof(ptr));                                          \
-        if (!ptr)                                                                                       \
-            goto Skip;                                                                                  \
         read_value(ptr, CRC_MM_STRUCT_EXE_FILE, &ptr, sizeof(ptr));                                     \
         SET_OFFSET(CRC_FILE_F_PATH);                                                                    \
         ptr = ptr + *(u32 *)offset; /* ptr to f_path */                                                 \
@@ -374,11 +366,7 @@ static __always_inline syscall_pattern_type_t ptrace_syscall_pattern(u32 request
         SET_OFFSET(CRC_DENTRY_D_NAME);                                                                  \
         ptr = ptr + *(u32 *)offset; /* ptr to d_name */                                                 \
         read_value(ptr, CRC_QSTR_LEN, &length, sizeof(length));                                         \
-        if (!length)                                                                                    \
-            goto Skip;                                                                                  \
         read_value(ptr, CRC_QSTR_NAME, &exe, sizeof(exe));                                              \
-        if (!exe)                                                                                       \
-            goto Skip;                                                                                  \
     }
 
 /**
@@ -386,6 +374,10 @@ static __always_inline syscall_pattern_type_t ptrace_syscall_pattern(u32 request
  */
 static __always_inline int read_value(void *base, u64 offset, void *dest, size_t dest_size)
 {
+    /* null check the base pointer first */
+    if (!base)
+        return -1;
+
     u64 _offset = (u64)bpf_map_lookup_elem(&offsets, &offset);
     if (_offset)
     {
