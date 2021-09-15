@@ -978,7 +978,7 @@ static __always_inline int enter_exec(syscall_pattern_type_t sp, int fd,
     return 0;
 }
 
-static __always_inline ptelemetry_event_t enter_exec_4_8(syscall_pattern_type_t sp, int fd,
+static __always_inline ptelemetry_event_t enter_exec_4_11(syscall_pattern_type_t sp, int fd,
                                                          const char __user *filename,
                                                          const char __user *const __user *argv,
                                                          const char __user *const __user *envp,
@@ -1140,42 +1140,6 @@ Next:;
     return 0;
 }
 
-SEC("kprobe/sys_execveat_4_8")
-int BPF_KPROBE_SYSCALL(kprobe__sys_execveat_4_8,
-                       int fd, const char __user *filename,
-                       const char __user *const __user *argv,
-                       const char __user *const __user *envp,
-                       int flags)
-{
-    u32 ppid = -1;
-    u32 luid = -1;
-    const char __user *exe = NULL;
-    u32 length = -1;
-    // inode->i_rdev, inode->i_ino
-    GET_OFFSETS_4_8;
-    enter_exec_4_8(SP_EXECVEAT, fd, filename, argv, envp, flags, ctx, ppid, luid, exe, length);
-
-Skip:
-    return -1;
-}
-
-SEC("kprobe/sys_execve_4_8")
-int BPF_KPROBE_SYSCALL(kprobe__sys_execve_4_8,
-                       const char __user *filename,
-                       const char __user *const __user *argv,
-                       const char __user *const __user *envp)
-{
-    u32 ppid = -1;
-    u32 luid = -1;
-    const char __user *exe = NULL;
-    u32 length = -1;
-    GET_OFFSETS_4_8;
-    enter_exec_4_8(SP_EXECVE, AT_FDCWD, filename, argv, envp, 0, ctx, ppid, luid, exe, length);
-
-Skip:
-    return -1;
-}
-
 SEC("kprobe/sys_execveat_4_11")
 int BPF_KPROBE_SYSCALL(kprobe__sys_execveat_4_11,
                        int fd, const char __user *filename,
@@ -1189,7 +1153,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execveat_4_11,
     u32 length = -1;
     // inode->i_rdev, inode->i_ino
     GET_OFFSETS_4_8;
-    ptelemetry_event_t ev = enter_exec_4_8(SP_EXECVEAT, fd, filename, argv, envp, flags, ctx, ppid, luid, exe, length);
+    ptelemetry_event_t ev = enter_exec_4_11(SP_EXECVEAT, fd, filename, argv, envp, flags, ctx, ppid, luid, exe, length);
 
     if (!filename)
         goto Skip;
@@ -1224,7 +1188,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execve_4_11,
     const char __user *exe = NULL;
     u32 length = -1;
     GET_OFFSETS_4_8;
-    ptelemetry_event_t ev = enter_exec_4_8(SP_EXECVE, AT_FDCWD, filename, argv, envp, 0, ctx, ppid, luid, exe, length);
+    ptelemetry_event_t ev = enter_exec_4_11(SP_EXECVE, AT_FDCWD, filename, argv, envp, 0, ctx, ppid, luid, exe, length);
 
     if (!filename)
         goto Skip;
