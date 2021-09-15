@@ -914,14 +914,6 @@ static __always_inline void push_telemetry_event(struct pt_regs *ctx, ptelemetry
 
 #define READ_VALUE_N(EV, T, S, N) REPEAT_##N(READ_VALUE(EV, T, S);)
 
-#define UNROLL_COUNT_N(N) REPEAT_##N(UNROLL_COUNT(N))
-
-// On older kernels we can't perform variable probe reads
-// or make variable assignments on the stack. This is the workaround.
-#define UNROLL_COUNT(N)                                     \
-    if (temp == N)                                          \
-        bpf_probe_read(&ev->u.v.value, N, (void *)offset);  \
-
 #define SEND_PATH                                              \
     ev->id = id;                                               \
     ev->done = FALSE;                                          \
@@ -933,13 +925,8 @@ static __always_inline void push_telemetry_event(struct pt_regs *ctx, ptelemetry
             goto Skip;                                         \
         bpf_probe_read(&count, sizeof(count), ptr + qstr_len); \
     }                                                          \
-    temp = 0;                                                  \
     __builtin_memset(&ev->u.v.value, 0, VALUE_SIZE);           \
-    if (count > (VALUE_SIZE - 1))                              \
-        temp = VALUE_SIZE - 1;                                 \
-    else                                                       \
-        temp = count;                                          \
-    UNROLL_COUNT(VALUE_SIZE);                                  \
+    bpf_probe_read_str(&ev->u.v.value, VALUE_SIZE, (void *)offset); \
     br = ev->u.v.value[0];                                     \
     if (count > VALUE_SIZE)                                    \
     {                                                          \
@@ -1056,7 +1043,6 @@ Pwd:;
     SET_OFFSET(CRC_QSTR_LEN);
     qstr_len = qstr_len + *(u32 *)offset; // offset of qstr length within qstr of dentry
 
-    u32 temp = 0;
     SEND_PATH_N(9);
     bpf_tail_call(ctx, &tail_call_table, SYS_EXECVE_4_8);
 
