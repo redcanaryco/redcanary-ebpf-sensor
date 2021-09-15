@@ -914,6 +914,14 @@ static __always_inline void push_telemetry_event(struct pt_regs *ctx, ptelemetry
 
 #define READ_VALUE_N(EV, T, S, N) REPEAT_##N(READ_VALUE(EV, T, S);)
 
+#define UNROLL_COUNT_N(N) REPEAT_##N(UNROLL_COUNT(N))
+
+// On older kernels we can't perform variable probe reads
+// or make variable assignments on the stack. This is the workaround.
+#define UNROLL_COUNT(N)                                     \
+    if (temp == N)                                          \
+        bpf_probe_read(&ev->u.v.value, N, (void *)offset);  \
+
 #define SEND_PATH                                              \
     ev->id = id;                                               \
     ev->done = FALSE;                                          \
@@ -931,7 +939,7 @@ static __always_inline void push_telemetry_event(struct pt_regs *ctx, ptelemetry
         temp = VALUE_SIZE - 1;                                 \
     else                                                       \
         temp = count;                                          \
-    bpf_probe_read(&ev->u.v.value, temp, (void *)offset);      \
+    UNROLL_COUNT(VALUE_SIZE);                                  \
     br = ev->u.v.value[0];                                     \
     if (count > VALUE_SIZE)                                    \
     {                                                          \
