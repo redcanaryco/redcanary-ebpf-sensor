@@ -2168,8 +2168,6 @@ int kretprobe__ret_sys_clone3(struct pt_regs *ctx)
 SEC("kretprobe/ret_copy_process")
 int kretprobe__ret_copy_process(struct pt_regs *ctx)
 {
-    bpf_printk("ret_copy_process firing\n");
-
     // get new current
     void *ts = (void *)PT_REGS_RC(ctx);
 
@@ -2179,7 +2177,6 @@ int kretprobe__ret_copy_process(struct pt_regs *ctx)
     read_value(ts, CRC_TASK_STRUCT_PID, &pid, sizeof(pid));
     read_value(ts, CRC_TASK_STRUCT_TGID, &tgid, sizeof(tgid));
     u64 pid_tgid = (u64) tgid << 32 | pid;
-    bpf_printk("current: %d\n", pid_tgid >> 32);
 
     // get the real parent
     read_value(ts, CRC_TASK_STRUCT_REAL_PARENT, &ts, sizeof(ts));
@@ -2192,12 +2189,9 @@ int kretprobe__ret_copy_process(struct pt_regs *ctx)
     // ts->real_parent->tgid
     read_value(ts, CRC_TASK_STRUCT_TGID, &ptgid, sizeof(ptgid));
 
-    bpf_printk("parent: %d\n", ptgid);
-
     // combine to find ID, get ID
     u64 ppid_tgid = (u64) ptgid << 32 | ppid;
     u64 *id = bpf_map_lookup_elem(&telemetry_ids, &ppid_tgid);
-    bpf_printk("id: %d\n", id);
 
     // send event with ID
     ptelemetry_event_t ev = &(telemetry_event_t){
