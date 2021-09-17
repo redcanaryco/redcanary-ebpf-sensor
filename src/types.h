@@ -314,7 +314,11 @@ typedef struct
             char value[VALUE_SIZE];
             char truncated;
         } v;
-        u64 retcode;
+        struct
+        {
+            u64 pid_tgid;
+            u64 retcode;
+        } r;
     } u;
 } telemetry_event_t, *ptelemetry_event_t;
 
