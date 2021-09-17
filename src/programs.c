@@ -914,47 +914,40 @@ static __always_inline void push_telemetry_event(struct pt_regs *ctx, ptelemetry
 
 #define READ_VALUE_N(EV, T, S, N) REPEAT_##N(READ_VALUE(EV, T, S);)
 
-#define SEND_PATH                                              \
-    ev->id = id;                                               \
-    ev->done = FALSE;                                          \
-    ev->telemetry_type = TE_PWD;                               \
-    if (br == 0)                                               \
-    {                                                          \
-        bpf_probe_read(&offset, sizeof(offset), ptr + name);   \
-        if (!offset)                                           \
-            goto Skip;                                         \
-        bpf_probe_read(&count, sizeof(count), ptr + qstr_len); \
-    }                                                          \
-    temp = 0;                                                  \
-    __builtin_memset(&ev->u.v.value, 0, VALUE_SIZE);           \
-    if (count > (VALUE_SIZE - 1))                              \
-        temp = VALUE_SIZE - 1;                                 \
-    else                                                       \
-        temp = count;                                          \
-    bpf_probe_read(&ev->u.v.value, temp, (void *)offset);      \
-    br = ev->u.v.value[0];                                     \
-    if (count > VALUE_SIZE)                                    \
-    {                                                          \
-        br = 1;                                                \
-        ev->u.v.truncated = TRUE;                              \
-        offset = offset + VALUE_SIZE;                          \
-        count = count - VALUE_SIZE;                            \
-        push_telemetry_event(ctx, ev);                         \
-    }                                                          \
-    else                                                       \
-    {                                                          \
-        if (count != 0)                                        \
-        {                                                      \
-            ev->u.v.truncated = FALSE;                         \
-            push_telemetry_event(ctx, ev);                     \
-        }                                                      \
-        /* we're done here, follow the pointer */              \
-        bpf_probe_read(&ptr, sizeof(ptr), ptr + parent);       \
-        if (!ptr)                                              \
-            goto Skip;                                         \
-        if (br == '/')                                         \
-            goto Skip;                                         \
-        br = 0;                                                \
+#define SEND_PATH                                                           \
+    ev->id = id;                                                            \
+    ev->done = FALSE;                                                       \
+    ev->telemetry_type = TE_PWD;                                            \
+    if (br == 0)                                                            \
+    {                                                                       \
+        bpf_probe_read(&offset, sizeof(offset), ptr + name);                \
+        if (!offset)                                                        \
+            goto Skip;                                                      \
+    }                                                                       \
+    __builtin_memset(&ev->u.v.value, 0, VALUE_SIZE);                        \
+    count = bpf_probe_read_str(&ev->u.v.value, VALUE_SIZE, (void *)offset); \
+    br = ev->u.v.value[0];                                                  \
+    if (count >= VALUE_SIZE)                                                \
+    {                                                                       \
+        br = 1;                                                             \
+        ev->u.v.truncated = TRUE;                                           \
+        offset = offset + VALUE_SIZE;                                       \
+        push_telemetry_event(ctx, ev);                                      \
+    }                                                                       \
+    else                                                                    \
+    {                                                                       \
+        if (count > 0)                                                      \
+        {                                                                   \
+            ev->u.v.truncated = FALSE;                                      \
+            push_telemetry_event(ctx, ev);                                  \
+        }                                                                   \
+        /* we're done here, follow the pointer */                           \
+        bpf_probe_read(&ptr, sizeof(ptr), ptr + parent);                    \
+        if (!ptr)                                                           \
+            goto Skip;                                                      \
+        if (br == '/')                                                      \
+            goto Skip;                                                      \
+        br = 0;                                                             \
     }
 
 #define SEND_PATH_N(N) REPEAT_##N(SEND_PATH;)
@@ -985,7 +978,7 @@ static __always_inline int enter_exec(syscall_pattern_type_t sp, int fd,
     return 0;
 }
 
-static __always_inline ptelemetry_event_t enter_exec_4_8(syscall_pattern_type_t sp, int fd,
+static __always_inline ptelemetry_event_t enter_exec_4_11(syscall_pattern_type_t sp, int fd,
                                                          const char __user *filename,
                                                          const char __user *const __user *argv,
                                                          const char __user *const __user *envp,
@@ -1045,10 +1038,6 @@ Pwd:;
     SET_OFFSET(CRC_DENTRY_D_PARENT);
     u32 parent = *(u32 *)offset; // offset of d_parent
 
-    SET_OFFSET(CRC_QSTR_LEN);
-    qstr_len = qstr_len + *(u32 *)offset; // offset of qstr length within qstr of dentry
-
-    u32 temp = 0;
     SEND_PATH_N(9);
     bpf_tail_call(ctx, &tail_call_table, SYS_EXECVE_4_8);
 
@@ -1151,42 +1140,6 @@ Next:;
     return 0;
 }
 
-SEC("kprobe/sys_execveat_4_8")
-int BPF_KPROBE_SYSCALL(kprobe__sys_execveat_4_8,
-                       int fd, const char __user *filename,
-                       const char __user *const __user *argv,
-                       const char __user *const __user *envp,
-                       int flags)
-{
-    u32 ppid = -1;
-    u32 luid = -1;
-    const char __user *exe = NULL;
-    u32 length = -1;
-    // inode->i_rdev, inode->i_ino
-    GET_OFFSETS_4_8;
-    enter_exec_4_8(SP_EXECVEAT, fd, filename, argv, envp, flags, ctx, ppid, luid, exe, length);
-
-Skip:
-    return -1;
-}
-
-SEC("kprobe/sys_execve_4_8")
-int BPF_KPROBE_SYSCALL(kprobe__sys_execve_4_8,
-                       const char __user *filename,
-                       const char __user *const __user *argv,
-                       const char __user *const __user *envp)
-{
-    u32 ppid = -1;
-    u32 luid = -1;
-    const char __user *exe = NULL;
-    u32 length = -1;
-    GET_OFFSETS_4_8;
-    enter_exec_4_8(SP_EXECVE, AT_FDCWD, filename, argv, envp, 0, ctx, ppid, luid, exe, length);
-
-Skip:
-    return -1;
-}
-
 SEC("kprobe/sys_execveat_4_11")
 int BPF_KPROBE_SYSCALL(kprobe__sys_execveat_4_11,
                        int fd, const char __user *filename,
@@ -1200,7 +1153,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execveat_4_11,
     u32 length = -1;
     // inode->i_rdev, inode->i_ino
     GET_OFFSETS_4_8;
-    ptelemetry_event_t ev = enter_exec_4_8(SP_EXECVEAT, fd, filename, argv, envp, flags, ctx, ppid, luid, exe, length);
+    ptelemetry_event_t ev = enter_exec_4_11(SP_EXECVEAT, fd, filename, argv, envp, flags, ctx, ppid, luid, exe, length);
 
     if (!filename)
         goto Skip;
@@ -1235,7 +1188,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execve_4_11,
     const char __user *exe = NULL;
     u32 length = -1;
     GET_OFFSETS_4_8;
-    ptelemetry_event_t ev = enter_exec_4_8(SP_EXECVE, AT_FDCWD, filename, argv, envp, 0, ctx, ppid, luid, exe, length);
+    ptelemetry_event_t ev = enter_exec_4_11(SP_EXECVE, AT_FDCWD, filename, argv, envp, 0, ctx, ppid, luid, exe, length);
 
     if (!filename)
         goto Skip;
