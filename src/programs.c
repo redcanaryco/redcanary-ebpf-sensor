@@ -2165,11 +2165,11 @@ int kretprobe__ret_sys_clone3(struct pt_regs *ctx)
     return exit_clone3(ctx);
 }
 
-SEC("kretprobe/ret_copy_process")
-int kretprobe__ret_copy_process(struct pt_regs *ctx)
+SEC("kprobe/uprobe_copy_process")
+int kprobe__uprobe_copy_process(struct pt_regs *ctx)
 {
     // get new current
-    void *ts = (void *)PT_REGS_RC(ctx);
+    void *ts = (void *)PT_REGS_PARM1(ctx);
 
     // get the true pid
     u32 pid = 0;
