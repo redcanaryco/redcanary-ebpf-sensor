@@ -1265,7 +1265,7 @@ static __always_inline int exit_exec(struct pt_regs *__ctx, u32 i_rdev, u64 i_in
     ev->id = *id;
     ev->done = TRUE;
     ev->telemetry_type = TE_RETCODE;
-    ev->u.retcode = (u32)PT_REGS_RC(__ctx);
+    ev->u.r.retcode = (u32)PT_REGS_RC(__ctx);
     push_telemetry_event(__ctx, ev);
 
 Flush:
@@ -1947,13 +1947,6 @@ static __always_inline int exit_clone(struct pt_regs *ctx)
     ev->u.clone_info = clone_info;
     push_telemetry_event(ctx, ev);
 
-    ev->id = *id;
-    bpf_map_delete_elem(&telemetry_ids, &pid_tgid);
-    ev->done = TRUE;
-    ev->telemetry_type = TE_RETCODE;
-    ev->u.retcode = (u32)PT_REGS_RC(ctx);
-    push_telemetry_event(ctx, ev);
-
 Flush:
     return 0;
 }
@@ -2100,13 +2093,6 @@ static __always_inline int exit_clone3(struct pt_regs *ctx)
     ev->u.clone3_info = clone_info;
     push_telemetry_event(ctx, ev);
 
-    ev->id = *id;
-    bpf_map_delete_elem(&telemetry_ids, &pid_tgid);
-    ev->done = TRUE;
-    ev->telemetry_type = TE_RETCODE;
-    ev->u.retcode = (u32)PT_REGS_RC(ctx);
-    push_telemetry_event(ctx, ev);
-
 Flush:
     return 0;
 }
@@ -2129,6 +2115,60 @@ SEC("kretprobe/ret_sys_clone3")
 int kretprobe__ret_sys_clone3(struct pt_regs *ctx)
 {
     return exit_clone3(ctx);
+}
+
+// This probe can generically read the pid from a task_struct at any point
+// where the first argument is a pointer to a task_struct, the event emit
+// is a RETCODE with the correct PID, intended for use with tracing fork,
+// clone, etc.
+SEC("kprobe/read_pid_task_struct")
+int kprobe__read_pid_task_struct(struct pt_regs *ctx)
+{
+    // get new current
+    void *ts = (void *)PT_REGS_PARM1(ctx);
+
+    // get the true pid
+    u32 pid = 0;
+    u32 tgid = 0;
+    read_value(ts, CRC_TASK_STRUCT_PID, &pid, sizeof(pid));
+    read_value(ts, CRC_TASK_STRUCT_TGID, &tgid, sizeof(tgid));
+    u64 pid_tgid = (u64) tgid << 32 | pid;
+
+    // get the real parent
+    read_value(ts, CRC_TASK_STRUCT_REAL_PARENT, &ts, sizeof(ts));
+    u32 ppid = 0;
+    u32 ptgid = 0;
+
+    // find ppid and ptid (offsets)
+    // ts->real_parent->pid
+    read_value(ts, CRC_TASK_STRUCT_PID, &ppid, sizeof(ppid));
+    // ts->real_parent->tgid
+    read_value(ts, CRC_TASK_STRUCT_TGID, &ptgid, sizeof(ptgid));
+
+    // combine to find ID, get ID
+    u64 ppid_tgid = (u64) ptgid << 32 | ppid;
+    u64 *id = bpf_map_lookup_elem(&telemetry_ids, &ppid_tgid);
+
+    if (!id)
+        return -1;
+
+    // send event with ID
+    ptelemetry_event_t ev = &(telemetry_event_t){
+        .id = 0,
+        .done = TRUE,
+        .telemetry_type = 0,
+        .u.v = {
+                .value[0] = '\0',
+                .truncated = FALSE,
+                },
+        };
+
+    ev->id = *id;
+    bpf_map_delete_elem(&telemetry_ids, &ppid_tgid);
+    ev->telemetry_type = TE_RETCODE;
+    ev->u.r.pid_tgid = pid_tgid;
+    push_telemetry_event(ctx, ev);
+    return 0;
 }
 
 SEC("kprobe/sys_fork")
@@ -2251,7 +2291,7 @@ static __always_inline int exit_unshare(struct pt_regs *ctx)
     bpf_map_delete_elem(&telemetry_ids, &pid_tgid);
 
     ev->telemetry_type = TE_RETCODE;
-    ev->u.retcode = (u32)PT_REGS_RC(ctx);
+    ev->u.r.retcode = (u32)PT_REGS_RC(ctx);
     push_telemetry_event(ctx, ev);
 
 Flush:
@@ -2348,7 +2388,7 @@ static __always_inline int exit_exit(struct pt_regs *ctx)
     bpf_map_delete_elem(&telemetry_ids, &pid_tgid);
 
     ev->telemetry_type = TE_RETCODE;
-    ev->u.retcode = (u32)PT_REGS_RC(ctx);
+    ev->u.r.retcode = (u32)PT_REGS_RC(ctx);
     push_telemetry_event(ctx, ev);
 
 Flush:
