@@ -2165,8 +2165,12 @@ int kretprobe__ret_sys_clone3(struct pt_regs *ctx)
     return exit_clone3(ctx);
 }
 
-SEC("kprobe/uprobe_copy_process")
-int kprobe__uprobe_copy_process(struct pt_regs *ctx)
+// This probe can generically read the pid from a task_struct at any point
+// where the first argument is a pointer to a task_struct, the event emit
+// is a RETCODE with the correct PID, intended for use with tracing fork,
+// clone, etc.
+SEC("kprobe/read_pid_task_struct")
+int kprobe__read_pid_task_struct(struct pt_regs *ctx)
 {
     // get new current
     void *ts = (void *)PT_REGS_PARM1(ctx);
