@@ -2197,6 +2197,9 @@ int kprobe__read_pid_task_struct(struct pt_regs *ctx)
     u64 ppid_tgid = (u64) ptgid << 32 | ppid;
     u64 *id = bpf_map_lookup_elem(&telemetry_ids, &ppid_tgid);
 
+    if (!id)
+        return -1;
+
     // send event with ID
     ptelemetry_event_t ev = &(telemetry_event_t){
         .id = 0,
@@ -2207,9 +2210,6 @@ int kprobe__read_pid_task_struct(struct pt_regs *ctx)
                 .truncated = FALSE,
                 },
         };
-
-    if (!id)
-        return -1;
 
     ev->id = *id;
     bpf_map_delete_elem(&telemetry_ids, &ppid_tgid);
