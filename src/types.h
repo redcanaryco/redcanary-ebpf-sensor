@@ -314,7 +314,7 @@ typedef struct
             char value[VALUE_SIZE];
             char truncated;
         } v;
-        struct
+        union
         {
             u64 pid_tgid;
             u64 retcode;

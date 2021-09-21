@@ -1312,7 +1312,6 @@ static __always_inline int exit_exec(struct pt_regs *__ctx, u32 i_rdev, u64 i_in
     ev->id = *id;
     ev->done = TRUE;
     ev->telemetry_type = TE_RETCODE;
-    ev->u.r.pid_tgid = pid_tgid;
     ev->u.r.retcode = (u32)PT_REGS_RC(__ctx);
     push_telemetry_event(__ctx, ev);
 
@@ -2214,7 +2213,6 @@ int kprobe__read_pid_task_struct(struct pt_regs *ctx)
     ev->id = *id;
     bpf_map_delete_elem(&telemetry_ids, &ppid_tgid);
     ev->telemetry_type = TE_RETCODE;
-    ev->u.r.retcode = 0;
     ev->u.r.pid_tgid = pid_tgid;
     push_telemetry_event(ctx, ev);
     return 0;
@@ -2340,7 +2338,6 @@ static __always_inline int exit_unshare(struct pt_regs *ctx)
     bpf_map_delete_elem(&telemetry_ids, &pid_tgid);
 
     ev->telemetry_type = TE_RETCODE;
-    ev->u.r.pid_tgid = pid_tgid;
     ev->u.r.retcode = (u32)PT_REGS_RC(ctx);
     push_telemetry_event(ctx, ev);
 
@@ -2438,7 +2435,6 @@ static __always_inline int exit_exit(struct pt_regs *ctx)
     bpf_map_delete_elem(&telemetry_ids, &pid_tgid);
 
     ev->telemetry_type = TE_RETCODE;
-    ev->u.r.pid_tgid = pid_tgid;
     ev->u.r.retcode = (u32)PT_REGS_RC(ctx);
     push_telemetry_event(ctx, ev);
 
