@@ -161,15 +161,6 @@ struct bpf_map_def SEC("maps/tcpv4_connect") tcpv4_connect = {
     .namespace = "",
 };
 
-struct bpf_map_def SEC("maps/udpv4_outgoing_map") udpv4_outgoing_map = {
-    .type = BPF_MAP_TYPE_HASH,
-    .key_size = sizeof(u32),
-    .value_size = sizeof(size_t),
-    .max_entries = 1024,
-    .pinning = 0,
-    .namespace = "",
-};
-
 struct bpf_map_def SEC("maps/tcpv6_connect") tcpv6_connect = {
     .type = BPF_MAP_TYPE_HASH,
     .key_size = sizeof(u32),
@@ -179,16 +170,16 @@ struct bpf_map_def SEC("maps/tcpv6_connect") tcpv6_connect = {
     .namespace = "",
 };
 
-struct bpf_map_def SEC("maps/telemetry_ids") telemetry_ids = {
+struct bpf_map_def SEC("maps/udpv4_outgoing_map") udpv4_outgoing_map = {
     .type = BPF_MAP_TYPE_HASH,
-    .key_size = sizeof(u64),
-    .value_size = sizeof(u64),
+    .key_size = sizeof(u32),
+    .value_size = sizeof(size_t),
     .max_entries = 1024,
     .pinning = 0,
     .namespace = "",
 };
 
-struct bpf_map_def SEC("maps/udpv6_sendmsg_map") udpv6_sendmsg_map = {
+struct bpf_map_def SEC("maps/udpv6_outgoing_map") udpv6_outgoing_map = {
     .type = BPF_MAP_TYPE_HASH,
     .key_size = sizeof(u32),
     .value_size = sizeof(size_t),
@@ -210,6 +201,15 @@ struct bpf_map_def SEC("maps/udpv6_rcv_map") udpv6_rcv_map = {
     .type = BPF_MAP_TYPE_HASH,
     .key_size = sizeof(u32),
     .value_size = sizeof(size_t),
+    .max_entries = 1024,
+    .pinning = 0,
+    .namespace = "",
+};
+
+struct bpf_map_def SEC("maps/telemetry_ids") telemetry_ids = {
+    .type = BPF_MAP_TYPE_HASH,
+    .key_size = sizeof(u64),
+    .value_size = sizeof(u64),
     .max_entries = 1024,
     .pinning = 0,
     .namespace = "",
@@ -1329,7 +1329,7 @@ int kprobe__udp_v6_send_skb(struct pt_regs *ctx)
     _skbuff sk = (_skbuff)PT_REGS_PARM1(ctx);
     u32 index = (u32)bpf_get_current_pid_tgid();
 
-    bpf_map_update_elem(&udpv6_sendmsg_map, &index, &sk, BPF_ANY);
+    bpf_map_update_elem(&udpv6_outgoing_map, &index, &sk, BPF_ANY);
 
     return 0;
 }
@@ -1362,7 +1362,7 @@ int kprobe__ip6_local_out(struct pt_regs *ctx)
     _skbuff sk = (_skbuff)PT_REGS_PARM3(ctx);
     u32 index = (u32)bpf_get_current_pid_tgid();
 
-    bpf_map_update_elem(&udpv6_sendmsg_map, &index, &sk, BPF_ANY);
+    bpf_map_update_elem(&udpv6_outgoing_map, &index, &sk, BPF_ANY);
 
     return 0;
 }
@@ -1413,7 +1413,7 @@ int kretprobe__ret_udp_v6_send_skb(struct pt_regs *ctx)
     ev.u.network_info.process.pid = index;
 
     // Lookup the corresponding *sk that we saved when tcp_v4_connect was called
-    skpp = bpf_map_lookup_elem(&udpv6_sendmsg_map, &index);
+    skpp = bpf_map_lookup_elem(&udpv6_outgoing_map, &index);
     if (skpp == NULL)
     {
         return 0;
@@ -1513,7 +1513,7 @@ int kretprobe__ret_ip6_local_out(struct pt_regs *ctx)
     ev.u.network_info.process.pid = index;
 
     // Lookup the corresponding *sk that we saved when tcp_v4_connect was called
-    skpp = bpf_map_lookup_elem(&udpv6_sendmsg_map, &index);
+    skpp = bpf_map_lookup_elem(&udpv6_outgoing_map, &index);
     if (skpp == NULL)
     {
         return 0;
