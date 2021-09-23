@@ -1391,7 +1391,6 @@ int kretprobe__ret_udp_v6_send_skb(struct pt_regs *ctx)
     int ret = PT_REGS_RC(ctx);
     if (ret < 0)
     {
-        bpf_printk("Failed on ret: %d", ret);
         return 0;
     }
 
@@ -1417,14 +1416,12 @@ int kretprobe__ret_udp_v6_send_skb(struct pt_regs *ctx)
     skpp = bpf_map_lookup_elem(&udpv6_sendmsg_map, &index);
     if (skpp == NULL)
     {
-        bpf_printk("Failed to lookup skb *\n");
         return 0;
     }
 
     unsigned char *skbuff_base = (unsigned char *)*skpp;
     if (skbuff_base == NULL)
     {
-        bpf_printk("Failed to get base\n");
         return 0;
     }
 
@@ -1434,27 +1431,23 @@ int kretprobe__ret_udp_v6_send_skb(struct pt_regs *ctx)
     ret = read_value(skbuff_base, CRC_SKBUFF_HEAD, &skb_head, sizeof(skb_head));
     if (ret == -1)
     {
-        bpf_printk("Failed to read skbuff_head\n");
         return 0;
     }
 
     ret = read_value(skbuff_base, CRC_TRANSPORT_HDR, &transport_header, sizeof(transport_header));
     if (ret == -1)
     {
-        bpf_printk("Failed to read transport head\n");
         return 0;
     }
 
     ret = read_value(skbuff_base, CRC_NETWORK_HDR, &network_header, sizeof(network_header));
     if (ret == -1)
     {
-        bpf_printk("Failed to read network head\n");
         return 0;
     }
 
     if (!loaded)
     {
-        bpf_printk("Not loaded\n");
         return 0;
     }
 
@@ -1475,7 +1468,6 @@ int kretprobe__ret_udp_v6_send_skb(struct pt_regs *ctx)
     else
     {
         // Not udp and therefore we ignore it. We only want udp packets
-        bpf_printk("Not udp: %c\n", proto);
         return 0;
     }
     // Get Process data and set pid and comm string
@@ -1499,7 +1491,6 @@ int kretprobe__ret_ip6_local_out(struct pt_regs *ctx)
     int ret = PT_REGS_RC(ctx);
     if (ret < 0)
     {
-        bpf_printk("Failed on ret: %d", ret);
         return 0;
     }
 
@@ -1525,14 +1516,12 @@ int kretprobe__ret_ip6_local_out(struct pt_regs *ctx)
     skpp = bpf_map_lookup_elem(&udpv6_sendmsg_map, &index);
     if (skpp == NULL)
     {
-        bpf_printk("Failed to lookup skb *\n");
         return 0;
     }
 
     unsigned char *skbuff_base = (unsigned char *)*skpp;
     if (skbuff_base == NULL)
     {
-        bpf_printk("Failed to get base\n");
         return 0;
     }
 
@@ -1542,27 +1531,23 @@ int kretprobe__ret_ip6_local_out(struct pt_regs *ctx)
     ret = read_value(skbuff_base, CRC_SKBUFF_HEAD, &skb_head, sizeof(skb_head));
     if (ret == -1)
     {
-        bpf_printk("Failed to read skbuff_head\n");
         return 0;
     }
 
     ret = read_value(skbuff_base, CRC_TRANSPORT_HDR, &transport_header, sizeof(transport_header));
     if (ret == -1)
     {
-        bpf_printk("Failed to read transport head\n");
         return 0;
     }
 
     ret = read_value(skbuff_base, CRC_NETWORK_HDR, &network_header, sizeof(network_header));
     if (ret == -1)
     {
-        bpf_printk("Failed to read network head\n");
         return 0;
     }
 
     if (!loaded)
     {
-        bpf_printk("Not loaded\n");
         return 0;
     }
 
@@ -1583,7 +1568,6 @@ int kretprobe__ret_ip6_local_out(struct pt_regs *ctx)
     else
     {
         // Not udp and therefore we ignore it. We only want udp packets
-        bpf_printk("Not udp: %c\n", proto);
         return 0;
     }
     // Get Process data and set pid and comm string
@@ -1735,7 +1719,6 @@ int kretprobe__ret_udp_rcv(struct pt_regs *ctx)
     int ret = PT_REGS_RC(ctx);
     if (ret < 0)
     {
-        bpf_printk("Failed on ret: %d", ret);
         return 0;
     }
 
@@ -1758,14 +1741,12 @@ int kretprobe__ret_udp_rcv(struct pt_regs *ctx)
     skpp = bpf_map_lookup_elem(&udpv4_rcv_map, &index);
     if (skpp == NULL)
     {
-        bpf_printk("Failed to lookup skb *\n");
         return 0;
     }
 
     unsigned char *skbuff_base = (unsigned char *)*skpp;
     if (skbuff_base == NULL)
     {
-        bpf_printk("Failed to get base\n");
         return 0;
     }
 
@@ -1831,7 +1812,6 @@ int kretprobe__ret_udpv6_rcv(struct pt_regs *ctx)
     int ret = PT_REGS_RC(ctx);
     if (ret < 0)
     {
-        bpf_printk("Failed on ret: %d", ret);
         return 0;
     }
 
@@ -1854,14 +1834,12 @@ int kretprobe__ret_udpv6_rcv(struct pt_regs *ctx)
     skpp = bpf_map_lookup_elem(&udpv6_rcv_map, &index);
     if (skpp == NULL)
     {
-        bpf_printk("Failed to lookup skb *\n");
         return 0;
     }
 
     unsigned char *skbuff_base = (unsigned char *)*skpp;
     if (skbuff_base == NULL)
     {
-        bpf_printk("Failed to get base\n");
         return 0;
     }
 
