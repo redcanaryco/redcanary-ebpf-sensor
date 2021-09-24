@@ -1602,6 +1602,7 @@ int kretprobe__ret_inet_csk_accept(struct pt_regs *ctx)
 
     if (ev.u.network_info.ip_type == AF_INET && loaded)
     {
+        // The dest and src are intentionally backwards
         read_value(sk_base, CRC_SOCK_COMMON_SADDR, &ev.u.network_info.protos.ipv4.dest_addr, sizeof(ev.u.network_info.protos.ipv4.dest_addr));
         read_value(sk_base, CRC_SOCK_COMMON_DADDR, &ev.u.network_info.protos.ipv4.src_addr, sizeof(ev.u.network_info.protos.ipv4.src_addr));
         read_value(sk_base, CRC_SOCK_COMMON_SPORT, &ev.u.network_info.dest_port, sizeof(ev.u.network_info.dest_port));
@@ -1610,6 +1611,7 @@ int kretprobe__ret_inet_csk_accept(struct pt_regs *ctx)
     }
     else if (ev.u.network_info.ip_type == AF_INET6 && loaded)
     {
+        // The dest and src are intentionally backwards
         read_value(sk_base, CRC_SOCK_COMMON_SADDR6, &ev.u.network_info.protos.ipv6.dest_addr, sizeof(ev.u.network_info.protos.ipv6.dest_addr));
         read_value(sk_base, CRC_SOCK_COMMON_DADDR6, &ev.u.network_info.protos.ipv6.src_addr, sizeof(ev.u.network_info.protos.ipv6.src_addr));
         read_value(sk_base, CRC_SOCK_COMMON_SPORT, &ev.u.network_info.dest_port, sizeof(ev.u.network_info.dest_port));
