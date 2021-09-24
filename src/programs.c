@@ -1301,13 +1301,13 @@ int kprobe__tcp_v4_connect(struct pt_regs *ctx)
     return 0;
 }
 
-SEC("kprobe/udp_send_skb")
-int kprobe__udp_send_skb(struct pt_regs *ctx)
+SEC("kprobe/tcp_v6_connect")
+int kprobe__tcp_v6_connect(struct pt_regs *ctx)
 {
-    _skbuff sk = (_skbuff)PT_REGS_PARM1(ctx);
+    _sock sk = (_sock)PT_REGS_PARM1(ctx);
     u32 index = (u32)bpf_get_current_pid_tgid();
 
-    bpf_map_update_elem(&udpv4_outgoing_map, &index, &sk, BPF_ANY);
+    bpf_map_update_elem(&tcpv6_connect, &index, &sk, BPF_ANY);
 
     return 0;
 }
@@ -1323,39 +1323,6 @@ int kprobe__ip_local_out(struct pt_regs *ctx)
     return 0;
 }
 
-SEC("kprobe/udp_v6_send_skb")
-int kprobe__udp_v6_send_skb(struct pt_regs *ctx)
-{
-    _skbuff sk = (_skbuff)PT_REGS_PARM1(ctx);
-    u32 index = (u32)bpf_get_current_pid_tgid();
-
-    bpf_map_update_elem(&udpv6_outgoing_map, &index, &sk, BPF_ANY);
-
-    return 0;
-}
-
-SEC("kprobe/udp_rcv")
-int kprobe__udp_rcv(struct pt_regs *ctx)
-{
-    _skbuff sk = (_skbuff)PT_REGS_PARM1(ctx);
-    u32 index = (u32)bpf_get_current_pid_tgid();
-
-    bpf_map_update_elem(&udpv4_rcv_map, &index, &sk, BPF_ANY);
-
-    return 0;
-}
-
-SEC("kprobe/udpv6_rcv")
-int kprobe__udpv6_rcv(struct pt_regs *ctx)
-{
-    _skbuff sk = (_skbuff)PT_REGS_PARM1(ctx);
-    u32 index = (u32)bpf_get_current_pid_tgid();
-
-    bpf_map_update_elem(&udpv6_rcv_map, &index, &sk, BPF_ANY);
-
-    return 0;
-}
-
 SEC("kprobe/ip6_local_out")
 int kprobe__ip6_local_out(struct pt_regs *ctx)
 {
@@ -1367,15 +1334,39 @@ int kprobe__ip6_local_out(struct pt_regs *ctx)
     return 0;
 }
 
-SEC("kprobe/tcp_v6_connect")
-int kprobe__tcp_v6_connect(struct pt_regs *ctx)
+// A helper function for getting the pointer to the sk_buff
+static __always_inline int save_sock_ptr(struct pt_regs *ctx, void *map)
 {
-    _sock sk = (_sock)PT_REGS_PARM1(ctx);
+    _skbuff sk = (_skbuff)PT_REGS_PARM1(ctx);
     u32 index = (u32)bpf_get_current_pid_tgid();
 
-    bpf_map_update_elem(&tcpv6_connect, &index, &sk, BPF_ANY);
+    bpf_map_update_elem(map, &index, &sk, BPF_ANY);
 
     return 0;
+}
+
+SEC("kprobe/udp_send_skb")
+int kprobe__udp_send_skb(struct pt_regs *ctx)
+{
+    return save_sock_ptr(ctx, &udpv4_outgoing_map);
+}
+
+SEC("kprobe/udp_v6_send_skb")
+int kprobe__udp_v6_send_skb(struct pt_regs *ctx)
+{
+    return save_sock_ptr(ctx, &udpv6_outgoing_map);
+}
+
+SEC("kprobe/udp_rcv")
+int kprobe__udp_rcv(struct pt_regs *ctx)
+{
+    return save_sock_ptr(ctx, &udpv4_rcv_map);
+}
+
+SEC("kprobe/udpv6_rcv")
+int kprobe__udpv6_rcv(struct pt_regs *ctx)
+{
+    return save_sock_ptr(ctx, &udpv6_rcv_map);
 }
 
 // This handles outgoing udp packets
