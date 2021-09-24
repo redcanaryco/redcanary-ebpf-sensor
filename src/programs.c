@@ -1418,6 +1418,10 @@ int kretprobe__ret_udp_v6_send_skb(struct pt_regs *ctx)
 
     u64 loaded = CRC_LOADED;
     loaded = (u64)bpf_map_lookup_elem(&offsets, &loaded);
+    if (!loaded)
+    {
+        return 0;
+    }
 
     ret = read_value(skbuff_base, CRC_SKBUFF_HEAD, &skb_head, sizeof(skb_head));
     if (ret == -1)
@@ -1433,11 +1437,6 @@ int kretprobe__ret_udp_v6_send_skb(struct pt_regs *ctx)
 
     ret = read_value(skbuff_base, CRC_NETWORK_HDR, &network_header, sizeof(network_header));
     if (ret == -1)
-    {
-        return 0;
-    }
-
-    if (!loaded)
     {
         return 0;
     }
@@ -1518,6 +1517,10 @@ int kretprobe__ret_ip6_local_out(struct pt_regs *ctx)
 
     u64 loaded = CRC_LOADED;
     loaded = (u64)bpf_map_lookup_elem(&offsets, &loaded);
+    if (!loaded)
+    {
+        return 0;
+    }
 
     ret = read_value(skbuff_base, CRC_SKBUFF_HEAD, &skb_head, sizeof(skb_head));
     if (ret == -1)
@@ -1533,11 +1536,6 @@ int kretprobe__ret_ip6_local_out(struct pt_regs *ctx)
 
     ret = read_value(skbuff_base, CRC_NETWORK_HDR, &network_header, sizeof(network_header));
     if (ret == -1)
-    {
-        return 0;
-    }
-
-    if (!loaded)
     {
         return 0;
     }
@@ -1750,6 +1748,10 @@ int kretprobe__ret_udp_rcv(struct pt_regs *ctx)
 
     u64 loaded = CRC_LOADED;
     loaded = (u64)bpf_map_lookup_elem(&offsets, &loaded);
+    if (!loaded)
+    {
+        return 0;
+    }
 
     ret = read_value(skbuff_base, CRC_SKBUFF_HEAD, &skb_head, sizeof(skb_head));
     if (ret == -1)
@@ -1765,11 +1767,6 @@ int kretprobe__ret_udp_rcv(struct pt_regs *ctx)
 
     ret = read_value(skbuff_base, CRC_NETWORK_HDR, &network_header, sizeof(network_header));
     if (ret == -1)
-    {
-        return 0;
-    }
-
-    if (!loaded)
     {
         return 0;
     }
@@ -1843,6 +1840,10 @@ int kretprobe__ret_udpv6_rcv(struct pt_regs *ctx)
 
     u64 loaded = CRC_LOADED;
     loaded = (u64)bpf_map_lookup_elem(&offsets, &loaded);
+    if (!loaded)
+    {
+        return 0;
+    }
 
     ret = read_value(skbuff_base, CRC_SKBUFF_HEAD, &skb_head, sizeof(skb_head));
     if (ret == -1)
@@ -1858,11 +1859,6 @@ int kretprobe__ret_udpv6_rcv(struct pt_regs *ctx)
 
     ret = read_value(skbuff_base, CRC_NETWORK_HDR, &network_header, sizeof(network_header));
     if (ret == -1)
-    {
-        return 0;
-    }
-
-    if (!loaded)
     {
         return 0;
     }
@@ -1938,6 +1934,10 @@ int kretprobe__ret_udp_send_skb(struct pt_regs *ctx)
 
     u64 loaded = CRC_LOADED;
     loaded = (u64)bpf_map_lookup_elem(&offsets, &loaded);
+    if (!loaded)
+    {
+        return 0;
+    }
 
     ret = read_value(skbuff_base, CRC_SKBUFF_HEAD, &skb_head, sizeof(skb_head));
     if (ret == -1)
@@ -1953,11 +1953,6 @@ int kretprobe__ret_udp_send_skb(struct pt_regs *ctx)
 
     ret = read_value(skbuff_base, CRC_NETWORK_HDR, &network_header, sizeof(network_header));
     if (ret == -1)
-    {
-        return 0;
-    }
-
-    if (!loaded)
     {
         return 0;
     }
@@ -2041,6 +2036,10 @@ int kretprobe__ret_ip_local_out(struct pt_regs *ctx)
 
     u64 loaded = CRC_LOADED;
     loaded = (u64)bpf_map_lookup_elem(&offsets, &loaded);
+    if (!loaded)
+    {
+        return 0;
+    }
 
     ret = read_value(skbuff_base, CRC_SKBUFF_HEAD, &skb_head, sizeof(skb_head));
     if (ret == -1)
@@ -2056,11 +2055,6 @@ int kretprobe__ret_ip_local_out(struct pt_regs *ctx)
 
     ret = read_value(skbuff_base, CRC_NETWORK_HDR, &network_header, sizeof(network_header));
     if (ret == -1)
-    {
-        return 0;
-    }
-
-    if (!loaded)
     {
         return 0;
     }
