@@ -1830,7 +1830,7 @@ int kretprobe__ret_udpv6_rcv(struct pt_regs *ctx)
     // Save the pid in the event structure
     ev.u.network_info.process.pid = index;
 
-    // Lookup the corresponding *sk that we saved when tcp_v4_connect was called
+    // Lookup the corresponding *sk that we saved when udp_rcv was called
     skpp = bpf_map_lookup_elem(&udpv6_rcv_map, &index);
     if (skpp == NULL)
     {
