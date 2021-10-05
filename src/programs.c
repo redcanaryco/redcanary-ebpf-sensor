@@ -1290,6 +1290,17 @@ Flush:
     return 0;
 }
 
+// A helper function for getting the pointer to the sk_buff
+static __always_inline int save_sock_ptr(struct pt_regs *ctx, void *map)
+{
+    _skbuff sk = (_skbuff)PT_REGS_PARM1(ctx);
+    u32 index = (u32)bpf_get_current_pid_tgid();
+
+    bpf_map_update_elem(map, &index, &sk, BPF_ANY);
+
+    return 0;
+}
+
 SEC("kprobe/tcp_v4_connect")
 int kprobe__tcp_v4_connect(struct pt_regs *ctx)
 {
@@ -1330,17 +1341,6 @@ int kprobe__ip6_local_out(struct pt_regs *ctx)
     u32 index = (u32)bpf_get_current_pid_tgid();
 
     bpf_map_update_elem(&udpv6_outgoing_map, &index, &sk, BPF_ANY);
-
-    return 0;
-}
-
-// A helper function for getting the pointer to the sk_buff
-static __always_inline int save_sock_ptr(struct pt_regs *ctx, void *map)
-{
-    _skbuff sk = (_skbuff)PT_REGS_PARM1(ctx);
-    u32 index = (u32)bpf_get_current_pid_tgid();
-
-    bpf_map_update_elem(map, &index, &sk, BPF_ANY);
 
     return 0;
 }
@@ -1409,6 +1409,7 @@ int kretprobe__ret_udp_v6_send_skb(struct pt_regs *ctx)
     {
         return 0;
     }
+    bpf_map_delete_elem(&udpv6_outgoing_map, &index);
 
     unsigned char *skbuff_base = (unsigned char *)*skpp;
     if (skbuff_base == NULL)
@@ -1508,6 +1509,7 @@ int kretprobe__ret_ip6_local_out(struct pt_regs *ctx)
     {
         return 0;
     }
+    bpf_map_delete_elem(&udpv6_outgoing_map, &index);
 
     unsigned char *skbuff_base = (unsigned char *)*skpp;
     if (skbuff_base == NULL)
@@ -1661,6 +1663,7 @@ int kretprobe__ret_tcp_v4_connect(struct pt_regs *ctx)
     {
         return 0;
     }
+    bpf_map_delete_elem(&tcpv4_connect, &index);
 
     // Deref
     _sock skp = *skpp;
@@ -1734,6 +1737,7 @@ int kretprobe__ret_udp_rcv(struct pt_regs *ctx)
     {
         return 0;
     }
+    bpf_map_delete_elem(&udpv4_rcv_map, &index);
 
     unsigned char *skbuff_base = (unsigned char *)*skpp;
     if (skbuff_base == NULL)
@@ -1826,6 +1830,7 @@ int kretprobe__ret_udpv6_rcv(struct pt_regs *ctx)
     {
         return 0;
     }
+    bpf_map_delete_elem(&udpv6_rcv_map, &index);
 
     unsigned char *skbuff_base = (unsigned char *)*skpp;
     if (skbuff_base == NULL)
@@ -1926,6 +1931,7 @@ int kretprobe__ret_udp_send_skb(struct pt_regs *ctx)
     {
         return 0;
     }
+    bpf_map_delete_elem(&udpv4_outgoing_map, &index);
 
     _skbuff skp = *skpp;
     unsigned char *skbuff_base = (unsigned char *)skp;
@@ -2028,6 +2034,7 @@ int kretprobe__ret_ip_local_out(struct pt_regs *ctx)
     {
         return 0;
     }
+    bpf_map_delete_elem(&udpv4_outgoing_map, &index);
 
     _skbuff skp = *skpp;
     unsigned char *skbuff_base = (unsigned char *)skp;
@@ -2094,14 +2101,13 @@ SEC("kretprobe/ret_tcp_v6_connect")
 int kretprobe__ret_tcp_v6_connect(struct pt_regs *ctx)
 {
     int ret = PT_REGS_RC(ctx);
-    /* if "loaded" doesn't exist in the map, we get NULL back and won't read from offsets              
-     * when offsets are loaded into the offsets map, "loaded" should be given any value                
-     */
+    if (ret != 0)
+    {
+        return 0;
+    }
+
     u64 loaded = CRC_LOADED;
     loaded = (u64)bpf_map_lookup_elem(&offsets, &loaded); /* squeezing out as much stack as possible */
-    /* since we're using offsets to read from the structs, we don't need to bother with                
-     * understanding their structure                                                                   
-     */
 
     // Just to be safe 0 out the structs
     telemetry_event_t ev;
@@ -2123,17 +2129,12 @@ int kretprobe__ret_tcp_v6_connect(struct pt_regs *ctx)
         return 0;
     }
 
+    bpf_map_delete_elem(&tcpv6_connect, &index);
+
     // Deref
     _sock skp = *skpp;
     unsigned char *skp_base = (unsigned char *)skp;
     if (skp_base == NULL)
-    {
-        return 0;
-    }
-
-    // failed to send SYNC packet, may not have populated
-    // socket __sk_common.{skc_rcv_saddr, ...}
-    if (ret != 0)
     {
         return 0;
     }
@@ -2157,7 +2158,6 @@ int kretprobe__ret_tcp_v6_connect(struct pt_regs *ctx)
 
     // Output data to generator
     bpf_perf_event_output(ctx, &telemetry_events, bpf_get_smp_processor_id(), &ev, sizeof(ev));
-
     return 0;
 }
 
