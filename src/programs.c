@@ -170,15 +170,6 @@ struct bpf_map_def SEC("maps/udp_outgoing_map") udp_outgoing_map = {
     .namespace = "",
 };
 
-struct bpf_map_def SEC("maps/udp_recvmsg_map") udp_recvmsg_map = {
-    .type = BPF_MAP_TYPE_HASH,
-    .key_size = sizeof(u32),
-    .value_size = sizeof(size_t),
-    .max_entries = 1024,
-    .pinning = 0,
-    .namespace = "",
-};
-
 struct bpf_map_def SEC("maps/telemetry_ids") telemetry_ids = {
     .type = BPF_MAP_TYPE_HASH,
     .key_size = sizeof(u64),
@@ -1302,17 +1293,6 @@ int kprobe__udp_outgoing(struct pt_regs *ctx)
     return save_sock_ptr(ctx, &udp_outgoing_map);
 }
 
-SEC("kprobe/udp_recvmsg")
-int kprobe__udp_recvmsg(struct pt_regs *ctx)
-{
-    _sock sk = (_sock)PT_REGS_PARM1(ctx);
-    u32 index = (u32)bpf_get_current_pid_tgid();
-
-    bpf_map_update_elem(&udp_recvmsg_map, &index, &sk, BPF_ANY);
-
-    return 0;
-}
-
 SEC("kretprobe/ret_inet_csk_accept")
 int kretprobe__ret_inet_csk_accept(struct pt_regs *ctx)
 {
@@ -1374,24 +1354,11 @@ int kretprobe__ret_inet_csk_accept(struct pt_regs *ctx)
     return 0;
 }
 
-// This handles IPv4 udp packets
-SEC("kretprobe/ret_udp_recvmsg")
-int kretprobe__ret_udp_recvmsg(struct pt_regs *ctx)
+// This handles both IPv4 and IPv6 udp packets
+SEC("kretprobe/ret___skb_recv_udp")
+int kretprobe__ret___skb_recv_udp(struct pt_regs *ctx)
 {
-    int ret = PT_REGS_RC(ctx);
-    if (ret < 0)
-    {
-        return 0;
-    }
-
-    u64 loaded = CRC_LOADED;
-    loaded = (u64)bpf_map_lookup_elem(&offsets, &loaded); /* squeezing out as much stack as possible */
-    if (!loaded)
-    {
-        return 0;
-    }
-
-    // Just to be safe 0 out the structs
+    //unsigned char version = 0;
     telemetry_event_t ev;
     memset(&ev, 0, sizeof(ev));
 
@@ -1399,23 +1366,13 @@ int kretprobe__ret_udp_recvmsg(struct pt_regs *ctx)
     ev.id = bpf_get_prandom_u32();
     ev.done = 0;
     ev.telemetry_type = TE_NETWORK;
+    ev.u.network_info.protocol_type = IPPROTO_UDP;
     ev.u.network_info.mono_ns = bpf_ktime_get_ns();
 
-    // Get current pid
-    u32 index = (u32)bpf_get_current_pid_tgid();
-    _sock *skpp;
+    _skbuff skb = (_skbuff)PT_REGS_RC_CORE(ctx);
+    unsigned char *skbuff_base = (unsigned char *)skb;
 
-    skpp = bpf_map_lookup_elem(&udp_recvmsg_map, &index);
-    if (skpp == 0)
-    {
-        return 0;
-    }
-    bpf_map_delete_elem(&udp_recvmsg_map, &index);
-
-    // Deref
-    _sock skp = *skpp;
-    unsigned char *skp_base = (unsigned char *)skp;
-    if (skp_base == NULL)
+    if (skbuff_base == NULL)
     {
         return 0;
     }
@@ -1423,26 +1380,99 @@ int kretprobe__ret_udp_recvmsg(struct pt_regs *ctx)
     ev.u.network_info.direction = inbound;
     ev.u.network_info.protocol_type = IPPROTO_UDP;
 
-    // Get the ip type and then
-    read_value(skp_base, CRC_SOCK_COMMON_FAMILY, &ev.u.network_info.ip_type, sizeof(ev.u.network_info.ip_type));
-    if (ev.u.network_info.ip_type == AF_INET)
+    unsigned char *skb_head = NULL;
+    unsigned short mac_header = 0;
+    unsigned short transport_header = 0;
+    unsigned short network_header = 0;
+    __be16 proto = 0;
+
+    u64 loaded = CRC_LOADED;
+    loaded = (u64)bpf_map_lookup_elem(&offsets, &loaded);
+
+    int ret = read_value(skbuff_base, CRC_SKBUFF_HEAD, &skb_head, sizeof(skb_head));
+    if (ret == -1)
     {
-        read_value(skp_base, CRC_SOCK_COMMON_DADDR, &ev.u.network_info.protos.ipv4.dest_addr, sizeof(ev.u.network_info.protos.ipv4.dest_addr));
-        read_value(skp_base, CRC_SOCK_COMMON_SADDR, &ev.u.network_info.protos.ipv4.src_addr, sizeof(ev.u.network_info.protos.ipv4.src_addr));
+        return 0;
+    }
+
+    ret = read_value(skbuff_base, CRC_SKBUFF_MAC_HDR, &mac_header, sizeof(mac_header));
+    if (ret == -1)
+    {
+        return 0;
+    }
+
+    ret = read_value(skbuff_base, CRC_TRANSPORT_HDR, &transport_header, sizeof(transport_header));
+    if (ret == -1)
+    {
+        return 0;
+    }
+
+    ret = read_value(skbuff_base, CRC_NETWORK_HDR, &network_header, sizeof(network_header));
+    if (ret == -1)
+    {
+        return 0;
+    }
+
+    ret = read_value(skbuff_base, CRC_SKBUFF_PROTO, &proto, sizeof(proto));
+    if (ret == -1)
+    {
+        return 0;
+    }
+
+    u64 eth_proto_offset = CRC_SKBUFF_PROTO;
+    eth_proto_offset = (u64)bpf_map_lookup_elem(&offsets, &eth_proto_offset);
+
+    struct ethhdr *eth = (struct ethhdr *)(skb_head + mac_header);
+    struct iphdr *ip = (struct iphdr *)(skb_head + network_header);
+    struct udphdr *udp = (struct udphdr *)(skb_head + transport_header);
+    
+    // Check the ethernet header for the protocol
+    bpf_probe_read(&proto, sizeof(proto), (void *)(&eth->h_proto));
+    if (proto == 0x8) // IPv4
+    {
+        ev.u.network_info.ip_type = AF_INET;
+        bpf_probe_read(&proto, sizeof(proto), (void *)(&ip->protocol));
+        proto = proto & 0xff;
+
+        if (proto == IPPROTO_UDP)
+        {
+            bpf_probe_read(&ev.u.network_info.protos.ipv4.dest_addr, sizeof(ev.u.network_info.protos.ipv4.dest_addr), (void *)(&ip->daddr));
+            bpf_probe_read(&ev.u.network_info.protos.ipv4.src_addr, sizeof(ev.u.network_info.protos.ipv4.src_addr), (void *)(&ip->saddr));
+        }
+        else
+        {
+            // If it is not udp we don't care
+            return 0;
+        }
+    }
+    else if (proto == 0xdd86) // IPv6
+    {
+        ev.u.network_info.ip_type = AF_INET6;
+        struct ipv6hdr *ipv6 = (struct ipv6hdr *)(skb_head + network_header);
+        bpf_probe_read(&proto, sizeof(proto), (void *)(&ipv6->nexthdr));
+        proto = proto & 0xff;
+        if (proto == IPPROTO_UDP)
+        {
+            bpf_probe_read(&ev.u.network_info.protos.ipv6.dest_addr, sizeof(ev.u.network_info.protos.ipv6.dest_addr), (void *)(&ipv6->daddr));
+            bpf_probe_read(&ev.u.network_info.protos.ipv6.src_addr, sizeof(ev.u.network_info.protos.ipv6.src_addr), (void *)(&ipv6->saddr));
+        }
+        else
+        {
+            // If it is not udp we don't care
+            return 0;
+        }
     }
     else
     {
-        read_value(skp_base, CRC_SOCK_COMMON_DADDR6, &ev.u.network_info.protos.ipv6.dest_addr, sizeof(ev.u.network_info.protos.ipv6.dest_addr));
-        read_value(skp_base, CRC_SOCK_COMMON_SADDR6, &ev.u.network_info.protos.ipv6.src_addr, sizeof(ev.u.network_info.protos.ipv6.src_addr));
+        // We should not ever get here
+        return 0;
     }
-
-    // Get port info
-    read_value(skp_base, CRC_SOCK_COMMON_DPORT, &ev.u.network_info.dest_port, sizeof(ev.u.network_info.dest_port));
-    read_value(skp_base, CRC_SOCK_COMMON_SPORT, &ev.u.network_info.src_port, sizeof(ev.u.network_info.src_port));
+    bpf_probe_read(&ev.u.network_info.dest_port, sizeof(ev.u.network_info.dest_port), (void *)(&udp->dest));
+    bpf_probe_read(&ev.u.network_info.src_port, sizeof(ev.u.network_info.src_port), (void *)(&udp->source));
+    ev.u.network_info.src_port = SWAP_U16(ev.u.network_info.src_port);
     ev.u.network_info.dest_port = SWAP_U16(ev.u.network_info.dest_port);
 
     // Get Process data and set pid and comm string
-    ev.u.network_info.process.pid = index;
     bpf_get_current_comm(ev.u.network_info.process.comm, sizeof(ev.u.network_info.process.comm));
 
     // Output data to generator
@@ -1526,7 +1556,6 @@ int kretprobe__ret_udp_outgoing(struct pt_regs *ctx)
     struct udphdr *udp = (struct udphdr *)(skb_head + transport_header);
     bpf_probe_read(&version, sizeof(version), (void *)(ip));
     version = ((version & 0xf0) >> 4); // Get the upper 4 bits
-    bpf_printk("Version: 0x%x\n", version);
 
     if (version == 4)
     {
@@ -1540,7 +1569,6 @@ int kretprobe__ret_udp_outgoing(struct pt_regs *ctx)
         else
         {
             // If it is not udp we don't care
-            bpf_printk("Proto was: 0x%x\n", proto);
             return 0;
         }
     }
@@ -1557,14 +1585,12 @@ int kretprobe__ret_udp_outgoing(struct pt_regs *ctx)
         else
         {
             // If it is not udp we don't care
-            bpf_printk("Proto was: 0x%x\n", proto);
             return 0;
         }
     }
     else
     {
         // We should not ever get here
-        bpf_printk("Oh no we got here!\n");
         return 0;
     }
     bpf_probe_read(&ev.u.network_info.dest_port, sizeof(ev.u.network_info.dest_port), (void *)(&udp->dest));
@@ -1577,7 +1603,6 @@ int kretprobe__ret_udp_outgoing(struct pt_regs *ctx)
 
     // Output data to generator
     bpf_perf_event_output(ctx, &telemetry_events, bpf_get_smp_processor_id(), &ev, sizeof(ev));
-    bpf_printk("Outputting udp event\n");
     return 0;
 }
 
