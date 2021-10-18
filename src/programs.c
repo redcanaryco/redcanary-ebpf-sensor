@@ -1379,6 +1379,7 @@ int kretprobe__ret___skb_recv_udp(struct pt_regs *ctx)
 
     ev.u.network_info.direction = inbound;
     ev.u.network_info.protocol_type = IPPROTO_UDP;
+    ev.u.network_info.process.pid = (u32)bpf_get_current_pid_tgid();
 
     unsigned char *skb_head = NULL;
     unsigned short mac_header = 0;
