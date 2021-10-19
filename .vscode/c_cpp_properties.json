@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "name": "default",
+            "includePath": [
+                "/usr/src/linux-headers-5.4.0-88/include/",
+                "/usr/src/linux-headers-5.4.0-88-generic/include/",
+                "/usr/src/linux-headers-5.4.0-88/arch/x86/include/",
+                "/usr/src/linux-headers-5.4.0-88-generic/arch/x86/include/generated/"
+            ],
+            "defines": [
+                "__TARGET_ARCH_x86",
+                "__ASM_SYSREG_H",
+                "__BPF_TRACING__",
+                "__KERNEL__"
+            ],
+            "intelliSenseMode": "linux-gcc-x64",
+            "compilerPath": "/usr/bin/clang",
+            "cStandard": "c11",
+            "cppStandard": "c++14"
+        }
+    ],
+    "version": 4
+}

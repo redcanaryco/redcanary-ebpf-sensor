@@ -5,6 +5,8 @@
 #include <linux/types.h>
 #include <linux/limits.h>
 
+#define MAX_TELEMETRY_STACK_ENTRIES 1024
+
 #define MAX_ADDRESSES 16
 #define TRUE 1
 #define FALSE 0
@@ -24,6 +26,14 @@ struct in6_addr
     } in6_u;
 };
 #endif
+
+#define ETH_ALEN 6
+struct ethhdr
+{
+    unsigned char h_dest[ETH_ALEN];   /* destination eth addr	*/
+    unsigned char h_source[ETH_ALEN]; /* source ether addr	*/
+    __be16 h_proto;                   /* packet type ID field	*/
+} __attribute__((packed));
 
 /*
  * This number was determined experimentally, setting it higher will exceed
