@@ -4,46 +4,46 @@
 
 /* Scan the ARCH passed in from ARCH env variable (see Makefile) */
 #if defined(__TARGET_ARCH_x86)
-#define bpf_target_x86
-#define bpf_target_defined
+	#define bpf_target_x86
+	#define bpf_target_defined
 #elif defined(__TARGET_ARCH_s390)
-#define bpf_target_s390
-#define bpf_target_defined
+	#define bpf_target_s390
+	#define bpf_target_defined
 #elif defined(__TARGET_ARCH_arm)
-#define bpf_target_arm
-#define bpf_target_defined
+	#define bpf_target_arm
+	#define bpf_target_defined
 #elif defined(__TARGET_ARCH_arm64)
-#define bpf_target_arm64
-#define bpf_target_defined
+	#define bpf_target_arm64
+	#define bpf_target_defined
 #elif defined(__TARGET_ARCH_mips)
-#define bpf_target_mips
-#define bpf_target_defined
+	#define bpf_target_mips
+	#define bpf_target_defined
 #elif defined(__TARGET_ARCH_powerpc)
-#define bpf_target_powerpc
-#define bpf_target_defined
+	#define bpf_target_powerpc
+	#define bpf_target_defined
 #elif defined(__TARGET_ARCH_sparc)
-#define bpf_target_sparc
-#define bpf_target_defined
+	#define bpf_target_sparc
+	#define bpf_target_defined
 #else
-#undef bpf_target_defined
+	#undef bpf_target_defined
 #endif
 
 /* Fall back to what the compiler says */
 #ifndef bpf_target_defined
 #if defined(__x86_64__)
-#define bpf_target_x86
+	#define bpf_target_x86
 #elif defined(__s390__)
-#define bpf_target_s390
+	#define bpf_target_s390
 #elif defined(__arm__)
-#define bpf_target_arm
+	#define bpf_target_arm
 #elif defined(__aarch64__)
-#define bpf_target_arm64
+	#define bpf_target_arm64
 #elif defined(__mips__)
-#define bpf_target_mips
+	#define bpf_target_mips
 #elif defined(__powerpc__)
-#define bpf_target_powerpc
+	#define bpf_target_powerpc
 #elif defined(__sparc__)
-#define bpf_target_sparc
+	#define bpf_target_sparc
 #endif
 #endif
 
@@ -332,9 +332,9 @@ struct pt_regs;
 #define ___bpf_apply(fn, n) ___bpf_concat(fn, n)
 #define ___bpf_nth(_, _1, _2, _3, _4, _5, _6, _7, _8, _9, _a, _b, _c, N, ...) N
 #define ___bpf_narg(...) \
-	___bpf_nth(_, ##__VA_ARGS__, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0)
+		___bpf_nth(_, ##__VA_ARGS__, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0)
 #define ___bpf_empty(...) \
-	___bpf_nth(_, ##__VA_ARGS__, N, N, N, N, N, N, N, N, N, N, 0)
+		___bpf_nth(_, ##__VA_ARGS__, N, N, N, N, N, N, N, N, N, N, 0)
 
 #define ___bpf_ctx_cast0() ctx
 #define ___bpf_ctx_cast1(x) ___bpf_ctx_cast0(), (void *)ctx[0]
@@ -350,7 +350,7 @@ struct pt_regs;
 #define ___bpf_ctx_cast11(x, args...) ___bpf_ctx_cast10(args), (void *)ctx[10]
 #define ___bpf_ctx_cast12(x, args...) ___bpf_ctx_cast11(args), (void *)ctx[11]
 #define ___bpf_ctx_cast(args...) \
-	___bpf_apply(___bpf_ctx_cast, ___bpf_narg(args))(args)
+		___bpf_apply(___bpf_ctx_cast, ___bpf_narg(args))(args)
 
 /*
  * BPF_PROG is a convenience wrapper for generic tp_btf/fentry/fexit and
@@ -367,34 +367,34 @@ struct pt_regs;
  * This is useful when using BPF helpers that expect original context
  * as one of the parameters (e.g., for bpf_perf_event_output()).
  */
-#define BPF_PROG(name, args...)                                                                              \
-	name(unsigned long long *ctx);                                                                           \
-	static __attribute__((always_inline)) typeof(name(0))                                                    \
-		____##name(unsigned long long *ctx, ##args);                                                         \
-	typeof(name(0)) name(unsigned long long *ctx)                                                            \
-	{                                                                                                        \
-		_Pragma("GCC diagnostic push")                                                                       \
-			_Pragma("GCC diagnostic ignored \"-Wint-conversion\"") return ____##name(___bpf_ctx_cast(args)); \
-		_Pragma("GCC diagnostic pop")                                                                        \
-	}                                                                                                        \
-	static __attribute__((always_inline)) typeof(name(0))                                                    \
-		____##name(unsigned long long *ctx, ##args)
+#define BPF_PROG(name, args...)                                                                          \
+name(unsigned long long *ctx);                                                                           \
+static __attribute__((always_inline)) typeof(name(0))                                                    \
+____##name(unsigned long long *ctx, ##args);                                                             \
+typeof(name(0)) name(unsigned long long *ctx)                                                            \
+{                                                                                                        \
+	_Pragma("GCC diagnostic push")                                                                       \
+	_Pragma("GCC diagnostic ignored \"-Wint-conversion\"") return ____##name(___bpf_ctx_cast(args));     \
+	_Pragma("GCC diagnostic pop")                                                                        \
+}                                                                                                        \
+static __attribute__((always_inline)) typeof(name(0))                                                    \
+____##name(unsigned long long *ctx, ##args)
 
 struct pt_regs;
 
 #define ___bpf_kprobe_args0() ctx
 #define ___bpf_kprobe_args1(x) \
-	___bpf_kprobe_args0(), (void *)PT_REGS_PARM1(ctx)
+        ___bpf_kprobe_args0(), (void *)PT_REGS_PARM1(ctx)
 #define ___bpf_kprobe_args2(x, args...) \
-	___bpf_kprobe_args1(args), (void *)PT_REGS_PARM2(ctx)
+        ___bpf_kprobe_args1(args), (void *)PT_REGS_PARM2(ctx)
 #define ___bpf_kprobe_args3(x, args...) \
-	___bpf_kprobe_args2(args), (void *)PT_REGS_PARM3(ctx)
+        ___bpf_kprobe_args2(args), (void *)PT_REGS_PARM3(ctx)
 #define ___bpf_kprobe_args4(x, args...) \
-	___bpf_kprobe_args3(args), (void *)PT_REGS_PARM4(ctx)
+        ___bpf_kprobe_args3(args), (void *)PT_REGS_PARM4(ctx)
 #define ___bpf_kprobe_args5(x, args...) \
-	___bpf_kprobe_args4(args), (void *)PT_REGS_PARM5(ctx)
+        ___bpf_kprobe_args4(args), (void *)PT_REGS_PARM5(ctx)
 #define ___bpf_kprobe_args(args...) \
-	___bpf_apply(___bpf_kprobe_args, ___bpf_narg(args))(args)
+        ___bpf_apply(___bpf_kprobe_args, ___bpf_narg(args))(args)
 
 /*
  * BPF_KPROBE serves the same purpose for kprobes as BPF_PROG for
@@ -406,24 +406,24 @@ struct pt_regs;
  * Original struct pt_regs* context is preserved as 'ctx' argument. This might
  * be necessary when using BPF helpers like bpf_perf_event_output().
  */
-#define BPF_KPROBE(name, args...)                                                                               \
-	name(struct pt_regs *ctx);                                                                                  \
-	static __attribute__((always_inline)) typeof(name(0))                                                       \
-		____##name(struct pt_regs *ctx, ##args);                                                                \
-	typeof(name(0)) name(struct pt_regs *ctx)                                                                   \
-	{                                                                                                           \
-		_Pragma("GCC diagnostic push")                                                                          \
-			_Pragma("GCC diagnostic ignored \"-Wint-conversion\"") return ____##name(___bpf_kprobe_args(args)); \
-		_Pragma("GCC diagnostic pop")                                                                           \
-	}                                                                                                           \
-	static __attribute__((always_inline)) typeof(name(0))                                                       \
-		____##name(struct pt_regs *ctx, ##args)
+#define BPF_KPROBE(name, args...)                                                                           \
+name(struct pt_regs *ctx);                                                                                  \
+static __attribute__((always_inline)) typeof(name(0))                                                       \
+____##name(struct pt_regs *ctx, ##args);                                                                    \
+typeof(name(0)) name(struct pt_regs *ctx)                                                                   \
+{                                                                                                           \
+	_Pragma("GCC diagnostic push")                                                                          \
+	_Pragma("GCC diagnostic ignored \"-Wint-conversion\"") return ____##name(___bpf_kprobe_args(args));     \
+	_Pragma("GCC diagnostic pop")                                                                           \
+}                                                                                                           \
+static __attribute__((always_inline)) typeof(name(0))                                                       \
+____##name(struct pt_regs *ctx, ##args)
 
 #define ___bpf_kretprobe_args0() ctx
 #define ___bpf_kretprobe_args1(x) \
-	___bpf_kretprobe_args0(), (void *)PT_REGS_RC(ctx)
+        ___bpf_kretprobe_args0(), (void *)PT_REGS_RC(ctx)
 #define ___bpf_kretprobe_args(args...) \
-	___bpf_apply(___bpf_kretprobe_args, ___bpf_narg(args))(args)
+        ___bpf_apply(___bpf_kretprobe_args, ___bpf_narg(args))(args)
 
 /*
  * BPF_KRETPROBE is similar to BPF_KPROBE, except, it only provides optional
@@ -431,17 +431,17 @@ struct pt_regs;
  * arguments, because they will be clobbered by the time probed function
  * returns.
  */
-#define BPF_KRETPROBE(name, args...)                                                                               \
-	name(struct pt_regs *ctx);                                                                                     \
-	static __attribute__((always_inline)) typeof(name(0))                                                          \
-		____##name(struct pt_regs *ctx, ##args);                                                                   \
-	typeof(name(0)) name(struct pt_regs *ctx)                                                                      \
-	{                                                                                                              \
-		_Pragma("GCC diagnostic push")                                                                             \
-			_Pragma("GCC diagnostic ignored \"-Wint-conversion\"") return ____##name(___bpf_kretprobe_args(args)); \
-		_Pragma("GCC diagnostic pop")                                                                              \
-	}                                                                                                              \
-	static __always_inline typeof(name(0)) ____##name(struct pt_regs *ctx, ##args)
+#define BPF_KRETPROBE(name, args...)                                                                           \
+name(struct pt_regs *ctx);                                                                                     \
+static __attribute__((always_inline)) typeof(name(0))                                                          \
+____##name(struct pt_regs *ctx, ##args);                                                                       \
+typeof(name(0)) name(struct pt_regs *ctx)                                                                      \
+{                                                                                                              \
+	_Pragma("GCC diagnostic push")                                                                             \
+	_Pragma("GCC diagnostic ignored \"-Wint-conversion\"") return ____##name(___bpf_kretprobe_args(args));     \
+	_Pragma("GCC diagnostic pop")                                                                              \
+}                                                                                                              \
+static __always_inline typeof(name(0)) ____##name(struct pt_regs *ctx, ##args)
 
 #define ___bpf_fill0(arr, p, x) \
 	do                          \
@@ -487,17 +487,17 @@ struct pt_regs;
 // Macros to populate arguments to the BPF_KRPOBE_SYSCALL function
 #define ___bpf_kprobe_syscall_args0() ctx
 #define ___bpf_kprobe_syscall_args1(x) \
-	___bpf_kprobe_syscall_args0(), (void *)SYSCALL_PARM1(&___ctx)
+        ___bpf_kprobe_syscall_args0(), (void *)SYSCALL_PARM1(&___ctx)
 #define ___bpf_kprobe_syscall_args2(x, args...) \
-	___bpf_kprobe_syscall_args1(args), (void *)SYSCALL_PARM2(&___ctx)
+        ___bpf_kprobe_syscall_args1(args), (void *)SYSCALL_PARM2(&___ctx)
 #define ___bpf_kprobe_syscall_args3(x, args...) \
-	___bpf_kprobe_syscall_args2(args), (void *)SYSCALL_PARM3(&___ctx)
+        ___bpf_kprobe_syscall_args2(args), (void *)SYSCALL_PARM3(&___ctx)
 #define ___bpf_kprobe_syscall_args4(x, args...) \
-	___bpf_kprobe_syscall_args3(args), (void *)SYSCALL_PARM4(&___ctx)
+        ___bpf_kprobe_syscall_args3(args), (void *)SYSCALL_PARM4(&___ctx)
 #define ___bpf_kprobe_syscall_args5(x, args...) \
-	___bpf_kprobe_syscall_args4(args), (void *)SYSCALL_PARM5(&___ctx)
+        ___bpf_kprobe_syscall_args4(args), (void *)SYSCALL_PARM5(&___ctx)
 #define ___bpf_kprobe_syscall_args(args...) \
-	___bpf_apply(___bpf_kprobe_syscall_args, ___bpf_narg(args))(args)
+        ___bpf_apply(___bpf_kprobe_syscall_args, ___bpf_narg(args))(args)
 
 /*
  * We only need the following registers from pt_regs on each architecture,
@@ -569,37 +569,35 @@ struct _aarch64_pt_regs
  * BPF_KPROBE_SYSCALL wraps kprobes attached to syscall functions (sys_*) to
  * correctly extract and pass arguments used in system calls.
  */
-#define BPF_KPROBE_SYSCALL(name, args...)                          \
-	name(struct pt_regs *ctx);                                     \
-	static __attribute__((always_inline)) typeof(name(0))          \
-		____##name(struct pt_regs *ctx, ##args);                   \
-	typeof(name(0)) name(struct pt_regs *ctx)                      \
-	{                                                              \
-		_Pragma("GCC diagnostic push")                             \
-			_Pragma("GCC diagnostic ignored \"-Wint-conversion\"") \
-				position_syscall_regs();                           \
-		return ____##name(___bpf_kprobe_syscall_args(args));       \
-		_Pragma("GCC diagnostic pop")                              \
-	}                                                              \
-	static __attribute__((always_inline)) typeof(name(0))          \
-		____##name(struct pt_regs *ctx, ##args)
+#define BPF_KPROBE_SYSCALL(name, args...)                      \
+name(struct pt_regs *ctx);                                     \
+static __attribute__((always_inline)) typeof(name(0))          \
+____##name(struct pt_regs *ctx, ##args);                       \
+typeof(name(0)) name(struct pt_regs *ctx)                      \
+{                                                              \
+	_Pragma("GCC diagnostic push")                             \
+	_Pragma("GCC diagnostic ignored \"-Wint-conversion\"")     \
+	position_syscall_regs();                                   \
+	return ____##name(___bpf_kprobe_syscall_args(args));       \
+	_Pragma("GCC diagnostic pop")                              \
+}                                                              \
+static __attribute__((always_inline)) typeof(name(0))          \
+____##name(struct pt_regs *ctx, ##args)
+
 /*
  * BPF_SEQ_PRINTF to wrap bpf_seq_printf to-be-printed values
  * in a structure.
  */
-#define BPF_SEQ_PRINTF(seq, fmt, args...)                              \
-	(                                                                  \
-		{                                                              \
-			static const char ___fmt[] = fmt;                          \
-			unsigned long long ___param[___bpf_narg(args)];            \
-                                                                       \
-			_Pragma("GCC diagnostic push")                             \
-				_Pragma("GCC diagnostic ignored \"-Wint-conversion\"") \
-					___bpf_fill(___param, args);                       \
-			_Pragma("GCC diagnostic pop")                              \
-                                                                       \
-				bpf_seq_printf(seq, ___fmt, sizeof(___fmt),            \
-							   ___param, sizeof(___param));            \
-		})
+#define BPF_SEQ_PRINTF(seq, fmt, args...)                   \
+({                                                          \
+	static const char ___fmt[] = fmt;                       \
+	unsigned long long ___param[___bpf_narg(args)];         \
+                                                            \
+	_Pragma("GCC diagnostic push")                          \
+	_Pragma("GCC diagnostic ignored \"-Wint-conversion\"")  \
+	___bpf_fill(___param, args);                            \
+	_Pragma("GCC diagnostic pop")                           \
+	bpf_seq_printf(seq, ___fmt, sizeof(___fmt), ___param, sizeof(___param)); \
+})
 
 #endif
