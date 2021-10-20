@@ -2,14 +2,14 @@ SHELL=/bin/bash -o pipefail
 
 ARCH ?= x86_64
 OBJDIR ?= build/$(ARCH)
+SRC = src
+SRCS = $(wildcard $(SRC)/*.c)
+OBJS = $(patsubst $(SRC)/%.c,$(SRC)/%.o,$(SRCS))
+OBJS_WRAPPED = $(OBJS)
 CC = clang-6.0
 LLC = llc-6.0
 OPT = opt-6.0
 LLVM_DIS = llvm-dis-6.0
-
-CLAGS ?=
-SOURCES ?= src/programs.c
-
 CFLAGS += \
 	-D__KERNEL__ \
 	-D__BPF_TRACING__ \
@@ -63,7 +63,8 @@ realclean: clean
 	@:
 
 $(OBJDIR):
-	mkdir -p "$@"
+	mkdir -p $@
+	mkdir -p $@/wrapped
 
 check_headers:
 ifeq ($(ARCH),aarch64)
@@ -77,26 +78,20 @@ depends:
 	apt-get update
 	apt-get install -y llvm-6.0 clang-6.0 libclang-6.0-dev \
 		linux-headers-4.4.0-98-generic linux-headers-4.10.0-14-generic \
-		make binutils curl coreutils
+		make binutils curl coreutils gcc
 
-$(OBJDIR)/ebpf-verifier-%: check_headers
-	sed -r 's/SEC\(\"maps\/\w+\"\)/SEC("maps")/g' $(SOURCES) | \
-		$(CC) $(TARGET) $(CFLAGS) -emit-llvm $(INCLUDES) -c -x c - -o - | \
-		$(OPT) -O2 -mtriple=bpf-pc-linux | $(LLVM_DIS) | \
-		$(LLC) -march=bpf -filetype=obj -o $@
+$(OBJS): %.o: %.c
+	$(CC) $(TARGET) $(CFLAGS) -emit-llvm -c $< $(INCLUDES) -o - | \
+	$(OPT) -O2 -mtriple=bpf-pc-linux | $(LLVM_DIS) | \
+	$(LLC) -march=bpf -filetype=obj -o $(OBJDIR)/$(notdir $@)
 
-$(OBJDIR)/%: check_headers
-	$(CC) $(TARGET) $(CFLAGS) -emit-llvm -c $(SOURCES) $(INCLUDES) -o - | \
-		$(OPT) -O2 -mtriple=bpf-pc-linux | $(LLVM_DIS) | \
-		$(LLC) -march=bpf -filetype=obj -o $@
+#	Run the same command but with the CONFIG_SYSCALL_WRAPPER flag enabled
+	CFLAGS="-DCONFIG_SYSCALL_WRAPPER" \
+	$(CC) $(TARGET) $(CFLAGS) -emit-llvm -c $< $(INCLUDES) -o - | \
+	$(OPT) -O2 -mtriple=bpf-pc-linux | $(LLVM_DIS) | \
+	$(LLC) -march=bpf -filetype=obj -o $(OBJDIR)/wrapped/$(notdir $@)
 
-ebpf: $(OBJDIR)/redcanary-ebpf-programs
-	CFLAGS="-DCONFIG_SYSCALL_WRAPPER" $(MAKE) $(OBJDIR)/redcanary-ebpf-programs-wrapped
-
-ebpf_verifier: $(OBJDIR)/ebpf-verifier-object
-	CFLAGS="-DCONFIG_SYSCALL_WRAPPER" $(MAKE) $(OBJDIR)/ebpf-verifier-object-wrapped
-
-all: $(OBJDIR) depends ebpf ebpf_verifier
+all: depends check_headers $(OBJDIR) $(OBJS)
 	@:
 
 .PHONY: all realclean clean ebpf ebpf_verifier depends check_headers

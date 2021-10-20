@@ -94,4 +94,5 @@ const u64 CRC_SOCK_COMMON_SADDR6 = 0xb7848cfc7c751cae;
 /* sk_buff->protocol */
 const u64 CRC_SKBUFF_PROTO = 0x42a761c8a2a2b084;
 
+/* sk_buff->mac_header */
 const u64 CRC_SKBUFF_MAC_HDR = 0xd67d00581d6ed4cc;

@@ -5,6 +5,8 @@
 #include <linux/types.h>
 #include <linux/limits.h>
 
+#define MAX_TELEMETRY_STACK_ENTRIES 1024
+
 #define MAX_ADDRESSES 16
 #define TRUE 1
 #define FALSE 0
