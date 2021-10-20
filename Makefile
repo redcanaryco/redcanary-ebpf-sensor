@@ -77,7 +77,7 @@ depends:
 	apt-get update
 	apt-get install -y llvm-6.0 clang-6.0 libclang-6.0-dev \
 		linux-headers-4.4.0-98-generic linux-headers-4.10.0-14-generic \
-		make binutils curl coreutils
+		make binutils curl coreutils gcc
 
 # $(OBJDIR)/ebpf-verifier-%: check_headers
 # 	sed -r 's/SEC\(\"maps\/\w+\"\)/SEC("maps")/g' $(SOURCES) | \
@@ -96,7 +96,7 @@ $(OBJS): %.o: %.c
 	$(OPT) -O2 -mtriple=bpf-pc-linux | $(LLVM_DIS) | \
 	$(LLC) -march=bpf -filetype=obj -o $(OBJDIR)/wrapped-$(notdir $@)
 
-all: depends $(OBJDIR) $(OBJS)
+all: depends check_headers $(OBJDIR) $(OBJS)
 	@:
 
 .PHONY: all realclean clean ebpf ebpf_verifier depends check_headers

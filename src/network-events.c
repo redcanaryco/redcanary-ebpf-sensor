@@ -1,4 +1,5 @@
 #include <linux/kconfig.h>
+#include <uapi/linux/ptrace.h>
 #include <uapi/linux/ipv6.h>
 #include <uapi/linux/udp.h>
 #include <uapi/linux/ip.h>
@@ -155,7 +156,7 @@ int kretprobe__ret___skb_recv_udp(struct pt_regs *ctx)
     ev.u.network_info.protocol_type = IPPROTO_UDP;
     ev.u.network_info.mono_ns = bpf_ktime_get_ns();
 
-    _skbuff skb = (_skbuff)PT_REGS_RC_CORE(ctx);
+    _skbuff skb = (_skbuff)PT_REGS_RC(ctx);
     unsigned char *skbuff_base = (unsigned char *)skb;
 
     if (skbuff_base == NULL)

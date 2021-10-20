@@ -1,5 +1,6 @@
 #include <linux/kconfig.h>
 #include <linux/uio.h>
+#include <uapi/linux/ptrace.h>
 #include "common.h"
 #include "types.h"
 
