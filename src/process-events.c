@@ -52,7 +52,7 @@ struct bpf_map_def SEC("maps/clone3_info_store") clone3_info_store = {
     .namespace = "",
 };
 
-struct bpf_map_def SEC("maps/telemetry_events") telemetry_events = {
+struct bpf_map_def SEC("maps/process_events") process_events = {
     .type = BPF_MAP_TYPE_PERF_EVENT_ARRAY,
     .key_size = sizeof(u32),
     .value_size = sizeof(u32),
@@ -61,7 +61,7 @@ struct bpf_map_def SEC("maps/telemetry_events") telemetry_events = {
     .namespace = "",
 };
 
-struct bpf_map_def SEC("maps/telemetry_ids") telemetry_ids = {
+struct bpf_map_def SEC("maps/process_ids") process_ids = {
     .type = BPF_MAP_TYPE_HASH,
     .key_size = sizeof(u64),
     .value_size = sizeof(u64),
@@ -173,7 +173,7 @@ int kprobe__do_mount(struct pt_regs *ctx)
 
 static __always_inline void push_telemetry_event(struct pt_regs *ctx, ptelemetry_event_t ev)
 {
-    bpf_perf_event_output(ctx, &telemetry_events, bpf_get_smp_processor_id(), ev, sizeof(*ev));
+    bpf_perf_event_output(ctx, &process_events, bpf_get_smp_processor_id(), ev, sizeof(*ev));
     __builtin_memset(ev, 0, sizeof(telemetry_event_t));
 }
 
@@ -303,7 +303,7 @@ static __always_inline int enter_exec(syscall_pattern_type_t sp, int fd,
     ev->u.syscall_info.luid = luid;
     push_telemetry_event(ctx, ev);
 
-    bpf_map_update_elem(&telemetry_ids, &pid_tgid, &id, BPF_ANY);
+    bpf_map_update_elem(&process_ids, &pid_tgid, &id, BPF_ANY);
     return 0;
 }
 
@@ -319,7 +319,7 @@ static __always_inline ptelemetry_event_t enter_exec_4_11(syscall_pattern_type_t
 
     // if the ID already exists, we are tail-calling into ourselves, skip ahead to reading the path
     u64 p_t = bpf_get_current_pid_tgid();
-    u64 id = (u64)bpf_map_lookup_elem(&telemetry_ids, &p_t);
+    u64 id = (u64)bpf_map_lookup_elem(&process_ids, &p_t);
     if (id)
     {
         __builtin_memcpy(&id, (void *)id, sizeof(u64));
@@ -338,7 +338,7 @@ static __always_inline ptelemetry_event_t enter_exec_4_11(syscall_pattern_type_t
     ev->u.syscall_info.luid = luid;
     push_telemetry_event(ctx, ev);
 
-    bpf_map_update_elem(&telemetry_ids, &pid_tgid, &id, BPF_ANY);
+    bpf_map_update_elem(&process_ids, &pid_tgid, &id, BPF_ANY);
 
     u32 count = 0;
     char br = 0;
@@ -382,7 +382,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_exec_tc_argv,
                        const char __user *const __user *envp)
 {
     u64 pid_tgid = bpf_get_current_pid_tgid();
-    u64 *idp = bpf_map_lookup_elem(&telemetry_ids, &pid_tgid);
+    u64 *idp = bpf_map_lookup_elem(&process_ids, &pid_tgid);
     if (idp == NULL)
     {
         return 0;
@@ -432,7 +432,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_exec_tc_envp,
 {
     u64 pid_tgid = bpf_get_current_pid_tgid();
     u32 index = 0;
-    u64 *idp = bpf_map_lookup_elem(&telemetry_ids, &pid_tgid);
+    u64 *idp = bpf_map_lookup_elem(&process_ids, &pid_tgid);
     if (idp == NULL)
     {
         return 0;
@@ -487,7 +487,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execveat_4_11,
     if (!filename)
         goto Skip;
     u64 pid_tgid = bpf_get_current_pid_tgid();
-    u64 *idp = bpf_map_lookup_elem(&telemetry_ids, &pid_tgid);
+    u64 *idp = bpf_map_lookup_elem(&process_ids, &pid_tgid);
     if (idp == NULL)
     {
         return 0;
@@ -522,7 +522,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execve_4_11,
     if (!filename)
         goto Skip;
     u64 pid_tgid = bpf_get_current_pid_tgid();
-    u64 *idp = bpf_map_lookup_elem(&telemetry_ids, &pid_tgid);
+    u64 *idp = bpf_map_lookup_elem(&process_ids, &pid_tgid);
     if (idp == NULL)
     {
         return 0;
@@ -563,7 +563,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execve,
 static __always_inline int exit_exec(struct pt_regs *__ctx, u32 i_rdev, u64 i_ino)
 {
     u64 pid_tgid = bpf_get_current_pid_tgid();
-    u64 *id = bpf_map_lookup_elem(&telemetry_ids, &pid_tgid);
+    u64 *id = bpf_map_lookup_elem(&process_ids, &pid_tgid);
 
     if (!id)
         goto Flush;
@@ -578,7 +578,7 @@ static __always_inline int exit_exec(struct pt_regs *__ctx, u32 i_rdev, u64 i_in
         },
     };
     ev->id = *id;
-    bpf_map_delete_elem(&telemetry_ids, &pid_tgid);
+    bpf_map_delete_elem(&process_ids, &pid_tgid);
 
     file_info_t fi = {
         .inode = i_ino,
@@ -674,7 +674,7 @@ static __always_inline int enter_clone(syscall_pattern_type_t sp, unsigned long 
     u32 key = 0;
     bpf_map_update_elem(&clone_info_store, &key, &clone_info, BPF_ANY);
 
-    bpf_map_update_elem(&telemetry_ids, &pid_tgid, &id, BPF_ANY);
+    bpf_map_update_elem(&process_ids, &pid_tgid, &id, BPF_ANY);
 
     return 0;
 }
@@ -683,7 +683,7 @@ static __always_inline int exit_clone(struct pt_regs *ctx)
 {
 
     u64 pid_tgid = bpf_get_current_pid_tgid();
-    u64 *id = bpf_map_lookup_elem(&telemetry_ids, &pid_tgid);
+    u64 *id = bpf_map_lookup_elem(&process_ids, &pid_tgid);
 
     if (!id)
         goto Flush;
@@ -723,7 +723,7 @@ static __always_inline int exit_clone(struct pt_regs *ctx)
     push_telemetry_event(ctx, ev);
 
     ev->id = *id;
-    bpf_map_delete_elem(&telemetry_ids, &pid_tgid);
+    bpf_map_delete_elem(&process_ids, &pid_tgid);
     ev->done = TRUE;
     ev->telemetry_type = TE_RETCODE;
     ev->u.r.retcode = (u32)PT_REGS_RC(ctx);
@@ -784,7 +784,7 @@ static __always_inline int enter_clone3(syscall_pattern_type_t sp, struct clone_
     ev->u.syscall_info.luid = luid;
     push_telemetry_event(ctx, ev);
     pid_tgid = pid_tgid >> 32;
-    bpf_map_update_elem(&telemetry_ids, (u32 *)&pid_tgid, &id, BPF_ANY);
+    bpf_map_update_elem(&process_ids, (u32 *)&pid_tgid, &id, BPF_ANY);
 
     ev->id = id;
     ev->done = FALSE;
@@ -826,7 +826,7 @@ static __always_inline int exit_clone3(struct pt_regs *ctx)
 {
 
     u64 pid_tgid = bpf_get_current_pid_tgid();
-    u64 *id = bpf_map_lookup_elem(&telemetry_ids, &pid_tgid);
+    u64 *id = bpf_map_lookup_elem(&process_ids, &pid_tgid);
 
     if (!id)
         goto Flush;
@@ -876,7 +876,7 @@ static __always_inline int exit_clone3(struct pt_regs *ctx)
     push_telemetry_event(ctx, ev);
 
     ev->id = *id;
-    bpf_map_delete_elem(&telemetry_ids, &pid_tgid);
+    bpf_map_delete_elem(&process_ids, &pid_tgid);
     ev->done = TRUE;
     ev->telemetry_type = TE_RETCODE;
     ev->u.r.retcode = (u32)PT_REGS_RC(ctx);
@@ -936,7 +936,7 @@ int kprobe__read_pid_task_struct(struct pt_regs *ctx)
 
     // combine to find ID, get ID
     u64 ppid_tgid = (u64)ptgid << 32 | ppid;
-    u64 *id = bpf_map_lookup_elem(&telemetry_ids, &ppid_tgid);
+    u64 *id = bpf_map_lookup_elem(&process_ids, &ppid_tgid);
 
     if (!id)
         return -1;
@@ -953,7 +953,7 @@ int kprobe__read_pid_task_struct(struct pt_regs *ctx)
     };
 
     ev->id = *id;
-    bpf_map_delete_elem(&telemetry_ids, &ppid_tgid);
+    bpf_map_delete_elem(&process_ids, &ppid_tgid);
     ev->telemetry_type = TE_RETCODE;
     ev->u.r.pid_tgid = pid_tgid;
     push_telemetry_event(ctx, ev);
@@ -1053,7 +1053,7 @@ static __always_inline int enter_unshare(syscall_pattern_type_t sp, int flags,
     ev->u.unshare_flags = flags;
     push_telemetry_event(ctx, ev);
 
-    bpf_map_update_elem(&telemetry_ids, &pid_tgid, &id, BPF_ANY);
+    bpf_map_update_elem(&process_ids, &pid_tgid, &id, BPF_ANY);
 
     return 0;
 }
@@ -1062,7 +1062,7 @@ static __always_inline int exit_unshare(struct pt_regs *ctx)
 {
 
     u64 pid_tgid = bpf_get_current_pid_tgid();
-    u64 *id = bpf_map_lookup_elem(&telemetry_ids, &pid_tgid);
+    u64 *id = bpf_map_lookup_elem(&process_ids, &pid_tgid);
 
     if (!id)
         goto Flush;
@@ -1077,7 +1077,7 @@ static __always_inline int exit_unshare(struct pt_regs *ctx)
         },
     };
     ev->id = *id;
-    bpf_map_delete_elem(&telemetry_ids, &pid_tgid);
+    bpf_map_delete_elem(&process_ids, &pid_tgid);
 
     ev->telemetry_type = TE_RETCODE;
     ev->u.r.retcode = (u32)PT_REGS_RC(ctx);
@@ -1149,7 +1149,7 @@ static __always_inline int enter_exit(syscall_pattern_type_t sp, int status,
     ev->telemetry_type = TE_EXIT_STATUS;
     ev->u.exit_status = status;
     push_telemetry_event(ctx, ev);
-    bpf_map_update_elem(&telemetry_ids, &pid_tgid, &id, BPF_ANY);
+    bpf_map_update_elem(&process_ids, &pid_tgid, &id, BPF_ANY);
 
     bpf_tail_call(ctx, &tail_call_table, RET_SYS_EXIT);
 
@@ -1159,7 +1159,7 @@ static __always_inline int enter_exit(syscall_pattern_type_t sp, int status,
 static __always_inline int exit_exit(struct pt_regs *ctx)
 {
     u64 pid_tgid = bpf_get_current_pid_tgid();
-    u64 *id = bpf_map_lookup_elem(&telemetry_ids, &pid_tgid);
+    u64 *id = bpf_map_lookup_elem(&process_ids, &pid_tgid);
 
     if (!id)
         goto Flush;
@@ -1174,7 +1174,7 @@ static __always_inline int exit_exit(struct pt_regs *ctx)
         },
     };
     ev->id = *id;
-    bpf_map_delete_elem(&telemetry_ids, &pid_tgid);
+    bpf_map_delete_elem(&process_ids, &pid_tgid);
 
     ev->telemetry_type = TE_RETCODE;
     ev->u.r.retcode = (u32)PT_REGS_RC(ctx);
