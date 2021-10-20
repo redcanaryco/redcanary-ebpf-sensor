@@ -63,7 +63,8 @@ realclean: clean
 	@:
 
 $(OBJDIR):
-	mkdir -p "$@"
+	mkdir -p $@
+	mkdir -p $@/wrapped
 
 check_headers:
 ifeq ($(ARCH),aarch64)
@@ -79,12 +80,6 @@ depends:
 		linux-headers-4.4.0-98-generic linux-headers-4.10.0-14-generic \
 		make binutils curl coreutils gcc
 
-# $(OBJDIR)/ebpf-verifier-%: check_headers
-# 	sed -r 's/SEC\(\"maps\/\w+\"\)/SEC("maps")/g' $(SOURCES) | \
-# 		$(CC) $(TARGET) $(CFLAGS) -emit-llvm $(INCLUDES) -c -x c - -o - | \
-# 		$(OPT) -O2 -mtriple=bpf-pc-linux | $(LLVM_DIS) | \
-# 		$(LLC) -march=bpf -filetype=obj -o $@
-
 $(OBJS): %.o: %.c
 	$(CC) $(TARGET) $(CFLAGS) -emit-llvm -c $< $(INCLUDES) -o - | \
 	$(OPT) -O2 -mtriple=bpf-pc-linux | $(LLVM_DIS) | \
@@ -94,7 +89,7 @@ $(OBJS): %.o: %.c
 	CFLAGS="-DCONFIG_SYSCALL_WRAPPER" \
 	$(CC) $(TARGET) $(CFLAGS) -emit-llvm -c $< $(INCLUDES) -o - | \
 	$(OPT) -O2 -mtriple=bpf-pc-linux | $(LLVM_DIS) | \
-	$(LLC) -march=bpf -filetype=obj -o $(OBJDIR)/wrapped-$(notdir $@)
+	$(LLC) -march=bpf -filetype=obj -o $(OBJDIR)/wrapped/$(notdir $@)
 
 all: depends check_headers $(OBJDIR) $(OBJS)
 	@:
