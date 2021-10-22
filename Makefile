@@ -80,18 +80,22 @@ depends:
 		linux-headers-4.4.0-98-generic linux-headers-4.10.0-14-generic \
 		make binutils curl coreutils gcc
 
+no_wrapper:
+	OBJDIR=build/$(ARCH)/wrapped $(MAKE) $(OBJS)
+
+wrapper:
+	CFLAGS="-DCONFIG_SYSCALL_WRAPPER" $(MAKE) $(OBJS)
+
+
 $(OBJS): %: %.c
 	$(CC) $(TARGET) $(CFLAGS) -emit-llvm -c $< $(INCLUDES) -o - | \
 	$(OPT) -O2 -mtriple=bpf-pc-linux | $(LLVM_DIS) | \
 	$(LLC) -march=bpf -filetype=obj -o $(OBJDIR)/$(notdir $@)
 
-#	Run the same command but with the CONFIG_SYSCALL_WRAPPER flag enabled
-	CFLAGS="-DCONFIG_SYSCALL_WRAPPER" \
-	$(CC) $(TARGET) $(CFLAGS) -emit-llvm -c $< $(INCLUDES) -o - | \
-	$(OPT) -O2 -mtriple=bpf-pc-linux | $(LLVM_DIS) | \
-	$(LLC) -march=bpf -filetype=obj -o $(OBJDIR)/wrapped/$(notdir $@)
 
-all: depends check_headers $(OBJDIR) $(OBJS)
+all: depends check_headers wrapper $(OBJDIR) wrapper no_wrapper
 	@:
+
+
 
 .PHONY: all realclean clean ebpf ebpf_verifier depends check_headers
