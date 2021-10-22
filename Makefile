@@ -4,7 +4,7 @@ ARCH ?= x86_64
 OBJDIR ?= build/$(ARCH)
 SRC = src
 SRCS = $(wildcard $(SRC)/*.c)
-OBJS = $(patsubst $(SRC)/%.c,$(SRC)/%.o,$(SRCS))
+OBJS = $(patsubst $(SRC)/%.c,$(SRC)/%,$(SRCS))
 OBJS_WRAPPED = $(OBJS)
 CC = clang-6.0
 LLC = llc-6.0
@@ -80,18 +80,22 @@ depends:
 		linux-headers-4.4.0-98-generic linux-headers-4.10.0-14-generic \
 		make binutils curl coreutils gcc
 
-$(OBJS): %.o: %.c
+no_wrapper:
+	$(MAKE) $(OBJS)
+
+wrapper:
+	OBJDIR=build/$(ARCH)/wrapped  CFLAGS="-DCONFIG_SYSCALL_WRAPPER" $(MAKE) $(OBJS)
+
+
+$(OBJS): %: %.c
 	$(CC) $(TARGET) $(CFLAGS) -emit-llvm -c $< $(INCLUDES) -o - | \
 	$(OPT) -O2 -mtriple=bpf-pc-linux | $(LLVM_DIS) | \
 	$(LLC) -march=bpf -filetype=obj -o $(OBJDIR)/$(notdir $@)
 
-#	Run the same command but with the CONFIG_SYSCALL_WRAPPER flag enabled
-	CFLAGS="-DCONFIG_SYSCALL_WRAPPER" \
-	$(CC) $(TARGET) $(CFLAGS) -emit-llvm -c $< $(INCLUDES) -o - | \
-	$(OPT) -O2 -mtriple=bpf-pc-linux | $(LLVM_DIS) | \
-	$(LLC) -march=bpf -filetype=obj -o $(OBJDIR)/wrapped/$(notdir $@)
 
-all: depends check_headers $(OBJDIR) $(OBJS)
+all: depends check_headers $(OBJDIR) wrapper no_wrapper
 	@:
+
+
 
 .PHONY: all realclean clean ebpf ebpf_verifier depends check_headers
