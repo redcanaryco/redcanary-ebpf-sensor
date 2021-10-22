@@ -81,10 +81,10 @@ depends:
 		make binutils curl coreutils gcc
 
 no_wrapper:
-	OBJDIR=build/$(ARCH)/wrapped $(MAKE) $(OBJS)
+	$(MAKE) $(OBJS)
 
 wrapper:
-	CFLAGS="-DCONFIG_SYSCALL_WRAPPER" $(MAKE) $(OBJS)
+	OBJDIR=build/$(ARCH)/wrapped  CFLAGS="-DCONFIG_SYSCALL_WRAPPER" $(MAKE) $(OBJS)
 
 
 $(OBJS): %: %.c
