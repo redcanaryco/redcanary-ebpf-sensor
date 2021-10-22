@@ -93,7 +93,7 @@ $(OBJS): %: %.c
 	$(LLC) -march=bpf -filetype=obj -o $(OBJDIR)/$(notdir $@)
 
 
-all: depends check_headers wrapper $(OBJDIR) wrapper no_wrapper
+all: depends check_headers $(OBJDIR) wrapper no_wrapper
 	@:
 
 
