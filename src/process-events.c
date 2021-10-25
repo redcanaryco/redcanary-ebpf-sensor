@@ -1184,6 +1184,40 @@ Flush:
     return 0;
 }
 
+// do_exit probes must call enter_exit() and exit_exit() since do_exit is __no_return
+SEC("kprobe/do_exit_4_8")
+int BPF_KPROBE_SYSCALL(kprobe__do_exit_4_8, int status)
+{
+    // if PID != TGID, then exit, we only care when the entire group exits
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+    if ((pid_tgid >> 32) ^ (pid_tgid & 0xFFFFFFFF))
+        return 0;
+
+    u32 ppid = -1;
+    u32 luid = -1;
+    const char __user *exe = NULL;
+    u32 length = -1;
+    GET_OFFSETS_4_8;
+    if (enter_exit(SP_EXIT, status, ctx, ppid, luid, exe, length) < 0)
+        return -1;
+    return exit_exit(ctx);
+Skip:
+    return -1;
+}
+
+// do_exit probes must call enter_exit() and exit_exit() since do_exit is __no_return
+SEC("kprobe/do_exit")
+int BPF_KPROBE_SYSCALL(kprobe__do_exit, int status)
+{
+    // if PID != TGID, then exit, we only care when the entire group exits
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+    if ((pid_tgid >> 32) ^ (pid_tgid & 0xFFFFFFFF))
+        return 0;
+    if (enter_exit(SP_EXIT, status, ctx, -1, -1, NULL, -1) < 0)
+        return -1;
+    return exit_exit(ctx);
+}
+
 SEC("kprobe/sys_exit_4_8")
 int BPF_KPROBE_SYSCALL(kprobe__sys_exit_4_8, int status)
 {
