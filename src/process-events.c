@@ -1202,24 +1202,14 @@ static __always_inline int enter_exit(syscall_pattern_type_t sp, int status,
 
     ev->id = id;
     ev->done = FALSE;
-    ev->telemetry_type = TE_EXE_PATH;
-    ev->u.v.truncated = FALSE;
-    long count = 0;
-    count = bpf_probe_read_str(&ev->u.v.value, VALUE_SIZE, (void *)exe);
-    if (count == VALUE_SIZE)
-    {
-        ev->u.v.truncated = TRUE;
-    }
-    push_telemetry_event(ctx, ev);
-
-    ev->id = id;
-    ev->done = FALSE;
     ev->telemetry_type = TE_EXIT_STATUS;
     ev->u.exit_status = status;
     push_telemetry_event(ctx, ev);
-    bpf_map_update_elem(&process_ids, &pid_tgid, &id, BPF_ANY);
 
-    bpf_tail_call(ctx, &tail_call_table, RET_SYS_EXIT);
+    ev->id = id;
+    ev->telemetry_type = TE_RETCODE;
+    ev->u.r.retcode = (u32)PT_REGS_RC(ctx);
+    push_telemetry_event(ctx, ev);
 
     return 0;
 }
