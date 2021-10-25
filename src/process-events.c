@@ -906,6 +906,74 @@ int kretprobe__ret_sys_clone3(struct pt_regs *ctx)
     return exit_clone3(ctx);
 }
 
+// This probe can generically read the inode from a task_struct at any point
+// where the first argument is a pointer to a task_struct, the event emit
+// is a file type event with inode information, and a RETCODE with the correct
+// PID, intended for use with tracing exec family calls.
+SEC("kprobe/read_inode_task_struct")
+int kprobe__read_inode_task_struct(struct pt_regs *ctx)
+{
+    // get new current
+    void *ts = (void *)PT_REGS_PARM1(ctx);
+
+    // get the true pid
+    u32 pid = 0;
+    u32 tgid = 0;
+    read_value(ts, CRC_TASK_STRUCT_PID, &pid, sizeof(pid));
+    read_value(ts, CRC_TASK_STRUCT_TGID, &tgid, sizeof(tgid));
+    u64 pid_tgid = (u64)tgid << 32 | pid;
+
+    // Get the inode number and device number
+    u32 i_rdev = 0;
+    u64 i_ino = 0;
+    void *ptr = NULL;
+    read_value(ts, CRC_TASK_STRUCT_MM, &ptr, sizeof(ptr));
+    read_value(ptr, CRC_MM_STRUCT_EXE_FILE, &ptr, sizeof(ptr));
+    read_value(ptr, CRC_FILE_F_INODE, &ptr, sizeof(ptr));
+    read_value(ptr, CRC_INODE_I_RDEV, &i_rdev, sizeof(i_rdev));
+    read_value(ptr, CRC_INODE_I_INO, &i_ino, sizeof(i_ino));
+
+    u64 *id = bpf_map_lookup_elem(&process_ids, &pid_tgid);
+
+    if (!id)
+        return -1;
+
+    // prepare event
+    ptelemetry_event_t ev = &(telemetry_event_t){
+        .id = 0,
+        .done = TRUE,
+        .telemetry_type = 0,
+        .u.v = {
+                .value[0] = '\0',
+                .truncated = FALSE,
+        },
+    };
+
+
+    ev->id = *id;
+    bpf_map_delete_elem(&process_ids, &pid_tgid);
+
+    file_info_t fi = {
+            .inode = i_ino,
+            .devmajor = MAJOR(i_rdev),
+            .devminor = MINOR(i_rdev),
+            .value[0] = '\0',
+    };
+
+    ev->telemetry_type = TE_FILE_INFO;
+    __builtin_memcpy(&ev->u.file_info, &fi, sizeof(fi));
+    push_telemetry_event(ctx, ev);
+
+    // send retcode
+    ev->id = *id;
+    bpf_map_delete_elem(&process_ids, &pid_tgid);
+    ev->telemetry_type = TE_RETCODE;
+    ev->u.r.retcode = (u32)PT_REGS_RC(ctx);
+    ev->u.r.pid_tgid = pid_tgid;
+    push_telemetry_event(ctx, ev);
+    return 0;
+}
+
 // This probe can generically read the pid from a task_struct at any point
 // where the first argument is a pointer to a task_struct, the event emit
 // is a RETCODE with the correct PID, intended for use with tracing fork,
