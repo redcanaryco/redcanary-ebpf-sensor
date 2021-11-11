@@ -110,6 +110,7 @@ typedef enum
     TE_EXIT_STATUS,
     TE_EXEC_FILENAME,
     TE_PWD,
+    TE_SCRIPT
 } telemetry_event_type_t;
 
 #define COMMON_FIELDS \
@@ -254,6 +255,12 @@ struct process_data
 
 typedef struct
 {
+    u64 mono_ns;
+    struct process_data process;
+} script_info_t;
+
+typedef struct
+{
     u16 protocol_type;           // Something like IPPROTO_TCP or IPPROTO_UDP
     u16 ip_type;                 // AF_INET or AF_INET6
     enum direction_t direction;  // inbound or outbound
@@ -317,6 +324,7 @@ typedef struct
         clone_info_t clone_info;
         clone3_info_t clone3_info;
         network_info_t network_info;
+        script_info_t script_info;
         int unshare_flags;
         int exit_status;
         struct
