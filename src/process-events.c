@@ -547,7 +547,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execveat_4_11,
     bpf_tail_call(ctx, &tail_call_table, SYS_EXEC_TC_ARGV);
 
 Skip:
-    return -1;
+    return 0;
 }
 
 SEC("kprobe/sys_execve_4_11")
@@ -582,7 +582,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execve_4_11,
     bpf_tail_call(ctx, &tail_call_table, SYS_EXEC_TC_ARGV);
 
 Skip:
-    return -1;
+    return 0;
 }
 
 SEC("kprobe/sys_execveat")
@@ -793,7 +793,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_clone_4_8, unsigned long flags, void __user *
     GET_OFFSETS_4_8;
     return enter_clone(SP_CLONE, flags, stack, parent_tid, child_tid, tls, ctx, ppid, luid, exe, length);
 Skip:
-    return -1;
+    return 0;
 }
 
 SEC("kprobe/sys_clone")
@@ -941,7 +941,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_clone3, struct clone_args __user *uargs, size
     GET_OFFSETS_4_8;
     return enter_clone3(SP_CLONE3, uargs, size, ctx, ppid, luid, exe, length);
 Skip:
-    return -1;
+    return 0;
 }
 
 SEC("kretprobe/ret_sys_clone3")
@@ -980,7 +980,7 @@ int kprobe__read_inode_task_struct(struct pt_regs *ctx)
     u64 *id = bpf_map_lookup_elem(&process_ids, &pid_tgid);
 
     if (!id)
-        return -1;
+        return 0;
 
     // prepare event
     ptelemetry_event_t ev = &(telemetry_event_t){
@@ -1051,7 +1051,7 @@ int kprobe__read_pid_task_struct(struct pt_regs *ctx)
     u64 *id = bpf_map_lookup_elem(&process_ids, &ppid_tgid);
 
     if (!id)
-        return -1;
+        return 0;
 
     // send event with ID
     ptelemetry_event_t ev = &(telemetry_event_t){
@@ -1094,7 +1094,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_fork_4_8)
     GET_OFFSETS_4_8;
     return enter_clone(SP_FORK, 0, NULL, NULL, NULL, 0, ctx, ppid, luid, exe, length);
 Skip:
-    return -1;
+    return 0;
 }
 
 SEC("kprobe/sys_vfork_4_8")
@@ -1107,7 +1107,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_vfork_4_8)
     GET_OFFSETS_4_8;
     return enter_clone(SP_VFORK, 0, NULL, NULL, NULL, 0, ctx, ppid, luid, exe, length);
 Skip:
-    return -1;
+    return 0;
 }
 
 SEC("kretprobe/ret_sys_clone")
@@ -1209,7 +1209,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_unshare_4_8, int flags)
     GET_OFFSETS_4_8;
     return enter_unshare(SP_UNSHARE, flags, ctx, ppid, luid, exe, length);
 Skip:
-    return -1;
+    return 0;
 }
 
 SEC("kprobe/sys_unshare")
@@ -1311,10 +1311,10 @@ int BPF_KPROBE_SYSCALL(kprobe__do_exit_4_8, int status)
     u32 length = -1;
     GET_OFFSETS_4_8;
     if (enter_exit(SP_EXIT, status, ctx, ppid, luid, exe, length) < 0)
-        return -1;
+        return 0;
     return exit_exit(ctx);
 Skip:
-    return -1;
+    return 0;
 }
 
 // do_exit probes must call enter_exit() and exit_exit() since do_exit is __no_return
@@ -1326,7 +1326,7 @@ int BPF_KPROBE_SYSCALL(kprobe__do_exit, int status)
     if ((pid_tgid >> 32) ^ (pid_tgid & 0xFFFFFFFF))
         return 0;
     if (enter_exit(SP_EXIT, status, ctx, -1, -1, NULL, -1) < 0)
-        return -1;
+        return 0;
     return exit_exit(ctx);
 }
 
@@ -1345,7 +1345,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_exit_4_8, int status)
     GET_OFFSETS_4_8;
     return enter_exit(SP_EXIT, status, ctx, ppid, luid, exe, length);
 Skip:
-    return -1;
+    return 0;
 }
 
 SEC("kprobe/sys_exit")
@@ -1368,7 +1368,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_exit_group_4_8, int status)
     GET_OFFSETS_4_8;
     return enter_exit(SP_EXITGROUP, status, ctx, ppid, luid, exe, length);
 Skip:
-    return -1;
+    return 0;
 }
 
 SEC("kprobe/sys_exit_group")
