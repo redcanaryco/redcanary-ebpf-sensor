@@ -34,6 +34,15 @@ struct bpf_map_def SEC("maps/read_flush_index") read_flush_index = {
     .namespace = "",
 };
 
+struct bpf_map_def SEC("maps/read_path_skip") read_path_skip = {
+    .type = BPF_MAP_TYPE_PERCPU_ARRAY,
+    .key_size = sizeof(u32),
+    .value_size = sizeof(u64),
+    .max_entries = 1,
+    .pinning = 0,
+    .namespace= "",
+};
+
 struct bpf_map_def SEC("maps/clone_info_store") clone_info_store = {
     .type = BPF_MAP_TYPE_PERCPU_ARRAY,
     .key_size = sizeof(u32),
@@ -243,6 +252,17 @@ static __always_inline void push_telemetry_event(struct pt_regs *ctx, ptelemetry
 
 #define READ_VALUE_N(EV, T, S, N) REPEAT_##N(READ_VALUE(EV, T, S);)
 
+#define SKIP_PATH                                       \
+    if (skipped >= to_skip)                             \
+        goto Send;                                      \
+    /* Skip to the parent directory */                  \
+    bpf_probe_read(&ptr, sizeof(ptr), ptr + parent);    \
+    skipped += 1;                                       \
+    if (!ptr)                                           \
+        goto Send;                                      \
+
+#define SKIP_PATH_N(N) REPEAT_##N(SKIP_PATH;)
+
 #define SEND_PATH                                                           \
     ev->id = id;                                                            \
     ev->done = FALSE;                                                       \
@@ -272,6 +292,7 @@ static __always_inline void push_telemetry_event(struct pt_regs *ctx, ptelemetry
         }                                                                   \
         /* we're done here, follow the pointer */                           \
         bpf_probe_read(&ptr, sizeof(ptr), ptr + parent);                    \
+        to_skip += 1;                                                       \
         if (!ptr)                                                           \
             goto Skip;                                                      \
         if (br == '/')                                                      \
@@ -343,7 +364,16 @@ static __always_inline ptelemetry_event_t enter_exec_4_11(syscall_pattern_type_t
     u32 count = 0;
     char br = 0;
 
+    // reuse count as idx and value to save stack space
+    bpf_map_update_elem(&read_path_skip, &count, &count, BPF_ANY);
+
 Pwd:;
+
+    // the verifier complains if these are instantiated before the Pwd:; label
+    u64 to_skip = 0;
+    u64 skipped = 0;
+
+    // since index will start at zero, we can use it here
     u64 offset = 0;
     void *ptr = (void *)bpf_get_current_task();
     if (read_value(ptr, CRC_TASK_STRUCT_FS, &ptr, sizeof(ptr)) < 0)
@@ -367,10 +397,24 @@ Pwd:;
     SET_OFFSET(CRC_DENTRY_D_PARENT);
     u32 parent = *(u32 *)offset; // offset of d_parent
 
-    SEND_PATH_N(9);
-    bpf_tail_call(ctx, &tail_call_table, SYS_EXECVE_4_8);
+    u64 _to_skip = (u64)bpf_map_lookup_elem(&read_path_skip, &to_skip);
+    if (_to_skip) {
+        __builtin_memcpy(&to_skip, (void*)_to_skip, sizeof(u64));
+        SKIP_PATH_N(100);
+    }
+
+Send:
+    SEND_PATH_N(10);
+
+    // update to_skip, reuse skipped as index by resetting it
+    skipped = 0;
+    bpf_map_update_elem(&read_path_skip, &skipped, &to_skip, BPF_ANY);
+    // tail call back in
+    bpf_tail_call(ctx, &tail_call_table, SYS_EXECVE_4_11);
 
 Skip:
+    skipped = 0;
+    bpf_map_delete_elem(&read_path_skip, &skipped);
     ev->id = id;
     return ev;
 }
