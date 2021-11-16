@@ -400,7 +400,7 @@ Pwd:;
     u64 _to_skip = (u64)bpf_map_lookup_elem(&read_path_skip, &to_skip);
     if (_to_skip) {
         __builtin_memcpy(&to_skip, (void*)_to_skip, sizeof(u64));
-        SKIP_PATH_N(100);
+        SKIP_PATH_N(150);
     }
 
 Send:
