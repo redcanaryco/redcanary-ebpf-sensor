@@ -982,6 +982,7 @@ int kprobe__read_inode_task_struct(struct pt_regs *ctx)
     if (!id)
         return 0;
 
+
     // prepare event
     ptelemetry_event_t ev = &(telemetry_event_t){
         .id = 0,
