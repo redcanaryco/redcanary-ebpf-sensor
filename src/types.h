@@ -354,6 +354,8 @@ typedef enum
 {
     SYS_EXECVE_4_8,
     SYS_EXECVEAT_4_8,
+    SYS_EXECVE_4_11,
+    SYS_EXECVEAT_4_11,
     SYS_EXEC_TC_ARGV,
     SYS_EXEC_TC_ENVP,
     RET_SYS_EXECVE,
