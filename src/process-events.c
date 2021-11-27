@@ -95,12 +95,6 @@ struct bpf_map_def SEC("maps/tail_call_table") tail_call_table = {
 
 #define FILL_TELEMETRY_SYSCALL_RET(E, SP)
 
-#define SET_OFFSET(CRC)                                   \
-    offset = CRC;                                         \
-    offset = (u64)bpf_map_lookup_elem(&offsets, &offset); \
-    if (!offset)                                          \
-        goto Skip;
-
 /* this must go in the kretprobe so we can grab the new process from `task_struct` */
 #define GET_OFFSETS_4_8_RET_EXEC                                                                        \
     /* if "loaded" doesn't exist in the map, we get NULL back and won't read from offsets               \
@@ -944,20 +938,19 @@ int kprobe__read_inode_task_struct(struct pt_regs *ctx)
         .done = TRUE,
         .telemetry_type = 0,
         .u.v = {
-                .value[0] = '\0',
-                .truncated = FALSE,
+            .value[0] = '\0',
+            .truncated = FALSE,
         },
     };
-
 
     ev->id = *id;
     bpf_map_delete_elem(&process_ids, &pid_tgid);
 
     file_info_t fi = {
-            .inode = i_ino,
-            .devmajor = MAJOR(i_rdev),
-            .devminor = MINOR(i_rdev),
-            .value[0] = '\0',
+        .inode = i_ino,
+        .devmajor = MAJOR(i_rdev),
+        .devminor = MINOR(i_rdev),
+        .value[0] = '\0',
     };
 
     ev->telemetry_type = TE_FILE_INFO;

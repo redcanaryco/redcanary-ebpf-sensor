@@ -96,3 +96,6 @@ const u64 CRC_SKBUFF_PROTO = 0x42a761c8a2a2b084;
 
 /* sk_buff->mac_header */
 const u64 CRC_SKBUFF_MAC_HDR = 0xd67d00581d6ed4cc;
+
+/* linux_binprm->file */
+const u64 CRC_BPRM_FILE = 0x323e974b140d6eff;

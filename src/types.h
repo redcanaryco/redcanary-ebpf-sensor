@@ -257,6 +257,7 @@ typedef struct
 {
     u64 mono_ns;
     struct process_data process;
+    char path[128];
 } script_info_t;
 
 typedef struct

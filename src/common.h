@@ -24,6 +24,12 @@ struct bpf_map_def SEC("maps/offsets") offsets = {
         .mono_ns = mono_ns,                    \
     }
 
+#define SET_OFFSET(CRC)                                   \
+    offset = CRC;                                         \
+    offset = (u64)bpf_map_lookup_elem(&offsets, &offset); \
+    if (!offset)                                          \
+        goto Skip;
+
 static __always_inline int read_value(void *base, u64 offset, void *dest, size_t dest_size)
 {
     /* null check the base pointer first */
@@ -35,6 +41,7 @@ static __always_inline int read_value(void *base, u64 offset, void *dest, size_t
     {
         return bpf_probe_read(dest, dest_size, base + *(u32 *)_offset);
     }
+    bpf_printk("Failed to read offset\n");
     return -1;
 }
 #endif //_COMMON_H
