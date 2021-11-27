@@ -39,7 +39,6 @@ SEC("kretprobe/ret_script_load")
 int kretprobe__ret_script_load(struct pt_regs *ctx)
 {
     void *file_ptr = NULL;
-    u64 offset = 0;
 
     // Get the return value from inet_csk_accept
     int ret = PT_REGS_RC(ctx);
@@ -84,80 +83,18 @@ int kretprobe__ret_script_load(struct pt_regs *ctx)
         return 0;
     }
 
-    // Get filepath
-    ret = read_value(bprm, CRC_BPRM_FILE, &file_ptr, sizeof(file_ptr));
-    if (ret == -1)
+    // Get filename
+    ret = read_value(bprm, CRC_BPRM_FILENAME, &file_ptr, sizeof(file_ptr));
+    if (ret < 0)
     {
-        bpf_printk("Failed to read file_ptr\n");
+        bpf_printk("Failed to read filename_buf\n");
         return 0;
     }
 
-    offset = CRC_FILE_F_PATH;
-    offset = (u64)bpf_map_lookup_elem(&offsets, &offset);
-    if (!offset)
-    {
-        bpf_printk("Failed to read offsets\n");
-        return 0;
-    }
-
-    void *dentry = NULL;
-    bpf_probe_read(&dentry, sizeof(dentry), file_ptr + 8 + *(u32 *)offset);
-    if (dentry == NULL)
-    {
-        bpf_printk("Failed to get the offset thing\n");
-    }
-
-    void *parent_dentry = NULL;
-    struct qstr d_name;
-    __builtin_memset(&d_name, 0, sizeof(d_name));
-
-    read_value(dentry, CRC_DENTRY_D_PARENT, &parent_dentry, sizeof(parent_dentry));
-    read_value(dentry, CRC_DENTRY_D_NAME, &d_name, sizeof(d_name));
-    bpf_probe_read(&ev.u.script_info.path, 128, (void *)d_name.name);
-    bpf_printk("%s\n", d_name.name);
+    bpf_probe_read_str(&ev.u.script_info.path, sizeof(ev.u.script_info.path), file_ptr);
+    bpf_printk("Read script info path\n");
     bpf_perf_event_output(ctx, &script_events, bpf_get_smp_processor_id(), &ev, sizeof(ev));
-
-#pragma clang loop unroll(full)
-    for (int i = 0; i < 16; i++)
-    {
-        read_value(parent_dentry, CRC_DENTRY_D_NAME, &d_name, sizeof(d_name));
-        read_value(parent_dentry, CRC_DENTRY_D_PARENT, &parent_dentry, sizeof(parent_dentry));
-        bpf_probe_read(&ev.u.script_info.path, 128, (void *)d_name.name);
-        bpf_printk("%s\n", ev.u.script_info.path);
-        if (ev.u.script_info.path[0] == '/')
-        {
-            goto END;
-        }
-        bpf_perf_event_output(ctx, &script_events, bpf_get_smp_processor_id(), &ev, sizeof(ev));
-        __builtin_memset(&ev.u.script_info.path, 0, sizeof(ev.u.script_info.path));
-    }
-// read_value(dentry, CRC_DENTRY_D_NAME, &d_name, sizeof(d_name));
-// read_value(dentry, CRC_DENTRY_D_PARENT, &parent_dentry, sizeof(parent_dentry));
-// bpf_printk("Dentry name: %s\n", d_name.name);
-
-// read_value(parent_dentry, CRC_DENTRY_D_NAME, &d_name, sizeof(d_name));
-// bpf_printk("Parent dentry name: %s\n", d_name.name);
-
-// bpf_printk("parent_dentry: %llx\n", parent_dentry);
-// read_value(parent_dentry, CRC_DENTRY_D_PARENT, &parent_dentry, sizeof(parent_dentry));
-// read_value(parent_dentry, CRC_DENTRY_D_NAME, &d_name, sizeof(d_name));
-// bpf_printk("Parent parent dentry name: %s\n", d_name.name);
-
-// bpf_printk("parent_dentry: %llx\n", parent_dentry);
-// read_value(parent_dentry, CRC_DENTRY_D_PARENT, &parent_dentry, sizeof(parent_dentry));
-// read_value(parent_dentry, CRC_DENTRY_D_NAME, &d_name, sizeof(d_name));
-// bpf_printk("Parent parent parent dentry name: %s\n", d_name.name);
-
-// bpf_printk("parent_dentry: %llx\n", parent_dentry);
-// read_value(parent_dentry, CRC_DENTRY_D_PARENT, &parent_dentry, sizeof(parent_dentry));
-// read_value(parent_dentry, CRC_DENTRY_D_NAME, &d_name, sizeof(d_name));
-// bpf_printk("Parent parent parent dentry name: %s\n", d_name.name);
-
-// Output data to generator
-END:
-    ev.done = 1;
-    bpf_perf_event_output(ctx, &script_events, bpf_get_smp_processor_id(), &ev, sizeof(ev));
-
+    bpf_printk("Output event\n");
     return 0;
 }
 

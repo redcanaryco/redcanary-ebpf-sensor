@@ -44,4 +44,19 @@ static __always_inline int read_value(void *base, u64 offset, void *dest, size_t
     bpf_printk("Failed to read offset\n");
     return -1;
 }
+
+static __always_inline int read_str_value(void *base, u64 offset, void *dest, size_t dest_size)
+{
+    /* null check the base pointer first */
+    if (!base)
+        return -1;
+
+    u64 _offset = (u64)bpf_map_lookup_elem(&offsets, &offset);
+    if (_offset)
+    {
+        return bpf_probe_read_str(dest, dest_size, base + *(u32 *)_offset);
+    }
+    bpf_printk("Failed to read offset for string\n");
+    return -1;
+}
 #endif //_COMMON_H
