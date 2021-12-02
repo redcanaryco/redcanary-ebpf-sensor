@@ -31,6 +31,9 @@ const u64 CRC_PATH_DENTRY = 0x71a4a97d6a6791a9;
 /* dentry->d_name */
 const u64 CRC_DENTRY_D_NAME = 0x1b807e513eab1323;
 
+/* dentry->d_inode */
+const u64 CRC_DENTRY_D_INODE = 0x3a4154e1ebe3c516;
+
 /* qstr->hash_len */
 const u64 CRC_QSTR_HASH_LEN = 0xeb88a6081906b367;
 
@@ -48,6 +51,12 @@ const u64 CRC_INODE_I_INO = 0xa9a6f8a386ba140e;
 
 /* inode->fs */
 const u64 CRC_INODE_FS = 0x61ac74b5c543f248;
+
+/* inode->i_sb */
+const u64 CRC_INODE_I_SB = 0x861dc69e083a70b5;
+
+/* super_block->s_dev */
+const u64 CRC_SBLOCK_S_DEV = 0xb1c03bec387e1aca;
 
 /* task_struct->fs */
 const u64 CRC_TASK_STRUCT_FS = 0x7e927c27fc9f401f;
@@ -96,3 +105,12 @@ const u64 CRC_SKBUFF_PROTO = 0x42a761c8a2a2b084;
 
 /* sk_buff->mac_header */
 const u64 CRC_SKBUFF_MAC_HDR = 0xd67d00581d6ed4cc;
+
+/* linux_binprm->file */
+const u64 CRC_BPRM_FILE = 0x323e974b140d6eff;
+
+/* linux_binprm->filename */
+const u64 CRC_BPRM_FILENAME = 0xb583ce53935255c5;
+
+/* linux_binprm->interp */
+const u64 CRC_BPRM_INTERP = 0x9f4cedeb0b40dc2c;

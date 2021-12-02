@@ -110,6 +110,7 @@ typedef enum
     TE_EXIT_STATUS,
     TE_EXEC_FILENAME,
     TE_PWD,
+    TE_SCRIPT
 } telemetry_event_type_t;
 
 #define COMMON_FIELDS \
@@ -208,12 +209,14 @@ typedef struct
     char value[384];
 } read_return_string_event_t;
 
+#define MINORBITS 20
+#define MINORMASK ((1U << MINORBITS) - 1)
 #ifndef MAJOR
-#define MAJOR(dev) ((dev) >> 8)
+#define MAJOR(dev) ((unsigned int)((dev) >> MINORBITS))
 #endif
 
 #ifndef MINOR
-#define MINOR(dev) ((dev)&0xff)
+#define MINOR(dev) ((unsigned int)((dev)&MINORMASK))
 #endif
 
 typedef struct
@@ -251,6 +254,13 @@ struct process_data
     u32 pid;
     char comm[TASK_COMM_LEN];
 };
+
+typedef struct
+{
+    u64 mono_ns;
+    struct process_data process;
+    char path[128];
+} script_info_t;
 
 typedef struct
 {
@@ -317,6 +327,7 @@ typedef struct
         clone_info_t clone_info;
         clone3_info_t clone3_info;
         network_info_t network_info;
+        script_info_t script_info;
         int unshare_flags;
         int exit_status;
         struct
@@ -354,8 +365,6 @@ typedef enum
 {
     SYS_EXECVE_4_8,
     SYS_EXECVEAT_4_8,
-    SYS_EXECVE_4_11,
-    SYS_EXECVEAT_4_11,
     SYS_EXEC_TC_ARGV,
     SYS_EXEC_TC_ENVP,
     RET_SYS_EXECVE,
