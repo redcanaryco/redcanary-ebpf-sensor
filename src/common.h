@@ -35,7 +35,6 @@ static __always_inline int read_value(void *base, u64 offset, void *dest, size_t
     /* null check the base pointer first */
     if (!base)
     {
-        bpf_printk("Base should not be NULL\n");
         return -1;
     }
 
@@ -45,7 +44,6 @@ static __always_inline int read_value(void *base, u64 offset, void *dest, size_t
         return bpf_probe_read(dest, dest_size, base + *(u32 *)_offset);
     }
 
-    bpf_printk("Failed to read offset: %lx\n", offset);
     return -1;
 }
 
