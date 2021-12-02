@@ -42,8 +42,7 @@ static __always_inline int read_value(void *base, u64 offset, void *dest, size_t
     u64 _offset = (u64)bpf_map_lookup_elem(&offsets, &offset);
     if (_offset)
     {
-        int ret = bpf_probe_read(dest, dest_size, base + *(u32 *)_offset);
-        return ret;
+        return bpf_probe_read(dest, dest_size, base + *(u32 *)_offset);
     }
 
     bpf_printk("Failed to read offset: %lx\n", offset);
