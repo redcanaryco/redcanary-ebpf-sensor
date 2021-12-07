@@ -223,7 +223,7 @@ typedef struct
     u64 inode;
     u32 devmajor;
     u32 devminor;
-    char value[VALUE_SIZE];
+    char comm[TASK_COMM_LEN];
 } file_info_t, *pfile_info_t;
 
 typedef struct
