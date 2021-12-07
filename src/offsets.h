@@ -49,6 +49,12 @@ const u64 CRC_INODE_I_INO = 0xa9a6f8a386ba140e;
 /* inode->fs */
 const u64 CRC_INODE_FS = 0x61ac74b5c543f248;
 
+/* inode->i_sb */
+const u64 CRC_INODE_I_SB = 0x861dc69e083a70b5;
+
+/* super_block->s_dev */
+const u64 CRC_SBLOCK_S_DEV = 0xb1c03bec387e1aca;
+
 /* task_struct->fs */
 const u64 CRC_TASK_STRUCT_FS = 0x7e927c27fc9f401f;
 

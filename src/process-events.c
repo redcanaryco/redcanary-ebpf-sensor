@@ -40,7 +40,7 @@ struct bpf_map_def SEC("maps/read_path_skip") read_path_skip = {
     .value_size = sizeof(u64),
     .max_entries = 1,
     .pinning = 0,
-    .namespace= "",
+    .namespace = "",
 };
 
 struct bpf_map_def SEC("maps/clone_info_store") clone_info_store = {
@@ -104,12 +104,6 @@ struct bpf_map_def SEC("maps/tail_call_table") tail_call_table = {
 
 #define FILL_TELEMETRY_SYSCALL_RET(E, SP)
 
-#define SET_OFFSET(CRC)                                   \
-    offset = CRC;                                         \
-    offset = (u64)bpf_map_lookup_elem(&offsets, &offset); \
-    if (!offset)                                          \
-        goto Skip;
-
 /* this must go in the kretprobe so we can grab the new process from `task_struct` */
 #define GET_OFFSETS_4_8_RET_EXEC                                                                        \
     /* if "loaded" doesn't exist in the map, we get NULL back and won't read from offsets               \
@@ -124,12 +118,14 @@ struct bpf_map_def SEC("maps/tail_call_table") tail_call_table = {
     u64 i_ino = 0;                                                                                      \
     void *ts = (void *)bpf_get_current_task();                                                          \
     void *ptr = NULL;                                                                                   \
+    void *sptr = NULL;                                                                                  \
     if (ts && offset)                                                                                   \
     {                                                                                                   \
         read_value(ts, CRC_TASK_STRUCT_MM, &ptr, sizeof(ptr));                                          \
         read_value(ptr, CRC_MM_STRUCT_EXE_FILE, &ptr, sizeof(ptr));                                     \
         read_value(ptr, CRC_FILE_F_INODE, &ptr, sizeof(ptr));                                           \
-        read_value(ptr, CRC_INODE_I_RDEV, &i_rdev, sizeof(i_rdev));                                     \
+        read_value(ptr, CRC_INODE_I_SB, &sptr, sizeof(sptr));                                           \
+        read_value(sptr, CRC_SBLOCK_S_DEV, &i_rdev, sizeof(i_rdev));                                    \
         read_value(ptr, CRC_INODE_I_INO, &i_ino, sizeof(i_ino));                                        \
     }
 
@@ -252,14 +248,14 @@ static __always_inline void push_telemetry_event(struct pt_regs *ctx, ptelemetry
 
 #define READ_VALUE_N(EV, T, S, N) REPEAT_##N(READ_VALUE(EV, T, S);)
 
-#define SKIP_PATH                                       \
-    if (skipped >= to_skip)                             \
-        goto Send;                                      \
-    /* Skip to the parent directory */                  \
-    bpf_probe_read(&ptr, sizeof(ptr), ptr + parent);    \
-    skipped += 1;                                       \
-    if (!ptr)                                           \
-        goto Send;                                      \
+#define SKIP_PATH                                    \
+    if (skipped >= to_skip)                          \
+        goto Send;                                   \
+    /* Skip to the parent directory */               \
+    bpf_probe_read(&ptr, sizeof(ptr), ptr + parent); \
+    skipped += 1;                                    \
+    if (!ptr)                                        \
+        goto Send;
 
 #define SKIP_PATH_N(N) REPEAT_##N(SKIP_PATH;)
 
@@ -363,7 +359,6 @@ static __always_inline ptelemetry_event_t enter_exec_4_11(syscall_pattern_type_t
 
     u32 count = 0;
     char br = 0;
-
     // reuse count as idx and value to save stack space
     bpf_map_update_elem(&read_path_skip, &count, &count, BPF_ANY);
 
@@ -398,8 +393,9 @@ Pwd:;
     u32 parent = *(u32 *)offset; // offset of d_parent
 
     u64 _to_skip = (u64)bpf_map_lookup_elem(&read_path_skip, &to_skip);
-    if (_to_skip) {
-        __builtin_memcpy(&to_skip, (void*)_to_skip, sizeof(u64));
+    if (_to_skip)
+    {
+        __builtin_memcpy(&to_skip, (void *)_to_skip, sizeof(u64));
         SKIP_PATH_N(150);
     }
 
@@ -971,10 +967,12 @@ int kprobe__read_inode_task_struct(struct pt_regs *ctx)
     u32 i_rdev = 0;
     u64 i_ino = 0;
     void *ptr = NULL;
+    void *sptr = NULL;
     read_value(ts, CRC_TASK_STRUCT_MM, &ptr, sizeof(ptr));
     read_value(ptr, CRC_MM_STRUCT_EXE_FILE, &ptr, sizeof(ptr));
     read_value(ptr, CRC_FILE_F_INODE, &ptr, sizeof(ptr));
-    read_value(ptr, CRC_INODE_I_RDEV, &i_rdev, sizeof(i_rdev));
+    read_value(ptr, CRC_INODE_I_SB, &sptr, sizeof(sptr));
+    read_value(sptr, CRC_SBLOCK_S_DEV, &i_rdev, sizeof(i_rdev));
     read_value(ptr, CRC_INODE_I_INO, &i_ino, sizeof(i_ino));
 
     u64 *id = bpf_map_lookup_elem(&process_ids, &pid_tgid);
@@ -982,27 +980,25 @@ int kprobe__read_inode_task_struct(struct pt_regs *ctx)
     if (!id)
         return 0;
 
-
     // prepare event
     ptelemetry_event_t ev = &(telemetry_event_t){
         .id = 0,
         .done = TRUE,
         .telemetry_type = 0,
         .u.v = {
-                .value[0] = '\0',
-                .truncated = FALSE,
+            .value[0] = '\0',
+            .truncated = FALSE,
         },
     };
-
 
     ev->id = *id;
     bpf_map_delete_elem(&process_ids, &pid_tgid);
 
     file_info_t fi = {
-            .inode = i_ino,
-            .devmajor = MAJOR(i_rdev),
-            .devminor = MINOR(i_rdev),
-            .value[0] = '\0',
+        .inode = i_ino,
+        .devmajor = MAJOR(i_rdev),
+        .devminor = MINOR(i_rdev),
+        .value[0] = '\0',
     };
 
     ev->telemetry_type = TE_FILE_INFO;

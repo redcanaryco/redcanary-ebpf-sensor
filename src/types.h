@@ -109,7 +109,7 @@ typedef enum
     TE_UNSHARE_FLAGS,
     TE_EXIT_STATUS,
     TE_EXEC_FILENAME,
-    TE_PWD,
+    TE_PWD
 } telemetry_event_type_t;
 
 #define COMMON_FIELDS \
@@ -208,12 +208,14 @@ typedef struct
     char value[384];
 } read_return_string_event_t;
 
+#define MINORBITS 20
+#define MINORMASK ((1U << MINORBITS) - 1)
 #ifndef MAJOR
-#define MAJOR(dev) ((dev) >> 8)
+#define MAJOR(dev) ((unsigned int)((dev) >> MINORBITS))
 #endif
 
 #ifndef MINOR
-#define MINOR(dev) ((dev)&0xff)
+#define MINOR(dev) ((unsigned int)((dev)&MINORMASK))
 #endif
 
 typedef struct
