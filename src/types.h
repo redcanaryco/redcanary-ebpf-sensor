@@ -209,12 +209,14 @@ typedef struct
     char value[384];
 } read_return_string_event_t;
 
+#define MINORBITS 20
+#define MINORMASK ((1U << MINORBITS) - 1)
 #ifndef MAJOR
-#define MAJOR(dev) ((dev) >> 8)
+#define MAJOR(dev) ((unsigned int)((dev) >> MINORBITS))
 #endif
 
 #ifndef MINOR
-#define MINOR(dev) ((dev)&0xff)
+#define MINOR(dev) ((unsigned int)((dev)&MINORMASK))
 #endif
 
 typedef struct
@@ -222,7 +224,7 @@ typedef struct
     u64 inode;
     u32 devmajor;
     u32 devminor;
-    char value[VALUE_SIZE];
+    char comm[TASK_COMM_LEN];
 } file_info_t, *pfile_info_t;
 
 typedef struct
@@ -363,6 +365,8 @@ typedef enum
 {
     SYS_EXECVE_4_8,
     SYS_EXECVEAT_4_8,
+    SYS_EXECVE_4_11,
+    SYS_EXECVEAT_4_11,
     SYS_EXEC_TC_ARGV,
     SYS_EXEC_TC_ENVP,
     RET_SYS_EXECVE,

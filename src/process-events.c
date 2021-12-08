@@ -34,6 +34,15 @@ struct bpf_map_def SEC("maps/read_flush_index") read_flush_index = {
     .namespace = "",
 };
 
+struct bpf_map_def SEC("maps/read_path_skip") read_path_skip = {
+    .type = BPF_MAP_TYPE_PERCPU_ARRAY,
+    .key_size = sizeof(u32),
+    .value_size = sizeof(u64),
+    .max_entries = 1,
+    .pinning = 0,
+    .namespace = "",
+};
+
 struct bpf_map_def SEC("maps/clone_info_store") clone_info_store = {
     .type = BPF_MAP_TYPE_PERCPU_ARRAY,
     .key_size = sizeof(u32),
@@ -90,8 +99,7 @@ struct bpf_map_def SEC("maps/tail_call_table") tail_call_table = {
     E->u.syscall_info.euid = bpf_get_current_uid_gid() >> 32;        \
     E->u.syscall_info.egid = bpf_get_current_uid_gid() & 0xFFFFFFFF; \
     E->u.syscall_info.mono_ns = bpf_ktime_get_ns();                  \
-    E->u.syscall_info.syscall_pattern = SP;                          \
-    bpf_get_current_comm(E->u.syscall_info.comm, sizeof(E->u.syscall_info.comm));
+    E->u.syscall_info.syscall_pattern = SP;
 
 #define FILL_TELEMETRY_SYSCALL_RET(E, SP)
 
@@ -105,16 +113,18 @@ struct bpf_map_def SEC("maps/tail_call_table") tail_call_table = {
     /* since we're using offsets to read from the structs, we don't need to bother with                 \
      * understanding their structure                                                                    \
      */                                                                                                 \
-    u32 i_rdev = 0;                                                                                     \
+    u32 i_dev = 0;                                                                                      \
     u64 i_ino = 0;                                                                                      \
     void *ts = (void *)bpf_get_current_task();                                                          \
     void *ptr = NULL;                                                                                   \
+    void *sptr = NULL;                                                                                  \
     if (ts && offset)                                                                                   \
     {                                                                                                   \
         read_value(ts, CRC_TASK_STRUCT_MM, &ptr, sizeof(ptr));                                          \
         read_value(ptr, CRC_MM_STRUCT_EXE_FILE, &ptr, sizeof(ptr));                                     \
         read_value(ptr, CRC_FILE_F_INODE, &ptr, sizeof(ptr));                                           \
-        read_value(ptr, CRC_INODE_I_RDEV, &i_rdev, sizeof(i_rdev));                                     \
+        read_value(ptr, CRC_INODE_I_SB, &sptr, sizeof(sptr));                                           \
+        read_value(sptr, CRC_SBLOCK_S_DEV, &i_dev, sizeof(i_dev));                                      \
         read_value(ptr, CRC_INODE_I_INO, &i_ino, sizeof(i_ino));                                        \
     }
 
@@ -237,6 +247,17 @@ static __always_inline void push_telemetry_event(struct pt_regs *ctx, ptelemetry
 
 #define READ_VALUE_N(EV, T, S, N) REPEAT_##N(READ_VALUE(EV, T, S);)
 
+#define SKIP_PATH                                    \
+    if (skipped >= to_skip)                          \
+        goto Send;                                   \
+    /* Skip to the parent directory */               \
+    bpf_probe_read(&ptr, sizeof(ptr), ptr + parent); \
+    skipped += 1;                                    \
+    if (!ptr)                                        \
+        goto Send;
+
+#define SKIP_PATH_N(N) REPEAT_##N(SKIP_PATH;)
+
 #define SEND_PATH                                                           \
     ev->id = id;                                                            \
     ev->done = FALSE;                                                       \
@@ -266,6 +287,7 @@ static __always_inline void push_telemetry_event(struct pt_regs *ctx, ptelemetry
         }                                                                   \
         /* we're done here, follow the pointer */                           \
         bpf_probe_read(&ptr, sizeof(ptr), ptr + parent);                    \
+        to_skip += 1;                                                       \
         if (!ptr)                                                           \
             goto Skip;                                                      \
         if (br == '/')                                                      \
@@ -336,8 +358,16 @@ static __always_inline ptelemetry_event_t enter_exec_4_11(syscall_pattern_type_t
 
     u32 count = 0;
     char br = 0;
+    // reuse count as idx and value to save stack space
+    bpf_map_update_elem(&read_path_skip, &count, &count, BPF_ANY);
 
 Pwd:;
+
+    // the verifier complains if these are instantiated before the Pwd:; label
+    u64 to_skip = 0;
+    u64 skipped = 0;
+
+    // since index will start at zero, we can use it here
     u64 offset = 0;
     void *ptr = (void *)bpf_get_current_task();
     if (read_value(ptr, CRC_TASK_STRUCT_FS, &ptr, sizeof(ptr)) < 0)
@@ -361,10 +391,25 @@ Pwd:;
     SET_OFFSET(CRC_DENTRY_D_PARENT);
     u32 parent = *(u32 *)offset; // offset of d_parent
 
-    SEND_PATH_N(9);
-    bpf_tail_call(ctx, &tail_call_table, SYS_EXECVE_4_8);
+    u64 _to_skip = (u64)bpf_map_lookup_elem(&read_path_skip, &to_skip);
+    if (_to_skip)
+    {
+        __builtin_memcpy(&to_skip, (void *)_to_skip, sizeof(u64));
+        SKIP_PATH_N(150);
+    }
+
+Send:
+    SEND_PATH_N(10);
+
+    // update to_skip, reuse skipped as index by resetting it
+    skipped = 0;
+    bpf_map_update_elem(&read_path_skip, &skipped, &to_skip, BPF_ANY);
+    // tail call back in
+    bpf_tail_call(ctx, &tail_call_table, SYS_EXECVE_4_11);
 
 Skip:
+    skipped = 0;
+    bpf_map_delete_elem(&read_path_skip, &skipped);
     ev->id = id;
     return ev;
 }
@@ -474,7 +519,6 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execveat_4_11,
     u32 luid = -1;
     const char __user *exe = NULL;
     u32 length = -1;
-    // inode->i_rdev, inode->i_ino
     GET_OFFSETS_4_8;
     ptelemetry_event_t ev = enter_exec_4_11(SP_EXECVEAT, fd, filename, argv, envp, flags, ctx, ppid, luid, exe, length);
 
@@ -497,7 +541,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execveat_4_11,
     bpf_tail_call(ctx, &tail_call_table, SYS_EXEC_TC_ARGV);
 
 Skip:
-    return -1;
+    return 0;
 }
 
 SEC("kprobe/sys_execve_4_11")
@@ -532,7 +576,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execve_4_11,
     bpf_tail_call(ctx, &tail_call_table, SYS_EXEC_TC_ARGV);
 
 Skip:
-    return -1;
+    return 0;
 }
 
 SEC("kprobe/sys_execveat")
@@ -554,7 +598,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execve,
     return enter_exec(SP_EXECVE, AT_FDCWD, filename, argv, envp, 0, ctx, -1, -1, NULL, -1);
 }
 
-static __always_inline int exit_exec(struct pt_regs *__ctx, u32 i_rdev, u64 i_ino)
+static __always_inline int exit_exec(struct pt_regs *__ctx, u32 i_dev, u64 i_ino)
 {
     u64 pid_tgid = bpf_get_current_pid_tgid();
     u64 *id = bpf_map_lookup_elem(&process_ids, &pid_tgid);
@@ -576,10 +620,11 @@ static __always_inline int exit_exec(struct pt_regs *__ctx, u32 i_rdev, u64 i_in
 
     file_info_t fi = {
         .inode = i_ino,
-        .devmajor = MAJOR(i_rdev),
-        .devminor = MINOR(i_rdev),
-        .value[0] = '\0',
+        .devmajor = MAJOR(i_dev),
+        .devminor = MINOR(i_dev),
     };
+
+    bpf_get_current_comm(&fi.comm, sizeof(fi.comm));
 
     ev->telemetry_type = TE_FILE_INFO;
     __builtin_memcpy(&ev->u.file_info, &fi, sizeof(fi));
@@ -611,14 +656,14 @@ SEC("kretprobe/ret_sys_execve_4_8")
 int kretprobe__ret_sys_execve_4_8(struct pt_regs *ctx)
 {
     GET_OFFSETS_4_8_RET_EXEC;
-    return exit_exec(ctx, i_rdev, i_ino);
+    return exit_exec(ctx, i_dev, i_ino);
 }
 
 SEC("kretprobe/ret_sys_execveat_4_8")
 int kretprobe__ret_sys_execveat_4_8(struct pt_regs *ctx)
 {
     GET_OFFSETS_4_8_RET_EXEC;
-    return exit_exec(ctx, i_rdev, i_ino);
+    return exit_exec(ctx, i_dev, i_ino);
 }
 
 static __always_inline int enter_clone(syscall_pattern_type_t sp, unsigned long flags,
@@ -743,7 +788,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_clone_4_8, unsigned long flags, void __user *
     GET_OFFSETS_4_8;
     return enter_clone(SP_CLONE, flags, stack, parent_tid, child_tid, tls, ctx, ppid, luid, exe, length);
 Skip:
-    return -1;
+    return 0;
 }
 
 SEC("kprobe/sys_clone")
@@ -891,7 +936,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_clone3, struct clone_args __user *uargs, size
     GET_OFFSETS_4_8;
     return enter_clone3(SP_CLONE3, uargs, size, ctx, ppid, luid, exe, length);
 Skip:
-    return -1;
+    return 0;
 }
 
 SEC("kretprobe/ret_sys_clone3")
@@ -918,19 +963,21 @@ int kprobe__read_inode_task_struct(struct pt_regs *ctx)
     u64 pid_tgid = (u64)tgid << 32 | pid;
 
     // Get the inode number and device number
-    u32 i_rdev = 0;
+    u32 i_dev = 0;
     u64 i_ino = 0;
     void *ptr = NULL;
+    void *sptr = NULL;
     read_value(ts, CRC_TASK_STRUCT_MM, &ptr, sizeof(ptr));
     read_value(ptr, CRC_MM_STRUCT_EXE_FILE, &ptr, sizeof(ptr));
     read_value(ptr, CRC_FILE_F_INODE, &ptr, sizeof(ptr));
-    read_value(ptr, CRC_INODE_I_RDEV, &i_rdev, sizeof(i_rdev));
+    read_value(ptr, CRC_INODE_I_SB, &sptr, sizeof(sptr));
+    read_value(sptr, CRC_SBLOCK_S_DEV, &i_dev, sizeof(i_dev));
     read_value(ptr, CRC_INODE_I_INO, &i_ino, sizeof(i_ino));
 
     u64 *id = bpf_map_lookup_elem(&process_ids, &pid_tgid);
 
     if (!id)
-        return -1;
+        return 0;
 
     // prepare event
     ptelemetry_event_t ev = &(telemetry_event_t){
@@ -948,10 +995,11 @@ int kprobe__read_inode_task_struct(struct pt_regs *ctx)
 
     file_info_t fi = {
         .inode = i_ino,
-        .devmajor = MAJOR(i_rdev),
-        .devminor = MINOR(i_rdev),
-        .value[0] = '\0',
+        .devmajor = MAJOR(i_dev),
+        .devminor = MINOR(i_dev),
     };
+
+    bpf_get_current_comm(&fi.comm, sizeof(fi.comm));
 
     ev->telemetry_type = TE_FILE_INFO;
     __builtin_memcpy(&ev->u.file_info, &fi, sizeof(fi));
@@ -1000,7 +1048,7 @@ int kprobe__read_pid_task_struct(struct pt_regs *ctx)
     u64 *id = bpf_map_lookup_elem(&process_ids, &ppid_tgid);
 
     if (!id)
-        return -1;
+        return 0;
 
     // send event with ID
     ptelemetry_event_t ev = &(telemetry_event_t){
@@ -1043,7 +1091,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_fork_4_8)
     GET_OFFSETS_4_8;
     return enter_clone(SP_FORK, 0, NULL, NULL, NULL, 0, ctx, ppid, luid, exe, length);
 Skip:
-    return -1;
+    return 0;
 }
 
 SEC("kprobe/sys_vfork_4_8")
@@ -1056,7 +1104,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_vfork_4_8)
     GET_OFFSETS_4_8;
     return enter_clone(SP_VFORK, 0, NULL, NULL, NULL, 0, ctx, ppid, luid, exe, length);
 Skip:
-    return -1;
+    return 0;
 }
 
 SEC("kretprobe/ret_sys_clone")
@@ -1158,7 +1206,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_unshare_4_8, int flags)
     GET_OFFSETS_4_8;
     return enter_unshare(SP_UNSHARE, flags, ctx, ppid, luid, exe, length);
 Skip:
-    return -1;
+    return 0;
 }
 
 SEC("kprobe/sys_unshare")
@@ -1260,10 +1308,10 @@ int BPF_KPROBE_SYSCALL(kprobe__do_exit_4_8, int status)
     u32 length = -1;
     GET_OFFSETS_4_8;
     if (enter_exit(SP_EXIT, status, ctx, ppid, luid, exe, length) < 0)
-        return -1;
+        return 0;
     return exit_exit(ctx);
 Skip:
-    return -1;
+    return 0;
 }
 
 // do_exit probes must call enter_exit() and exit_exit() since do_exit is __no_return
@@ -1275,7 +1323,7 @@ int BPF_KPROBE_SYSCALL(kprobe__do_exit, int status)
     if ((pid_tgid >> 32) ^ (pid_tgid & 0xFFFFFFFF))
         return 0;
     if (enter_exit(SP_EXIT, status, ctx, -1, -1, NULL, -1) < 0)
-        return -1;
+        return 0;
     return exit_exit(ctx);
 }
 
@@ -1294,7 +1342,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_exit_4_8, int status)
     GET_OFFSETS_4_8;
     return enter_exit(SP_EXIT, status, ctx, ppid, luid, exe, length);
 Skip:
-    return -1;
+    return 0;
 }
 
 SEC("kprobe/sys_exit")
@@ -1317,7 +1365,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_exit_group_4_8, int status)
     GET_OFFSETS_4_8;
     return enter_exit(SP_EXITGROUP, status, ctx, ppid, luid, exe, length);
 Skip:
-    return -1;
+    return 0;
 }
 
 SEC("kprobe/sys_exit_group")
