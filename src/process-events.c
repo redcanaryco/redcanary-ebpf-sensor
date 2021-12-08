@@ -99,8 +99,7 @@ struct bpf_map_def SEC("maps/tail_call_table") tail_call_table = {
     E->u.syscall_info.euid = bpf_get_current_uid_gid() >> 32;        \
     E->u.syscall_info.egid = bpf_get_current_uid_gid() & 0xFFFFFFFF; \
     E->u.syscall_info.mono_ns = bpf_ktime_get_ns();                  \
-    E->u.syscall_info.syscall_pattern = SP;                          \
-    bpf_get_current_comm(E->u.syscall_info.comm, sizeof(E->u.syscall_info.comm));
+    E->u.syscall_info.syscall_pattern = SP;
 
 #define FILL_TELEMETRY_SYSCALL_RET(E, SP)
 
@@ -114,7 +113,7 @@ struct bpf_map_def SEC("maps/tail_call_table") tail_call_table = {
     /* since we're using offsets to read from the structs, we don't need to bother with                 \
      * understanding their structure                                                                    \
      */                                                                                                 \
-    u32 i_rdev = 0;                                                                                     \
+    u32 i_dev = 0;                                                                                      \
     u64 i_ino = 0;                                                                                      \
     void *ts = (void *)bpf_get_current_task();                                                          \
     void *ptr = NULL;                                                                                   \
@@ -125,7 +124,7 @@ struct bpf_map_def SEC("maps/tail_call_table") tail_call_table = {
         read_value(ptr, CRC_MM_STRUCT_EXE_FILE, &ptr, sizeof(ptr));                                     \
         read_value(ptr, CRC_FILE_F_INODE, &ptr, sizeof(ptr));                                           \
         read_value(ptr, CRC_INODE_I_SB, &sptr, sizeof(sptr));                                           \
-        read_value(sptr, CRC_SBLOCK_S_DEV, &i_rdev, sizeof(i_rdev));                                    \
+        read_value(sptr, CRC_SBLOCK_S_DEV, &i_dev, sizeof(i_dev));                                      \
         read_value(ptr, CRC_INODE_I_INO, &i_ino, sizeof(i_ino));                                        \
     }
 
@@ -520,7 +519,6 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execveat_4_11,
     u32 luid = -1;
     const char __user *exe = NULL;
     u32 length = -1;
-    // inode->i_rdev, inode->i_ino
     GET_OFFSETS_4_8;
     ptelemetry_event_t ev = enter_exec_4_11(SP_EXECVEAT, fd, filename, argv, envp, flags, ctx, ppid, luid, exe, length);
 
@@ -600,7 +598,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execve,
     return enter_exec(SP_EXECVE, AT_FDCWD, filename, argv, envp, 0, ctx, -1, -1, NULL, -1);
 }
 
-static __always_inline int exit_exec(struct pt_regs *__ctx, u32 i_rdev, u64 i_ino)
+static __always_inline int exit_exec(struct pt_regs *__ctx, u32 i_dev, u64 i_ino)
 {
     u64 pid_tgid = bpf_get_current_pid_tgid();
     u64 *id = bpf_map_lookup_elem(&process_ids, &pid_tgid);
@@ -622,10 +620,11 @@ static __always_inline int exit_exec(struct pt_regs *__ctx, u32 i_rdev, u64 i_in
 
     file_info_t fi = {
         .inode = i_ino,
-        .devmajor = MAJOR(i_rdev),
-        .devminor = MINOR(i_rdev),
-        .value[0] = '\0',
+        .devmajor = MAJOR(i_dev),
+        .devminor = MINOR(i_dev),
     };
+
+    bpf_get_current_comm(&fi.comm, sizeof(fi.comm));
 
     ev->telemetry_type = TE_FILE_INFO;
     __builtin_memcpy(&ev->u.file_info, &fi, sizeof(fi));
@@ -657,14 +656,14 @@ SEC("kretprobe/ret_sys_execve_4_8")
 int kretprobe__ret_sys_execve_4_8(struct pt_regs *ctx)
 {
     GET_OFFSETS_4_8_RET_EXEC;
-    return exit_exec(ctx, i_rdev, i_ino);
+    return exit_exec(ctx, i_dev, i_ino);
 }
 
 SEC("kretprobe/ret_sys_execveat_4_8")
 int kretprobe__ret_sys_execveat_4_8(struct pt_regs *ctx)
 {
     GET_OFFSETS_4_8_RET_EXEC;
-    return exit_exec(ctx, i_rdev, i_ino);
+    return exit_exec(ctx, i_dev, i_ino);
 }
 
 static __always_inline int enter_clone(syscall_pattern_type_t sp, unsigned long flags,
@@ -964,7 +963,7 @@ int kprobe__read_inode_task_struct(struct pt_regs *ctx)
     u64 pid_tgid = (u64)tgid << 32 | pid;
 
     // Get the inode number and device number
-    u32 i_rdev = 0;
+    u32 i_dev = 0;
     u64 i_ino = 0;
     void *ptr = NULL;
     void *sptr = NULL;
@@ -972,7 +971,7 @@ int kprobe__read_inode_task_struct(struct pt_regs *ctx)
     read_value(ptr, CRC_MM_STRUCT_EXE_FILE, &ptr, sizeof(ptr));
     read_value(ptr, CRC_FILE_F_INODE, &ptr, sizeof(ptr));
     read_value(ptr, CRC_INODE_I_SB, &sptr, sizeof(sptr));
-    read_value(sptr, CRC_SBLOCK_S_DEV, &i_rdev, sizeof(i_rdev));
+    read_value(sptr, CRC_SBLOCK_S_DEV, &i_dev, sizeof(i_dev));
     read_value(ptr, CRC_INODE_I_INO, &i_ino, sizeof(i_ino));
 
     u64 *id = bpf_map_lookup_elem(&process_ids, &pid_tgid);
@@ -996,10 +995,11 @@ int kprobe__read_inode_task_struct(struct pt_regs *ctx)
 
     file_info_t fi = {
         .inode = i_ino,
-        .devmajor = MAJOR(i_rdev),
-        .devminor = MINOR(i_rdev),
-        .value[0] = '\0',
+        .devmajor = MAJOR(i_dev),
+        .devminor = MINOR(i_dev),
     };
+
+    bpf_get_current_comm(&fi.comm, sizeof(fi.comm));
 
     ev->telemetry_type = TE_FILE_INFO;
     __builtin_memcpy(&ev->u.file_info, &fi, sizeof(fi));
