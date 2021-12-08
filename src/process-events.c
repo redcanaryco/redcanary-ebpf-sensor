@@ -622,10 +622,9 @@ static __always_inline int exit_exec(struct pt_regs *__ctx, u32 i_dev, u64 i_ino
         .inode = i_ino,
         .devmajor = MAJOR(i_dev),
         .devminor = MINOR(i_dev),
-        .comm = {0},
     };
 
-    bpf_get_current_comm(fi.comm, sizeof(fi.comm));
+    bpf_get_current_comm(&fi.comm, sizeof(fi.comm));
 
     ev->telemetry_type = TE_FILE_INFO;
     __builtin_memcpy(&ev->u.file_info, &fi, sizeof(fi));
@@ -998,10 +997,9 @@ int kprobe__read_inode_task_struct(struct pt_regs *ctx)
         .inode = i_ino,
         .devmajor = MAJOR(i_dev),
         .devminor = MINOR(i_dev),
-        .comm = {0},
     };
 
-    bpf_get_current_comm(fi.comm, sizeof(fi.comm));
+    bpf_get_current_comm(&fi.comm, sizeof(fi.comm));
 
     ev->telemetry_type = TE_FILE_INFO;
     __builtin_memcpy(&ev->u.file_info, &fi, sizeof(fi));
