@@ -37,7 +37,7 @@ struct bpf_map_def SEC("maps/read_flush_index") read_flush_index = {
 struct bpf_map_def SEC("maps/read_path_skip") read_path_skip = {
     .type = BPF_MAP_TYPE_PERCPU_ARRAY,
     .key_size = sizeof(u32),
-    .value_size = sizeof(u64),
+    .value_size = sizeof(u32),
     .max_entries = 1,
     .pinning = 0,
     .namespace = "",
@@ -248,15 +248,13 @@ static __always_inline void push_telemetry_event(struct pt_regs *ctx, ptelemetry
 #define READ_VALUE_N(EV, T, S, N) REPEAT_##N(READ_VALUE(EV, T, S);)
 
 #define SKIP_PATH                                    \
-    if (skipped >= to_skip){                         \
+    if (skipped >= to_skip)                          \
         goto Send;                                   \
-    }                                                \
     /* Skip to the parent directory */               \
     bpf_probe_read(&ptr, sizeof(ptr), ptr + parent); \
     skipped += 1;                                    \
-    if (!ptr) {                                      \
-        goto Send;                                   \
-    }
+    if (!ptr)                                        \
+        goto Send;
 
 #define SKIP_PATH_N(N) REPEAT_##N(SKIP_PATH;)
 
@@ -267,9 +265,8 @@ static __always_inline void push_telemetry_event(struct pt_regs *ctx, ptelemetry
     if (br == 0)                                                            \
     {                                                                       \
         bpf_probe_read(&offset, sizeof(offset), ptr + name);                \
-        if (!offset) {                                                      \
+        if (!offset)                                                        \
             goto Skip;                                                      \
-        }                                                                   \
     }                                                                       \
     __builtin_memset(&ev->u.v.value, 0, VALUE_SIZE);                        \
     count = bpf_probe_read_str(&ev->u.v.value, VALUE_SIZE, (void *)offset); \
@@ -291,12 +288,10 @@ static __always_inline void push_telemetry_event(struct pt_regs *ctx, ptelemetry
         /* we're done here, follow the pointer */                           \
         bpf_probe_read(&ptr, sizeof(ptr), ptr + parent);                    \
         to_skip += 1;                                                       \
-        if (!ptr) {                                                         \
+        if (!ptr)                                                           \
             goto Skip;                                                      \
-        }                                                                   \
-        if (br == '/') {                                                    \
+        if (br == '/')                                                      \
             goto Skip;                                                      \
-        }                                                                   \
         br = 0;                                                             \
     }
 
@@ -361,6 +356,7 @@ static __always_inline ptelemetry_event_t enter_exec_4_11(syscall_pattern_type_t
 
     bpf_map_update_elem(&process_ids, &pid_tgid, &id, BPF_ANY);
 
+    // this has to be the same size as to_skip and skipped in Pwd
     u32 count = 0;
     char br = 0;
     // reuse count as idx and value to save stack space
@@ -369,8 +365,8 @@ static __always_inline ptelemetry_event_t enter_exec_4_11(syscall_pattern_type_t
 Pwd:;
 
     // the verifier complains if these are instantiated before the Pwd:; label
-    u64 to_skip = 0;
-    u64 skipped = 0;
+    u32 to_skip = 0;
+    u32 skipped = 0;
 
     // since index will start at zero, we can use it here
     u64 offset = 0;
@@ -396,11 +392,14 @@ Pwd:;
     SET_OFFSET(CRC_DENTRY_D_PARENT);
     u32 parent = *(u32 *)offset; // offset of d_parent
 
-    u64 _to_skip = (u64)bpf_map_lookup_elem(&read_path_skip, &to_skip);
+    u32* _to_skip = (u32 *)bpf_map_lookup_elem(&read_path_skip, &to_skip);
     if (_to_skip)
     {
-        __builtin_memcpy(&to_skip, (void *)_to_skip, sizeof(u64));
-        to_skip = (to_skip << 32) >> 32;
+        to_skip = *_to_skip;
+    }
+
+    if (to_skip != 0)
+    {
         SKIP_PATH_N(150);
     }
 
