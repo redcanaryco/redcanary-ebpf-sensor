@@ -40,15 +40,12 @@ int kretprobe__ret_script_load(struct pt_regs *ctx)
 {
     char br = 0;
     u32 count = 0;
-    //void *fs = NULL;
-    //void *pwd = NULL;
     void **bprmp = NULL;
     void *file_ptr = NULL;
-    //struct qstr d_name;
     u64 loaded = CRC_LOADED;
     unsigned char *bprm = NULL;
 
-    // Get the return value from inet_csk_accept
+    // Make sure the function succeeded
     int ret = PT_REGS_RC(ctx);
     if (ret < 0)
     {
@@ -69,12 +66,14 @@ int kretprobe__ret_script_load(struct pt_regs *ctx)
     ev.u.script_info.process.pid = (u32)bpf_get_current_pid_tgid();
     bpf_get_current_comm(ev.u.script_info.process.comm, sizeof(ev.u.script_info.process.comm));
 
+    // Verify that the offsets are loaded
     loaded = (u64)bpf_map_lookup_elem(&offsets, &loaded);
     if (!loaded)
     {
         return 0;
     }
 
+    // Get the stored pointer to the linux_binprm structure and clear it out of the map
     bprmp = bpf_map_lookup_elem(&load_script_map, &ev.u.script_info.process.pid);
     if (NULL == bprmp)
     {
@@ -83,6 +82,7 @@ int kretprobe__ret_script_load(struct pt_regs *ctx)
     }
     bpf_map_delete_elem(&load_script_map, &ev.u.script_info.process.pid);
 
+    // Make sure it isn't NULL
     bprm = (unsigned char *)*bprmp;
     if (NULL == bprm)
     {
@@ -98,51 +98,56 @@ int kretprobe__ret_script_load(struct pt_regs *ctx)
         return 0;
     }
 
+    // Read the filename
     bpf_probe_read_str(&ev.u.script_info.path, sizeof(ev.u.script_info.path), file_ptr);
-    //bpf_printk("Read script info path\n");
+
+    // Output the path
     bpf_perf_event_output(ctx, &script_events, bpf_get_smp_processor_id(), &ev, sizeof(ev));
+
+    // If the path is / then we don't need to do anything else
     br = ev.u.script_info.path[0];
     if (br == '/')
     {
         return 0;
     }
 
-    void *cur = (void *)bpf_get_current_task();
-    if (NULL == cur)
-    {
-        bpf_printk("Failed to get current\n");
-        return 0;
-    }
-
     u64 offset = 0;
     void *ptr = (void *)bpf_get_current_task();
+
+    // Get the pointer to the fs field in current
     if (read_value(ptr, CRC_TASK_STRUCT_FS, &ptr, sizeof(ptr)) < 0)
+    {
         goto Skip;
+    }
 
-    offset = CRC_FS_STRUCT_PWD;
-    offset = (u64)bpf_map_lookup_elem(&offsets, &offset);
-    if (!offset)
-        goto Skip;
+    // Get the offset for pwd in fs_struct
+    SET_OFFSET(CRC_FS_STRUCT_PWD);
+
+    // Read the Dentry pointer for pwd
     ptr = ptr + *(u32 *)offset; // ptr to pwd
-
     if (read_value(ptr, CRC_PATH_DENTRY, &ptr, sizeof(ptr)) < 0)
+    {
         goto Skip;
+    }
 
     SET_OFFSET(CRC_DENTRY_D_NAME);
-    u32 qstr_len = *(u32 *)offset; // variable name doesn't match here, we're reusing it to preserve stack
+    u32 qstr_len = *(u32 *)offset;
 
     SET_OFFSET(CRC_QSTR_NAME);
-    u32 name = qstr_len + *(u32 *)offset; // offset to name char ptr within qstr of dentry
+    u32 name = qstr_len + *(u32 *)offset;
 
     SET_OFFSET(CRC_DENTRY_D_PARENT);
-    u32 parent = *(u32 *)offset; // offset of d_parent
+    u32 parent = *(u32 *)offset;
 
 #pragma clang loop unroll(full)
-    for (int i = 0; i < 16; i++)
+    for (int i = 0; i < 64; i++)
     {
         bpf_probe_read(&offset, sizeof(offset), ptr + name);
         if (!offset)
+        {
             goto Skip;
+        }
+
         __builtin_memset(&ev.u.script_info.path, 0, sizeof(ev.u.script_info.path));
         count = bpf_probe_read_str(&ev.u.script_info.path, sizeof(ev.u.script_info.path), (void *)offset);
         if (count < 0)
@@ -150,7 +155,6 @@ int kretprobe__ret_script_load(struct pt_regs *ctx)
             bpf_printk("Failed to read string\n");
             return 0;
         }
-        bpf_printk("Path: %s\n", ev.u.script_info.path);
 
         br = ev.u.script_info.path[0];
         if (br == '/')
@@ -163,23 +167,7 @@ int kretprobe__ret_script_load(struct pt_regs *ctx)
         bpf_probe_read(&ptr, sizeof(ptr), ptr + parent);
     }
 
-    // #pragma clang loop unroll(full)
-    //     for (int i = 0; i < 16; i++)
-    //     {
-    //         read_value(parent_dentry, CRC_DENTRY_D_NAME, &d_name, sizeof(d_name));
-    //         read_value(parent_dentry, CRC_DENTRY_D_PARENT, &parent_dentry, sizeof(parent_dentry));
-    //         bpf_probe_read(&ev.u.script_info.path, 128, (void *)d_name.name);
-    //         bpf_printk("%s\n", ev.u.script_info.path);
-    //         if (ev.u.script_info.path[0] == '/')
-    //         {
-    //             goto Skip;
-    //         }
-    //         bpf_perf_event_output(ctx, &script_events, bpf_get_smp_processor_id(), &ev, sizeof(ev));
-    //         __builtin_memset(&ev.u.script_info.path, 0, sizeof(ev.u.script_info.path));
-    //     }
-
 Skip:
-    //bpf_printk("Output event\n");
     bpf_perf_event_output(ctx, &script_events, bpf_get_smp_processor_id(), &ev, sizeof(ev));
 
     return 0;
