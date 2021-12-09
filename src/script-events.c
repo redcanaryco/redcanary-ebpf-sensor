@@ -101,7 +101,12 @@ int kretprobe__ret_script_load(struct pt_regs *ctx)
     // Output the path
     bpf_perf_event_output(ctx, &script_events, bpf_get_smp_processor_id(), &ev, sizeof(ev));
 
-    // If the path is / then we don't need to do anything else
+    // If the path is / then we don't need to do anything else. This is the case when you run
+    // a command that is in your PATH or you run a script using the absolute path. If you run
+    // a script from a local directory (i.e. ./myscript.sh) then the event that gets output
+    // here is ./myscript.sh and then the later logic find the current working directory, appends
+    // that to the path here and uses that to get the absolute path to the script. It needs that
+    // path so it can read the file contents
     end = ev.u.script_info.path[0];
     if (end == '/')
     {
