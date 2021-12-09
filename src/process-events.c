@@ -248,13 +248,15 @@ static __always_inline void push_telemetry_event(struct pt_regs *ctx, ptelemetry
 #define READ_VALUE_N(EV, T, S, N) REPEAT_##N(READ_VALUE(EV, T, S);)
 
 #define SKIP_PATH                                    \
-    if (skipped >= to_skip)                          \
+    if (skipped >= to_skip){                         \
         goto Send;                                   \
+    }                                                \
     /* Skip to the parent directory */               \
     bpf_probe_read(&ptr, sizeof(ptr), ptr + parent); \
     skipped += 1;                                    \
-    if (!ptr)                                        \
-        goto Send;
+    if (!ptr) {                                      \
+        goto Send;                                   \
+    }
 
 #define SKIP_PATH_N(N) REPEAT_##N(SKIP_PATH;)
 
@@ -265,8 +267,9 @@ static __always_inline void push_telemetry_event(struct pt_regs *ctx, ptelemetry
     if (br == 0)                                                            \
     {                                                                       \
         bpf_probe_read(&offset, sizeof(offset), ptr + name);                \
-        if (!offset)                                                        \
+        if (!offset) {                                                      \
             goto Skip;                                                      \
+        }                                                                   \
     }                                                                       \
     __builtin_memset(&ev->u.v.value, 0, VALUE_SIZE);                        \
     count = bpf_probe_read_str(&ev->u.v.value, VALUE_SIZE, (void *)offset); \
@@ -288,10 +291,12 @@ static __always_inline void push_telemetry_event(struct pt_regs *ctx, ptelemetry
         /* we're done here, follow the pointer */                           \
         bpf_probe_read(&ptr, sizeof(ptr), ptr + parent);                    \
         to_skip += 1;                                                       \
-        if (!ptr)                                                           \
+        if (!ptr) {                                                         \
             goto Skip;                                                      \
-        if (br == '/')                                                      \
+        }                                                                   \
+        if (br == '/') {                                                    \
             goto Skip;                                                      \
+        }                                                                   \
         br = 0;                                                             \
     }
 
@@ -395,6 +400,7 @@ Pwd:;
     if (_to_skip)
     {
         __builtin_memcpy(&to_skip, (void *)_to_skip, sizeof(u64));
+        to_skip = (to_skip << 32) >> 32;
         SKIP_PATH_N(150);
     }
 
