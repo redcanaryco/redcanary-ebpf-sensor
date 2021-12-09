@@ -38,7 +38,7 @@ int kprobe__script_load(struct pt_regs *ctx)
 SEC("kretprobe/ret_script_load")
 int kretprobe__ret_script_load(struct pt_regs *ctx)
 {
-    char br = 0;
+    char end = 0;
     u32 count = 0;
     void **bprmp = NULL;
     void *file_ptr = NULL;
@@ -77,7 +77,6 @@ int kretprobe__ret_script_load(struct pt_regs *ctx)
     bprmp = bpf_map_lookup_elem(&load_script_map, &ev.u.script_info.process.pid);
     if (NULL == bprmp)
     {
-        bpf_printk("Failed to lookup bprmp\n");
         return 0;
     }
     bpf_map_delete_elem(&load_script_map, &ev.u.script_info.process.pid);
@@ -86,7 +85,6 @@ int kretprobe__ret_script_load(struct pt_regs *ctx)
     bprm = (unsigned char *)*bprmp;
     if (NULL == bprm)
     {
-        bpf_printk("Failed to deref bprmp\n");
         return 0;
     }
 
@@ -94,7 +92,6 @@ int kretprobe__ret_script_load(struct pt_regs *ctx)
     ret = read_value(bprm, CRC_BPRM_FILENAME, &file_ptr, sizeof(file_ptr));
     if (ret < 0)
     {
-        bpf_printk("Failed to read filename_buf\n");
         return 0;
     }
 
@@ -105,8 +102,8 @@ int kretprobe__ret_script_load(struct pt_regs *ctx)
     bpf_perf_event_output(ctx, &script_events, bpf_get_smp_processor_id(), &ev, sizeof(ev));
 
     // If the path is / then we don't need to do anything else
-    br = ev.u.script_info.path[0];
-    if (br == '/')
+    end = ev.u.script_info.path[0];
+    if (end == '/')
     {
         return 0;
     }
@@ -152,12 +149,11 @@ int kretprobe__ret_script_load(struct pt_regs *ctx)
         count = bpf_probe_read_str(&ev.u.script_info.path, sizeof(ev.u.script_info.path), (void *)offset);
         if (count < 0)
         {
-            bpf_printk("Failed to read string\n");
             return 0;
         }
 
-        br = ev.u.script_info.path[0];
-        if (br == '/')
+        end = ev.u.script_info.path[0];
+        if (end == '/')
         {
             goto Skip;
         }
