@@ -110,7 +110,8 @@ typedef enum
     TE_EXIT_STATUS,
     TE_EXEC_FILENAME,
     TE_PWD,
-    TE_SCRIPT
+    TE_SCRIPT,
+    TE_CHAR_STR
 } telemetry_event_type_t;
 
 #define COMMON_FIELDS \
