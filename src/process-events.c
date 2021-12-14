@@ -134,12 +134,18 @@ struct bpf_map_def SEC("maps/tail_call_table") tail_call_table = {
      */                                                                                                 \
     u64 offset = CRC_LOADED;                                                                            \
     offset = (u64)bpf_map_lookup_elem(&offsets, &offset); /* squeezing out as much stack as possible */ \
+    /* if CRC_LOADED is not in the map it means we are too early in the ebpf program loading       */   \
+    if (!offset)                                                                                        \
+    {                                                                                                   \
+        bpf_printk("skipping due to missing CRC_LOADED\n");                                             \
+        return 0;                                                                                       \
+    }                                                                                                   \
     /* since we're using offsets to read from the structs, we don't need to bother with                 \
      * understanding their structure                                                                    \
      */                                                                                                 \
     void *ts = (void *)bpf_get_current_task();                                                          \
     void *ptr = NULL;                                                                                   \
-    if (ts && offset)                                                                                   \
+    if (ts)                                                                                             \
     {                                                                                                   \
         read_value(ts, CRC_TASK_STRUCT_REAL_PARENT, &ptr, sizeof(ptr));                                 \
         read_value(ptr, CRC_TASK_STRUCT_PID, &ppid, sizeof(ppid));                                      \
