@@ -397,7 +397,7 @@ Pwd:;
     SET_OFFSET(CRC_DENTRY_D_PARENT);
     u32 parent = *(u32 *)offset; // offset of d_parent
 
-    u32* _to_skip = (u32 *)bpf_map_lookup_elem(&read_path_skip, &to_skip);
+    u32 *_to_skip = (u32 *)bpf_map_lookup_elem(&read_path_skip, &to_skip);
     if (_to_skip)
     {
         to_skip = *_to_skip;

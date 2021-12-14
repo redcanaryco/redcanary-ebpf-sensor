@@ -24,6 +24,7 @@ struct bpf_map_def SEC("maps/offsets") offsets = {
         .mono_ns = mono_ns,                    \
     }
 
+// This macro assumes you have a label named Skip to jump to
 #define SET_OFFSET(CRC)                                   \
     offset = CRC;                                         \
     offset = (u64)bpf_map_lookup_elem(&offsets, &offset); \
