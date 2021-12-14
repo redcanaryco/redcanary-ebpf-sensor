@@ -137,7 +137,6 @@ struct bpf_map_def SEC("maps/tail_call_table") tail_call_table = {
     /* if CRC_LOADED is not in the map it means we are too early in the ebpf program loading       */   \
     if (!offset)                                                                                        \
     {                                                                                                   \
-        bpf_printk("skipping due to missing CRC_LOADED\n");                                             \
         return 0;                                                                                       \
     }                                                                                                   \
     /* since we're using offsets to read from the structs, we don't need to bother with                 \
