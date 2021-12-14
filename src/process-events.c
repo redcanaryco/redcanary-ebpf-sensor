@@ -148,7 +148,7 @@ struct bpf_map_def SEC("maps/tail_call_table") tail_call_table = {
     if (ts)                                                                                             \
     {                                                                                                   \
         read_value(ts, CRC_TASK_STRUCT_REAL_PARENT, &ptr, sizeof(ptr));                                 \
-        read_value(ptr, CRC_TASK_STRUCT_PID, &ppid, sizeof(ppid));                                      \
+        read_value(ptr, CRC_TASK_STRUCT_TGID, &ppid, sizeof(ppid));                                     \
         read_value(ts, CRC_TASK_STRUCT_LOGINUID, &luid, sizeof(luid));                                  \
         read_value(ts, CRC_TASK_STRUCT_MM, &ptr, sizeof(ptr));                                          \
         read_value(ptr, CRC_MM_STRUCT_EXE_FILE, &ptr, sizeof(ptr));                                     \
