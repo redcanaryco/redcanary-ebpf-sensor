@@ -146,8 +146,10 @@ int kprobe__script_load(struct pt_regs *ctx)
 SEC("kprobe/handle_pwd")
 int kprobe__handle_pwd(struct pt_regs *ctx)
 {
-    int count = 0;
     char br = 0;
+    int count = 0;
+    u32 to_skip = 0;
+    u32 skipped = 0;
     telemetry_event_t sev = {0};
     ptelemetry_event_t ev = &sev;
     unsigned long long ret = 0;
@@ -159,10 +161,6 @@ int kprobe__handle_pwd(struct pt_regs *ctx)
     {
         __builtin_memcpy(&id, (void *)id, sizeof(u64));
     }
-
-    // the verifier complains if these are instantiated before the Pwd:; label
-    u32 to_skip = 0;
-    u32 skipped = 0;
 
     // since index will start at zero, we can use it here
     u64 offset = 0;
@@ -280,7 +278,7 @@ int kretprobe__ret_script_load(struct pt_regs *ctx)
     push_telemetry_event(ctx, &ev);
 
     // Get filename. It may only be the first part
-    ret = read_value(bprm, CRC_BPRM_FILENAME, &str, sizeof(str));
+    ret = read_value(bprm, CRC_LINUX_BINPRM_FILENAME, &str, sizeof(str));
     if (ret < 0)
     {
         return 0;
