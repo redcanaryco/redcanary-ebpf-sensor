@@ -375,4 +375,5 @@ typedef enum
     RET_SYS_CLONE3,
     RET_SYS_UNSHARE,
     RET_SYS_EXIT,
+    HANDLE_PWD,
 } tail_call_slot_t;

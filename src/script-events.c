@@ -64,7 +64,7 @@ struct bpf_map_def SEC("maps/process_ids") process_ids = {
 #define SKIP_PATH_N(N) REPEAT_##N(SKIP_PATH;)
 
 #define SEND_PATH                                                           \
-    ev->id = ev_id;                                                         \
+    ev->id = id;                                                            \
     ev->done = FALSE;                                                       \
     ev->telemetry_type = TE_PWD;                                            \
     if (br == 0)                                                            \
@@ -108,7 +108,6 @@ struct bpf_map_def SEC("maps/process_ids") process_ids = {
     ev.telemetry_type = TE_CHAR_STR;                                    \
     __builtin_memset(&ev.u.v.value, 0, VALUE_SIZE);                     \
     count = bpf_probe_read_str(&ev.u.v.value, VALUE_SIZE, (void *)str); \
-    bpf_printk("Count: %d\n", count);                                   \
     if (count >= VALUE_SIZE)                                            \
     {                                                                   \
         ev.u.v.truncated = TRUE;                                        \
@@ -144,10 +143,14 @@ int kprobe__script_load(struct pt_regs *ctx)
     return 0;
 }
 
-static __always_inline ptelemetry_event_t enter_script_load(struct pt_regs *ctx, u32 ev_id)
+SEC("kprobe/handle_pwd")
+int kprobe__handle_pwd(struct pt_regs *ctx)
 {
+    int count = 0;
+    char br = 0;
     telemetry_event_t sev = {0};
     ptelemetry_event_t ev = &sev;
+    unsigned long long ret = 0;
 
     // if the ID already exists, we are tail-calling into ourselves, skip ahead to reading the path
     u64 p_t = bpf_get_current_pid_tgid();
@@ -155,31 +158,7 @@ static __always_inline ptelemetry_event_t enter_script_load(struct pt_regs *ctx,
     if (id)
     {
         __builtin_memcpy(&id, (void *)id, sizeof(u64));
-        goto Pwd;
     }
-
-    ev->id = ev_id;
-    ev->done = FALSE;
-    ev->telemetry_type = TE_SCRIPT,
-    ev->u.v.value[0] = '\0';
-    ev->u.v.truncated = FALSE;
-
-    //FILL_TELEMETRY_SYSCALL_EVENT(ev, sp);
-    //ev->u.syscall_info.ppid = ppid;
-    //ev->u.syscall_info.luid = luid;
-
-    // TODO: Do I need this?
-    //push_telemetry_event(ctx, ev);
-
-    bpf_map_update_elem(&process_ids, &p_t, &id, BPF_ANY);
-
-    // this has to be the same size as to_skip and skipped in Pwd
-    u32 count = 0;
-    char br = 0;
-    // reuse count as idx and value to save stack space
-    bpf_map_update_elem(&read_path_skip, &count, &count, BPF_ANY);
-
-Pwd:;
 
     // the verifier complains if these are instantiated before the Pwd:; label
     u32 to_skip = 0;
@@ -194,11 +173,16 @@ Pwd:;
     offset = CRC_FS_STRUCT_PWD;
     offset = (u64)bpf_map_lookup_elem(&offsets, &offset);
     if (!offset)
+    {
         goto Skip;
+    }
+
     ptr = ptr + *(u32 *)offset; // ptr to pwd
 
     if (read_value(ptr, CRC_PATH_DENTRY, &ptr, sizeof(ptr)) < 0)
+    {
         goto Skip;
+    }
 
     SET_OFFSET(CRC_DENTRY_D_NAME);
     u32 qstr_len = *(u32 *)offset; // variable name doesn't match here, we're reusing it to preserve stack
@@ -227,25 +211,27 @@ Send:
     skipped = 0;
     bpf_map_update_elem(&read_path_skip, &skipped, &to_skip, BPF_ANY);
     // tail call back in
-    bpf_tail_call(ctx, &tail_call_table, 0);
+    ret = bpf_tail_call(ctx, &tail_call_table, HANDLE_PWD);
 
 Skip:
     skipped = 0;
     bpf_map_delete_elem(&read_path_skip, &skipped);
+    bpf_map_delete_elem(&process_ids, &p_t);
     ev->id = id;
-    return ev;
+    return 0;
 }
 
 SEC("kretprobe/ret_script_load")
 int kretprobe__ret_script_load(struct pt_regs *ctx)
 {
     char br = 0;
-    u32 id = 0;
+    u64 id = 0;
     u32 count = 0;
     void **bprmp = NULL;
     void *str = NULL;
     u64 loaded = CRC_LOADED;
     unsigned char *bprm = NULL;
+    u64 p_t = bpf_get_current_pid_tgid();
 
     // Make sure the function succeeded
     int ret = PT_REGS_RC(ctx);
@@ -284,56 +270,64 @@ int kretprobe__ret_script_load(struct pt_regs *ctx)
     }
     bpf_map_delete_elem(&load_script_map, &ev.u.script_info.process.pid);
 
-    // Make sure it isn't NULL
     bprm = (unsigned char *)*bprmp;
     if (NULL == bprm)
     {
         return 0;
     }
 
-    // Create the initial event in the cache
-    bpf_printk("Creating the initial event\n");
+    // Create the initial script event in the cache
     push_telemetry_event(ctx, &ev);
 
-    // Get filename
+    // Get filename. It may only be the first part
     ret = read_value(bprm, CRC_BPRM_FILENAME, &str, sizeof(str));
     if (ret < 0)
     {
         return 0;
     }
-
-    // Read the filename
     count = bpf_probe_read_str(&ev.u.v.value, sizeof(ev.u.v.value), str);
+
+    // Increment the pointer the number of bytes read -1 for the null terminator
     str += sizeof(ev.u.v.value) - 1;
-    bpf_printk("Count: %d\n", count);
+
+    // This is used to check if it's an absolute path (starts with '/')
     br = ev.u.v.value[0];
 
-    // Output the path
+    // Output the path. It may only be the first part if the path/name is long
     ev.id = id;
     ev.done = 0;
     ev.telemetry_type = TE_CHAR_STR;
     push_telemetry_event(ctx, &ev);
+
+    // If we reached the max we could read and there is still more to read
     if (count >= sizeof(ev.u.v.value))
     {
-        bpf_printk("count == to value size. Reading more...\n");
-        READ_CHAR_STR_N(10)
+        // We need to make sure that we read enough times to read PATH_MAX
+        // This macro jumps to DONE_READING when it has read to the null byte
+        READ_CHAR_STR_N(29)
 
     DONE_READING:
-        // If after we have read the full path the first chararcter was a /
-        // then we are done
+        // If the first character is '/' then we have an aboslute path and so
+        // we can skip getting cwd
         if (br == '/')
         {
             goto Skip;
         }
     }
+    // If we read less than value size and the first character is '/' then we
+    // have an aboslute path and so we can skip getting cwd
     else if (br == '/')
     {
-        bpf_printk("Count < value size. goto Skip\n");
         goto Skip;
     }
 
-    bpf_printk("Calling enter script load\n");
-    enter_script_load(ctx, id);
+    // If we made it here we need to get the cwd. Add the id we used for our event
+    // the map and then call the handle_pwd function
+    bpf_map_update_elem(&process_ids, &p_t, &id, BPF_ANY);
+
+    count = 0;
+    bpf_map_update_elem(&read_path_skip, &count, &count, BPF_ANY);
+    bpf_tail_call(ctx, &tail_call_table, HANDLE_PWD);
 
 Skip:
     return 0;
