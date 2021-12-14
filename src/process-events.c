@@ -134,15 +134,20 @@ struct bpf_map_def SEC("maps/tail_call_table") tail_call_table = {
      */                                                                                                 \
     u64 offset = CRC_LOADED;                                                                            \
     offset = (u64)bpf_map_lookup_elem(&offsets, &offset); /* squeezing out as much stack as possible */ \
+    /* if CRC_LOADED is not in the map it means we are too early in the ebpf program loading       */   \
+    if (!offset)                                                                                        \
+    {                                                                                                   \
+        return 0;                                                                                       \
+    }                                                                                                   \
     /* since we're using offsets to read from the structs, we don't need to bother with                 \
      * understanding their structure                                                                    \
      */                                                                                                 \
     void *ts = (void *)bpf_get_current_task();                                                          \
     void *ptr = NULL;                                                                                   \
-    if (ts && offset)                                                                                   \
+    if (ts)                                                                                             \
     {                                                                                                   \
         read_value(ts, CRC_TASK_STRUCT_REAL_PARENT, &ptr, sizeof(ptr));                                 \
-        read_value(ptr, CRC_TASK_STRUCT_PID, &ppid, sizeof(ppid));                                      \
+        read_value(ptr, CRC_TASK_STRUCT_TGID, &ppid, sizeof(ppid));                                     \
         read_value(ts, CRC_TASK_STRUCT_LOGINUID, &luid, sizeof(luid));                                  \
         read_value(ts, CRC_TASK_STRUCT_MM, &ptr, sizeof(ptr));                                          \
         read_value(ptr, CRC_MM_STRUCT_EXE_FILE, &ptr, sizeof(ptr));                                     \
