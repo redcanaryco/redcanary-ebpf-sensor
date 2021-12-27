@@ -6,10 +6,11 @@ SRC = src
 SRCS = $(wildcard $(SRC)/*.c)
 OBJS = $(patsubst $(SRC)/%.c,$(SRC)/%,$(SRCS))
 OBJS_WRAPPED = $(OBJS)
-CC = clang-8
-LLC = llc-8
-OPT = opt-8
-LLVM_DIS = llvm-dis-8
+CLANG_VER = 8
+CC = clang-$(CLANG_VER)
+LLC = llc-$(CLANG_VER)
+OPT = opt-$(CLANG_VER)
+LLVM_DIS = llvm-dis-$(CLANG_VER)
 CFLAGS += \
 	-D__KERNEL__ \
 	-D__BPF_TRACING__ \
@@ -76,8 +77,8 @@ endif
 
 depends:
 	apt-get update
-	apt-get install -y llvm-8 clang-8 libclang-8-dev \
-		linux-headers-4.11.0-14-generic linux-headers-4.10.0-14-generic \
+	apt-get install -y llvm-$(CLANG_VER) clang-$(CLANG_VER) libclang-$(CLANG_VER)-dev \
+		linux-headers-$(KERNEL_HEADER_VERSION) \
 		make binutils curl coreutils gcc
 
 no_wrapper:
