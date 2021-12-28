@@ -6,10 +6,11 @@ SRC = src
 SRCS = $(wildcard $(SRC)/*.c)
 OBJS = $(patsubst $(SRC)/%.c,$(SRC)/%,$(SRCS))
 OBJS_WRAPPED = $(OBJS)
-CC = clang-6.0
-LLC = llc-6.0
-OPT = opt-6.0
-LLVM_DIS = llvm-dis-6.0
+CLANG_VER = 8
+CC = clang-$(CLANG_VER)
+LLC = llc-$(CLANG_VER)
+OPT = opt-$(CLANG_VER)
+LLVM_DIS = llvm-dis-$(CLANG_VER)
 CFLAGS += \
 	-D__KERNEL__ \
 	-D__BPF_TRACING__ \
@@ -36,7 +37,7 @@ TARGET = -target aarch64
 else ifeq ($(ARCH),x86_64)
 CFLAGS += -D__ASM_SYSREG_H
 KERNEL_ARCH_NAME = x86
-KERNEL_HEADER_VERSION ?= 4.4.0-98-generic
+KERNEL_HEADER_VERSION ?= 4.11.0-14-generic
 TARGET = -target x86_64
 else
 $(error Unknown architecture $(ARCH))
@@ -76,8 +77,8 @@ endif
 
 depends:
 	apt-get update
-	apt-get install -y llvm-6.0 clang-6.0 libclang-6.0-dev \
-		linux-headers-4.4.0-98-generic linux-headers-4.10.0-14-generic \
+	apt-get install -y llvm-$(CLANG_VER) clang-$(CLANG_VER) libclang-$(CLANG_VER)-dev \
+		linux-headers-$(KERNEL_HEADER_VERSION) \
 		make binutils curl coreutils gcc
 
 no_wrapper:
