@@ -610,29 +610,23 @@ static __always_inline int exit_exec(struct pt_regs *__ctx, u32 i_dev, u64 i_ino
     if (!id)
         goto Flush;
 
-    ptelemetry_event_t ev = &(telemetry_event_t){
-        .id = 0,
-        .telemetry_type = TE_UNSPEC,
-        .u.v = {
-            .value[0] = '\0',
-            .truncated = FALSE,
-        },
-    };
-    ev->id = *id;
     bpf_map_delete_elem(&process_ids, &pid_tgid);
 
-    file_info_t fi = {
-        .inode = i_ino,
-        .devmajor = MAJOR(i_dev),
-        .devminor = MINOR(i_dev),
+
+    ptelemetry_event_t ev = &(telemetry_event_t){
+        .id = *id,
+        .telemetry_type = TE_FILE_INFO,
+        .u.file_info = {
+            .inode = i_ino,
+            .devmajor = MAJOR(i_dev),
+            .devminor = MINOR(i_dev),
+        },
     };
 
-    bpf_get_current_comm(&fi.comm, sizeof(fi.comm));
-
-    ev->telemetry_type = TE_FILE_INFO;
-    __builtin_memcpy(&ev->u.file_info, &fi, sizeof(fi));
+    bpf_get_current_comm(&ev->u.file_info.comm, sizeof(ev->u.file_info.comm));
     push_telemetry_event(__ctx, ev);
 
+    // re-use the same ev to save stack space
     ev->id = *id;
     ev->telemetry_type = TE_RETCODE;
     ev->u.r.retcode = (u32)PT_REGS_RC(__ctx);
