@@ -92,7 +92,6 @@ int kretprobe__ret_inet_csk_accept(struct pt_regs *ctx)
 
     // Initialize some of the telemetry event
     ev.id = bpf_get_prandom_u32();
-    ev.done = 0;
     ev.telemetry_type = TE_NETWORK;
     ev.u.network_info.mono_ns = bpf_ktime_get_ns();
 
@@ -151,7 +150,6 @@ int kretprobe__ret___skb_recv_udp(struct pt_regs *ctx)
 
     // Initialize some of the telemetry event
     ev.id = bpf_get_prandom_u32();
-    ev.done = 0;
     ev.telemetry_type = TE_NETWORK;
     ev.u.network_info.protocol_type = IPPROTO_UDP;
     ev.u.network_info.mono_ns = bpf_ktime_get_ns();
@@ -308,7 +306,6 @@ int kretprobe__ret_udp_outgoing(struct pt_regs *ctx)
 
     // Initialize some of the telemetry event
     ev.id = bpf_get_prandom_u32();
-    ev.done = 0;
     ev.telemetry_type = TE_NETWORK;
     ev.u.network_info.protocol_type = IPPROTO_UDP;
     ev.u.network_info.direction = outbound;
@@ -433,7 +430,6 @@ int kretprobe__ret_tcp_connect(struct pt_regs *ctx)
 
     // Initialize some of the telemetry event
     ev.id = bpf_get_prandom_u32();
-    ev.done = 0;
     ev.telemetry_type = TE_NETWORK;
     ev.u.network_info.mono_ns = bpf_ktime_get_ns();
 
