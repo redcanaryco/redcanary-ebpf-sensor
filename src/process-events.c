@@ -612,6 +612,10 @@ static __always_inline int exit_exec(struct pt_regs *__ctx, u32 i_dev, u64 i_ino
 
     bpf_map_delete_elem(&process_ids, &pid_tgid);
 
+    u32 retcode = (u32)PT_REGS_RC(__ctx);
+    if (retcode != 0) {
+        goto Flush;
+    }
 
     ptelemetry_event_t ev = &(telemetry_event_t){
         .id = *id,
@@ -629,7 +633,7 @@ static __always_inline int exit_exec(struct pt_regs *__ctx, u32 i_dev, u64 i_ino
     // re-use the same ev to save stack space
     ev->id = *id;
     ev->telemetry_type = TE_RETCODE;
-    ev->u.r.retcode = (u32)PT_REGS_RC(__ctx);
+    ev->u.r.retcode = retcode;
     push_telemetry_event(__ctx, ev);
 
 Flush:
