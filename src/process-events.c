@@ -90,7 +90,6 @@ struct bpf_map_def SEC("maps/tail_call_table") tail_call_table = {
 
 #define FILL_TELEMETRY_SYSCALL_EVENT(E, SP)                          \
     u64 pid_tgid = bpf_get_current_pid_tgid();                       \
-    E->done = FALSE;                                                 \
     E->telemetry_type = TE_SYSCALL_INFO;                             \
     E->u.syscall_info.pid = pid_tgid >> 32;                          \
     E->u.syscall_info.tid = pid_tgid & 0xFFFFFFFF;                   \
@@ -191,7 +190,6 @@ static __always_inline void push_telemetry_event(struct pt_regs *ctx, ptelemetry
     {                                                                              \
         ev->u.v.truncated = FALSE;                                                 \
         ev->id = id;                                                               \
-        ev->done = FALSE;                                                          \
         ev->telemetry_type = T;                                                    \
         count = bpf_probe_read_str(&ev->u.v.value, VALUE_SIZE, (void *)PTR + off); \
         if (count == VALUE_SIZE)                                                   \
@@ -233,7 +231,6 @@ static __always_inline void push_telemetry_event(struct pt_regs *ctx, ptelemetry
     if (!br)                                                                     \
     {                                                                            \
         EV->id = id;                                                             \
-        EV->done = FALSE;                                                        \
         EV->telemetry_type = T;                                                  \
         EV->u.v.truncated = FALSE;                                               \
         count = 0;                                                               \
@@ -265,7 +262,6 @@ static __always_inline void push_telemetry_event(struct pt_regs *ctx, ptelemetry
 
 #define SEND_PATH                                                           \
     ev->id = id;                                                            \
-    ev->done = FALSE;                                                       \
     ev->telemetry_type = TE_PWD;                                            \
     if (br == 0)                                                            \
     {                                                                       \
@@ -314,7 +310,6 @@ static __always_inline int enter_exec(syscall_pattern_type_t sp, int fd,
 
     u64 id = bpf_get_prandom_u32();
     ev->id = id;
-    ev->done = FALSE;
     ev->telemetry_type = 0,
     ev->u.v.value[0] = '\0';
     ev->u.v.truncated = FALSE;
@@ -349,7 +344,6 @@ static __always_inline ptelemetry_event_t enter_exec_4_11(syscall_pattern_type_t
 
     id = bpf_get_prandom_u32();
     ev->id = id;
-    ev->done = FALSE;
     ev->telemetry_type = 0,
     ev->u.v.value[0] = '\0';
     ev->u.v.truncated = FALSE;
@@ -616,34 +610,30 @@ static __always_inline int exit_exec(struct pt_regs *__ctx, u32 i_dev, u64 i_ino
     if (!id)
         goto Flush;
 
-    ptelemetry_event_t ev = &(telemetry_event_t){
-        .id = 0,
-        .done = FALSE,
-        .telemetry_type = TE_UNSPEC,
-        .u.v = {
-            .value[0] = '\0',
-            .truncated = FALSE,
-        },
-    };
-    ev->id = *id;
     bpf_map_delete_elem(&process_ids, &pid_tgid);
 
-    file_info_t fi = {
-        .inode = i_ino,
-        .devmajor = MAJOR(i_dev),
-        .devminor = MINOR(i_dev),
+    u32 retcode = (u32)PT_REGS_RC(__ctx);
+    if (retcode != 0) {
+        goto Flush;
+    }
+
+    ptelemetry_event_t ev = &(telemetry_event_t){
+        .id = *id,
+        .telemetry_type = TE_FILE_INFO,
+        .u.file_info = {
+            .inode = i_ino,
+            .devmajor = MAJOR(i_dev),
+            .devminor = MINOR(i_dev),
+        },
     };
 
-    bpf_get_current_comm(&fi.comm, sizeof(fi.comm));
-
-    ev->telemetry_type = TE_FILE_INFO;
-    __builtin_memcpy(&ev->u.file_info, &fi, sizeof(fi));
+    bpf_get_current_comm(&ev->u.file_info.comm, sizeof(ev->u.file_info.comm));
     push_telemetry_event(__ctx, ev);
 
+    // re-use the same ev to save stack space
     ev->id = *id;
-    ev->done = TRUE;
     ev->telemetry_type = TE_RETCODE;
-    ev->u.r.retcode = (u32)PT_REGS_RC(__ctx);
+    ev->u.r.retcode = retcode;
     push_telemetry_event(__ctx, ev);
 
 Flush:
@@ -688,7 +678,6 @@ static __always_inline int enter_clone(syscall_pattern_type_t sp, unsigned long 
 
     u64 id = bpf_get_prandom_u32();
     ev->id = id;
-    ev->done = FALSE;
     ev->telemetry_type = 0,
     ev->u.v.value[0] = '\0';
     ev->u.v.truncated = FALSE;
@@ -699,7 +688,6 @@ static __always_inline int enter_clone(syscall_pattern_type_t sp, unsigned long 
     push_telemetry_event(ctx, ev);
 
     ev->id = id;
-    ev->done = FALSE;
     ev->telemetry_type = TE_EXE_PATH;
     ev->u.v.truncated = FALSE;
     long count = 0;
@@ -739,7 +727,6 @@ static __always_inline int exit_clone(struct pt_regs *ctx)
 
     ptelemetry_event_t ev = &(telemetry_event_t){
         .id = 0,
-        .done = TRUE,
         .telemetry_type = 0,
         .u.v = {
             .value[0] = '\0',
@@ -748,7 +735,6 @@ static __always_inline int exit_clone(struct pt_regs *ctx)
     };
 
     ev->id = *id;
-    ev->done = FALSE;
     ev->telemetry_type = TE_CLONE_INFO;
     u32 key = 0;
     pclone_info_t pclone_info = bpf_map_lookup_elem(&clone_info_store, &key);
@@ -773,7 +759,6 @@ static __always_inline int exit_clone(struct pt_regs *ctx)
 
     ev->id = *id;
     bpf_map_delete_elem(&process_ids, &pid_tgid);
-    ev->done = TRUE;
     ev->telemetry_type = TE_RETCODE;
     ev->u.r.retcode = (u32)PT_REGS_RC(ctx);
     push_telemetry_event(ctx, ev);
@@ -822,7 +807,6 @@ static __always_inline int enter_clone3(syscall_pattern_type_t sp, struct clone_
 
     u64 id = bpf_get_prandom_u32();
     ev->id = id;
-    ev->done = FALSE;
     ev->telemetry_type = 0,
     ev->u.v.value[0] = '\0';
     ev->u.v.truncated = FALSE;
@@ -836,7 +820,6 @@ static __always_inline int enter_clone3(syscall_pattern_type_t sp, struct clone_
     bpf_map_update_elem(&process_ids, (u32 *)&pid_tgid, &id, BPF_ANY);
 
     ev->id = id;
-    ev->done = FALSE;
     ev->telemetry_type = TE_EXE_PATH;
     ev->u.v.truncated = FALSE;
     long count = 0;
@@ -882,7 +865,6 @@ static __always_inline int exit_clone3(struct pt_regs *ctx)
 
     ptelemetry_event_t ev = &(telemetry_event_t){
         .id = 0,
-        .done = TRUE,
         .telemetry_type = 0,
         .u.v = {
             .value[0] = '\0',
@@ -891,7 +873,6 @@ static __always_inline int exit_clone3(struct pt_regs *ctx)
     };
 
     ev->id = *id;
-    ev->done = FALSE;
     ev->telemetry_type = TE_CLONE3_INFO;
     u32 key = 0;
     pclone3_info_t pclone3_info = bpf_map_lookup_elem(&clone3_info_store, &key);
@@ -926,7 +907,6 @@ static __always_inline int exit_clone3(struct pt_regs *ctx)
 
     ev->id = *id;
     bpf_map_delete_elem(&process_ids, &pid_tgid);
-    ev->done = TRUE;
     ev->telemetry_type = TE_RETCODE;
     ev->u.r.retcode = (u32)PT_REGS_RC(ctx);
     push_telemetry_event(ctx, ev);
@@ -992,7 +972,6 @@ int kprobe__read_inode_task_struct(struct pt_regs *ctx)
     // prepare event
     ptelemetry_event_t ev = &(telemetry_event_t){
         .id = 0,
-        .done = TRUE,
         .telemetry_type = 0,
         .u.v = {
             .value[0] = '\0',
@@ -1063,7 +1042,6 @@ int kprobe__read_pid_task_struct(struct pt_regs *ctx)
     // send event with ID
     ptelemetry_event_t ev = &(telemetry_event_t){
         .id = 0,
-        .done = TRUE,
         .telemetry_type = 0,
         .u.v = {
             .value[0] = '\0',
@@ -1144,7 +1122,6 @@ static __always_inline int enter_unshare(syscall_pattern_type_t sp, int flags,
 
     u64 id = bpf_get_prandom_u32();
     ev->id = id;
-    ev->done = FALSE;
     ev->telemetry_type = 0,
     ev->u.v.value[0] = '\0';
     ev->u.v.truncated = FALSE;
@@ -1155,7 +1132,6 @@ static __always_inline int enter_unshare(syscall_pattern_type_t sp, int flags,
     push_telemetry_event(ctx, ev);
 
     ev->id = id;
-    ev->done = FALSE;
     ev->telemetry_type = TE_EXE_PATH;
     ev->u.v.truncated = FALSE;
     long count = 0;
@@ -1167,7 +1143,6 @@ static __always_inline int enter_unshare(syscall_pattern_type_t sp, int flags,
     push_telemetry_event(ctx, ev);
 
     ev->id = id;
-    ev->done = FALSE;
     ev->telemetry_type = TE_UNSHARE_FLAGS;
     ev->u.unshare_flags = flags;
     push_telemetry_event(ctx, ev);
@@ -1188,7 +1163,6 @@ static __always_inline int exit_unshare(struct pt_regs *ctx)
 
     ptelemetry_event_t ev = &(telemetry_event_t){
         .id = 0,
-        .done = TRUE,
         .telemetry_type = 0,
         .u.v = {
             .value[0] = '\0',
@@ -1241,7 +1215,6 @@ static __always_inline int enter_exit(syscall_pattern_type_t sp, int status,
 
     u64 id = bpf_get_prandom_u32();
     ev->id = id;
-    ev->done = FALSE;
     ev->telemetry_type = 0,
     ev->u.v.value[0] = '\0';
     ev->u.v.truncated = FALSE;
@@ -1252,7 +1225,6 @@ static __always_inline int enter_exit(syscall_pattern_type_t sp, int status,
     push_telemetry_event(ctx, ev);
 
     ev->id = id;
-    ev->done = FALSE;
     ev->telemetry_type = TE_EXE_PATH;
     ev->u.v.truncated = FALSE;
     long count = 0;
@@ -1264,7 +1236,6 @@ static __always_inline int enter_exit(syscall_pattern_type_t sp, int status,
     push_telemetry_event(ctx, ev);
 
     ev->id = id;
-    ev->done = FALSE;
     ev->telemetry_type = TE_EXIT_STATUS;
     ev->u.exit_status = status;
     push_telemetry_event(ctx, ev);
@@ -1285,7 +1256,6 @@ static __always_inline int exit_exit(struct pt_regs *ctx)
 
     ptelemetry_event_t ev = &(telemetry_event_t){
         .id = 0,
-        .done = TRUE,
         .telemetry_type = 0,
         .u.v = {
             .value[0] = '\0',

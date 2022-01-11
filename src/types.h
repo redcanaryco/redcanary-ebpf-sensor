@@ -319,7 +319,6 @@ typedef struct
 typedef struct
 {
     u64 id;
-    u32 done;
     telemetry_event_type_t telemetry_type;
     union
     {

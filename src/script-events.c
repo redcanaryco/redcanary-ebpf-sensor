@@ -65,7 +65,6 @@ struct bpf_map_def SEC("maps/process_ids") process_ids = {
 
 #define SEND_PATH                                                           \
     ev->id = id;                                                            \
-    ev->done = FALSE;                                                       \
     ev->telemetry_type = TE_PWD;                                            \
     if (br == 0)                                                            \
     {                                                                       \
@@ -104,7 +103,6 @@ struct bpf_map_def SEC("maps/process_ids") process_ids = {
 
 #define READ_CHAR_STR                                                   \
     ev.id = id;                                                         \
-    ev.done = FALSE;                                                    \
     ev.telemetry_type = TE_CHAR_STR;                                    \
     __builtin_memset(&ev.u.v.value, 0, VALUE_SIZE);                     \
     count = bpf_probe_read_str(&ev.u.v.value, VALUE_SIZE, (void *)str); \
@@ -245,7 +243,6 @@ int kretprobe__ret_script_load(struct pt_regs *ctx)
     // Initialize some of the telemetry event
     id = bpf_get_prandom_u32();
     ev.id = id;
-    ev.done = 0;
     ev.telemetry_type = TE_SCRIPT;
     ev.u.script_info.mono_ns = bpf_ktime_get_ns();
 
@@ -293,7 +290,6 @@ int kretprobe__ret_script_load(struct pt_regs *ctx)
 
     // Output the path. It may only be the first part if the path/name is long
     ev.id = id;
-    ev.done = 0;
     ev.telemetry_type = TE_CHAR_STR;
     push_telemetry_event(ctx, &ev);
 
