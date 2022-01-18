@@ -607,14 +607,21 @@ static __always_inline int exit_exec(struct pt_regs *__ctx, u32 i_dev, u64 i_ino
     u64 pid_tgid = bpf_get_current_pid_tgid();
     u64 *id = bpf_map_lookup_elem(&process_ids, &pid_tgid);
 
-    if (!id)
-        goto Flush;
+    if (!id) {
+        return 0;
+    }
 
     bpf_map_delete_elem(&process_ids, &pid_tgid);
 
     u32 retcode = (u32)PT_REGS_RC(__ctx);
     if (retcode != 0) {
-        goto Flush;
+        ptelemetry_event_t ev = &(telemetry_event_t){
+            .id = *id,
+            .telemetry_type = TE_DISCARD,
+            .u.r.retcode = retcode,
+        };
+        push_telemetry_event(__ctx, ev);
+        return 0;
     }
 
     ptelemetry_event_t ev = &(telemetry_event_t){
@@ -636,7 +643,6 @@ static __always_inline int exit_exec(struct pt_regs *__ctx, u32 i_dev, u64 i_ino
     ev->u.r.retcode = retcode;
     push_telemetry_event(__ctx, ev);
 
-Flush:
     return 0;
 }
 
