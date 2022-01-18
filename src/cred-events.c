@@ -62,7 +62,7 @@ static __always_inline int dispatch_credentials_event(struct pt_regs *__ctx)
     {
         bpf_perf_event_output(__ctx,
                               &cred_events,
-                              bpf_get_smp_processor_id(),
+                              BPF_F_CURRENT_CPU,
                               pcreds,
                               sizeof(*pcreds));
     }

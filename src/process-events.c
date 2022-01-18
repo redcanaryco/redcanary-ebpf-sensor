@@ -172,7 +172,7 @@ int kprobe__do_mount(struct pt_regs *ctx)
 
     bpf_perf_event_output(ctx,
                           &mount_events,
-                          bpf_get_smp_processor_id(),
+                          BPF_F_CURRENT_CPU,
                           &ev,
                           sizeof(ev));
 
@@ -181,7 +181,7 @@ int kprobe__do_mount(struct pt_regs *ctx)
 
 static __always_inline void push_telemetry_event(struct pt_regs *ctx, ptelemetry_event_t ev)
 {
-    bpf_perf_event_output(ctx, &process_events, bpf_get_smp_processor_id(), ev, sizeof(*ev));
+    bpf_perf_event_output(ctx, &process_events, BPF_F_CURRENT_CPU, ev, sizeof(*ev));
     __builtin_memset(ev, 0, sizeof(telemetry_event_t));
 }
 

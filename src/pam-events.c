@@ -63,7 +63,7 @@ int uretprobe__pam_start(struct pt_regs *ctx)
 
         bpf_perf_event_output(ctx,
                               &pam_events,
-                              bpf_get_smp_processor_id(),
+                              BPF_F_CURRENT_CPU,
                               ppam,
                               sizeof(*ppam));
     }
@@ -80,7 +80,7 @@ int uprobe__pam_end(struct pt_regs *ctx)
     ev.pam_handle = (u64)PT_REGS_PARM1(ctx);
     bpf_perf_event_output(ctx,
                           &pam_events,
-                          bpf_get_smp_processor_id(),
+                          BPF_F_CURRENT_CPU,
                           &ev,
                           sizeof(ev));
     return 0;
@@ -110,7 +110,7 @@ int uretprobe__pam_authenticate(struct pt_regs *ctx)
     ppam->result = (u32)PT_REGS_RC(ctx);
     bpf_perf_event_output(ctx,
                           &pam_events,
-                          bpf_get_smp_processor_id(),
+                          BPF_F_CURRENT_CPU,
                           ppam,
                           sizeof(*ppam));
 
@@ -143,7 +143,7 @@ int uretprobe__pam_chauthtok(struct pt_regs *ctx)
     ppam->result = (u32)PT_REGS_RC(ctx);
     bpf_perf_event_output(ctx,
                           &pam_events,
-                          bpf_get_smp_processor_id(),
+                          BPF_F_CURRENT_CPU,
                           ppam,
                           sizeof(*ppam));
 
@@ -177,7 +177,7 @@ int uretprobe__pam_set_item(struct pt_regs *ctx)
     ppam->result = (u32)PT_REGS_RC(ctx);
     bpf_perf_event_output(ctx,
                           &pam_events,
-                          bpf_get_smp_processor_id(),
+                          BPF_F_CURRENT_CPU,
                           ppam,
                           sizeof(*ppam));
 
@@ -210,7 +210,7 @@ int uretprobe__pam_setcred(struct pt_regs *ctx)
     ppam->result = (u32)PT_REGS_RC(ctx);
     bpf_perf_event_output(ctx,
                           &pam_events,
-                          bpf_get_smp_processor_id(),
+                          BPF_F_CURRENT_CPU,
                           ppam,
                           sizeof(*ppam));
 
