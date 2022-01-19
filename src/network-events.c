@@ -36,7 +36,7 @@ struct bpf_map_def SEC("maps/network_events") network_events = {
     .type = BPF_MAP_TYPE_PERF_EVENT_ARRAY,
     .key_size = sizeof(u32),
     .value_size = sizeof(u32),
-    .max_entries = MAX_TELEMETRY_STACK_ENTRIES * 64,
+    .max_entries = 0, // let oxidebpf set it to num_cpus
     .pinning = 0,
     .namespace = "",
 };
