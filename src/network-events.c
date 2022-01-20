@@ -36,7 +36,7 @@ struct bpf_map_def SEC("maps/network_events") network_events = {
     .type = BPF_MAP_TYPE_PERF_EVENT_ARRAY,
     .key_size = sizeof(u32),
     .value_size = sizeof(u32),
-    .max_entries = MAX_TELEMETRY_STACK_ENTRIES * 64,
+    .max_entries = 0, // let oxidebpf set it to num_cpus
     .pinning = 0,
     .namespace = "",
 };
@@ -135,7 +135,7 @@ int kretprobe__ret_inet_csk_accept(struct pt_regs *ctx)
     bpf_get_current_comm(ev.u.network_info.process.comm, sizeof(ev.u.network_info.process.comm));
 
     // Output data to generator
-    bpf_perf_event_output(ctx, &network_events, bpf_get_smp_processor_id(), &ev, sizeof(ev));
+    bpf_perf_event_output(ctx, &network_events, BPF_F_CURRENT_CPU, &ev, sizeof(ev));
 
     return 0;
 }
@@ -279,7 +279,7 @@ int kretprobe__ret___skb_recv_udp(struct pt_regs *ctx)
     bpf_get_current_comm(ev.u.network_info.process.comm, sizeof(ev.u.network_info.process.comm));
 
     // Output data to generator
-    bpf_perf_event_output(ctx, &network_events, bpf_get_smp_processor_id(), &ev, sizeof(ev));
+    bpf_perf_event_output(ctx, &network_events, BPF_F_CURRENT_CPU, &ev, sizeof(ev));
     return 0;
 }
 
@@ -404,7 +404,7 @@ int kretprobe__ret_udp_outgoing(struct pt_regs *ctx)
     bpf_get_current_comm(ev.u.network_info.process.comm, sizeof(ev.u.network_info.process.comm));
 
     // Output data to generator
-    bpf_perf_event_output(ctx, &network_events, bpf_get_smp_processor_id(), &ev, sizeof(ev));
+    bpf_perf_event_output(ctx, &network_events, BPF_F_CURRENT_CPU, &ev, sizeof(ev));
     return 0;
 }
 
@@ -481,7 +481,7 @@ int kretprobe__ret_tcp_connect(struct pt_regs *ctx)
     bpf_get_current_comm(ev.u.network_info.process.comm, sizeof(ev.u.network_info.process.comm));
 
     // Output data to generator
-    bpf_perf_event_output(ctx, &network_events, bpf_get_smp_processor_id(), &ev, sizeof(ev));
+    bpf_perf_event_output(ctx, &network_events, BPF_F_CURRENT_CPU, &ev, sizeof(ev));
     return 0;
 }
 

@@ -20,7 +20,7 @@ struct bpf_map_def SEC("maps/mount_events") mount_events = {
     .type = BPF_MAP_TYPE_PERF_EVENT_ARRAY,
     .key_size = sizeof(u32),
     .value_size = sizeof(u32),
-    .max_entries = 1024,
+    .max_entries = 0, // let oxidebpf set it to num_cpus
     .pinning = 0,
     .namespace = "",
 };
@@ -65,7 +65,7 @@ struct bpf_map_def SEC("maps/process_events") process_events = {
     .type = BPF_MAP_TYPE_PERF_EVENT_ARRAY,
     .key_size = sizeof(u32),
     .value_size = sizeof(u32),
-    .max_entries = MAX_TELEMETRY_STACK_ENTRIES * 64,
+    .max_entries = 0, // let oxidebpf set it to num_cpus
     .pinning = 0,
     .namespace = "",
 };
@@ -172,7 +172,7 @@ int kprobe__do_mount(struct pt_regs *ctx)
 
     bpf_perf_event_output(ctx,
                           &mount_events,
-                          bpf_get_smp_processor_id(),
+                          BPF_F_CURRENT_CPU,
                           &ev,
                           sizeof(ev));
 
@@ -181,7 +181,7 @@ int kprobe__do_mount(struct pt_regs *ctx)
 
 static __always_inline void push_telemetry_event(struct pt_regs *ctx, ptelemetry_event_t ev)
 {
-    bpf_perf_event_output(ctx, &process_events, bpf_get_smp_processor_id(), ev, sizeof(*ev));
+    bpf_perf_event_output(ctx, &process_events, BPF_F_CURRENT_CPU, ev, sizeof(*ev));
     __builtin_memset(ev, 0, sizeof(telemetry_event_t));
 }
 
@@ -399,7 +399,7 @@ Pwd:;
 
     if (to_skip != 0)
     {
-        SKIP_PATH_N(150);
+        SKIP_PATH_N(125);
     }
 
 Send:
@@ -607,14 +607,21 @@ static __always_inline int exit_exec(struct pt_regs *__ctx, u32 i_dev, u64 i_ino
     u64 pid_tgid = bpf_get_current_pid_tgid();
     u64 *id = bpf_map_lookup_elem(&process_ids, &pid_tgid);
 
-    if (!id)
-        goto Flush;
+    if (!id) {
+        return 0;
+    }
 
     bpf_map_delete_elem(&process_ids, &pid_tgid);
 
     u32 retcode = (u32)PT_REGS_RC(__ctx);
     if (retcode != 0) {
-        goto Flush;
+        ptelemetry_event_t ev = &(telemetry_event_t){
+            .id = *id,
+            .telemetry_type = TE_DISCARD,
+            .u.r.retcode = retcode,
+        };
+        push_telemetry_event(__ctx, ev);
+        return 0;
     }
 
     ptelemetry_event_t ev = &(telemetry_event_t){
@@ -636,7 +643,6 @@ static __always_inline int exit_exec(struct pt_regs *__ctx, u32 i_dev, u64 i_ino
     ev->u.r.retcode = retcode;
     push_telemetry_event(__ctx, ev);
 
-Flush:
     return 0;
 }
 

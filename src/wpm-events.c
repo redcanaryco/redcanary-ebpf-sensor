@@ -24,7 +24,7 @@ struct bpf_map_def SEC("maps/wpm_events") write_process_memory_events = {
     .type = BPF_MAP_TYPE_PERF_EVENT_ARRAY,
     .key_size = sizeof(u32),
     .value_size = sizeof(u32),
-    .max_entries = 1024,
+    .max_entries = 0, // let oxidebpf set it to num_cpus
     .pinning = 0,
     .namespace = "",
 };
@@ -33,7 +33,7 @@ struct bpf_map_def SEC("maps/cpm_events") change_process_memory_events = {
     .type = BPF_MAP_TYPE_PERF_EVENT_ARRAY,
     .key_size = sizeof(u32),
     .value_size = sizeof(u32),
-    .max_entries = 1024,
+    .max_entries = 0, // let oxidebpf set it to num_cpus
     .pinning = 0,
     .namespace = "",
 };
@@ -42,7 +42,7 @@ struct bpf_map_def SEC("maps/tp_events") trace_process_events = {
     .type = BPF_MAP_TYPE_PERF_EVENT_ARRAY,
     .key_size = sizeof(u32),
     .value_size = sizeof(u32),
-    .max_entries = 1024,
+    .max_entries = 0, // let oxidebpf set it to num_cpus
     .pinning = 0,
     .namespace = "",
 };
@@ -51,7 +51,7 @@ struct bpf_map_def SEC("maps/rrs_events") rrs_events = {
     .type = BPF_MAP_TYPE_PERF_EVENT_ARRAY,
     .key_size = sizeof(u32),
     .value_size = sizeof(u32),
-    .max_entries = 1024,
+    .max_entries = 0, // let oxidebpf set it to num_cpus
     .pinning = 0,
     .namespace = "",
 };
@@ -97,7 +97,7 @@ int uprobe__read_return_string(struct pt_regs *ctx)
     bpf_probe_read(ev.value, sizeof(ev.value), (void *)PT_REGS_RC(ctx));
     bpf_perf_event_output(ctx,
                           &rrs_events,
-                          bpf_get_smp_processor_id(),
+                          BPF_F_CURRENT_CPU,
                           &ev,
                           sizeof(ev));
     return 0;
@@ -121,7 +121,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_ptrace_write,
 
         bpf_perf_event_output(ctx,
                               &write_process_memory_events,
-                              bpf_get_smp_processor_id(),
+                              BPF_F_CURRENT_CPU,
                               &ev,
                               sizeof(ev));
     }
@@ -147,7 +147,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_ptrace,
 
         bpf_perf_event_output(ctx,
                               &trace_process_events,
-                              bpf_get_smp_processor_id(),
+                              BPF_F_CURRENT_CPU,
                               &ev,
                               sizeof(ev));
     }
@@ -173,7 +173,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_process_vm_writev_5_5,
 
     bpf_perf_event_output(ctx,
                           &write_process_memory_events,
-                          bpf_get_smp_processor_id(),
+                          BPF_F_CURRENT_CPU,
                           &ev,
                           sizeof(ev));
 
@@ -189,7 +189,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_process_vm_writev,
 
     bpf_perf_event_output(ctx,
                           &write_process_memory_events,
-                          bpf_get_smp_processor_id(),
+                          BPF_F_CURRENT_CPU,
                           &ev,
                           sizeof(ev));
 
@@ -207,7 +207,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_mprotect,
 
     bpf_perf_event_output(ctx,
                           &change_process_memory_events,
-                          bpf_get_smp_processor_id(),
+                          BPF_F_CURRENT_CPU,
                           &ev,
                           sizeof(ev));
 

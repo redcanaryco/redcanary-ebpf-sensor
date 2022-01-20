@@ -20,7 +20,7 @@ struct bpf_map_def SEC("maps/script_events") script_events = {
     .type = BPF_MAP_TYPE_PERF_EVENT_ARRAY,
     .key_size = sizeof(u32),
     .value_size = sizeof(u32),
-    .max_entries = MAX_TELEMETRY_STACK_ENTRIES * 64,
+    .max_entries = 0, // let oxidebpf set it to num_cpus
     .pinning = 0,
     .namespace = "",
 };
@@ -126,7 +126,7 @@ struct bpf_map_def SEC("maps/process_ids") process_ids = {
 
 static __always_inline void push_telemetry_event(struct pt_regs *ctx, ptelemetry_event_t ev)
 {
-    bpf_perf_event_output(ctx, &script_events, bpf_get_smp_processor_id(), ev, sizeof(*ev));
+    bpf_perf_event_output(ctx, &script_events, BPF_F_CURRENT_CPU, ev, sizeof(*ev));
     __builtin_memset(ev, 0, sizeof(telemetry_event_t));
 }
 
