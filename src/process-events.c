@@ -399,7 +399,7 @@ Pwd:;
 
     if (to_skip != 0)
     {
-        SKIP_PATH_N(150);
+        SKIP_PATH_N(125);
     }
 
 Send:
