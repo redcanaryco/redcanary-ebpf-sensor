@@ -131,7 +131,7 @@ int kretprobe__ret_inet_csk_accept(struct pt_regs *ctx)
     }
 
     // Get Process data and set pid and comm string
-    ev.u.network_info.process.pid = (u32)bpf_get_current_pid_tgid();
+    ev.u.network_info.process.pid = (u32) (bpf_get_current_pid_tgid() >> 32);
     bpf_get_current_comm(ev.u.network_info.process.comm, sizeof(ev.u.network_info.process.comm));
 
     // Output data to generator
@@ -167,7 +167,7 @@ int kretprobe__ret___skb_recv_udp(struct pt_regs *ctx)
     ev.u.network_info.protocol_type = IPPROTO_UDP;
 
     // Get current pid
-    ev.u.network_info.process.pid = (u32)bpf_get_current_pid_tgid();
+    ev.u.network_info.process.pid = (u32) (bpf_get_current_pid_tgid() >> 32);
 
     unsigned char *skb_head = NULL;
     unsigned short mac_header = 0;
@@ -312,8 +312,10 @@ int kretprobe__ret_udp_outgoing(struct pt_regs *ctx)
     ev.u.network_info.mono_ns = bpf_ktime_get_ns();
 
     // Get current pid
-    u32 index = (u32)bpf_get_current_pid_tgid();
-    ev.u.network_info.process.pid = index;
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+    u32 index = (u32) pid_tgid;
+
+    ev.u.network_info.process.pid = (u32) (pid_tgid >> 32);
 
     // Lookup the corresponding sk_buff* that we saved when udp_outgoing
     skpp = bpf_map_lookup_elem(&udp_outgoing_map, &index);
@@ -434,7 +436,8 @@ int kretprobe__ret_tcp_connect(struct pt_regs *ctx)
     ev.u.network_info.mono_ns = bpf_ktime_get_ns();
 
     // Get current pid
-    u32 index = (u32)bpf_get_current_pid_tgid();
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+    u32 index = (u32) pid_tgid;
     _sock *skpp;
 
     // if ipv4 do one thing else do the other
@@ -477,7 +480,7 @@ int kretprobe__ret_tcp_connect(struct pt_regs *ctx)
     ev.u.network_info.dest_port = SWAP_U16(ev.u.network_info.dest_port);
 
     // Get Process data and set pid and comm string
-    ev.u.network_info.process.pid = index;
+    ev.u.network_info.process.pid = (u32) (pid_tgid >> 32);
     bpf_get_current_comm(ev.u.network_info.process.comm, sizeof(ev.u.network_info.process.comm));
 
     // Output data to generator
