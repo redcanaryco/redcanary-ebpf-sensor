@@ -301,6 +301,49 @@ static __always_inline void push_telemetry_event(struct pt_regs *ctx, ptelemetry
 
 #define SEND_PATH_N(N) REPEAT_##N(SEND_PATH;)
 
+static __always_inline int process_argv(struct pt_regs *ctx,
+                                        const char __user *const __user *argv,
+                                        u32 tail_index) {
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+    u64 *idp = bpf_map_lookup_elem(&process_ids, &pid_tgid);
+    if (idp == NULL)
+    {
+        return 0;
+    }
+    u64 id = *idp;
+
+    // put the event on the stack and satisfy the verifier
+    telemetry_event_t tev = {0};
+    ptelemetry_event_t ev = &tev;
+
+    u32 index = 0;
+    u32 *pii = bpf_map_lookup_elem(&read_flush_index, &index);
+    if (NULL == pii)
+    {
+        bpf_map_update_elem(&read_flush_index, &index, &index, BPF_ANY);
+        goto Tail;
+    }
+
+    int count = 0;
+    u32 ii = pii[0];
+    char *ptr = NULL;
+    int ret = 0;
+
+    // this number was arrived at experimentally, increasing it will result in too many
+    // instructions for older kernels
+    READ_LOOP_N(argv, TE_COMMAND_LINE, 6);
+
+    bpf_map_update_elem(&read_flush_index, &index, &ii, BPF_ANY);
+
+Tail:
+    bpf_tail_call(ctx, &tail_call_table, tail_index);
+
+Next:;
+    u32 reset = 0;
+    bpf_map_update_elem(&read_flush_index, &reset, &reset, BPF_ANY);
+    return 0;
+}
+
 static __always_inline int enter_exec(syscall_pattern_type_t sp, int fd,
                                       const char __user *filename,
                                       const char __user *const __user *argv,
@@ -426,44 +469,15 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execve_tc_argv,
                        const char __user *filename,
                        const char __user *const __user *argv)
 {
-    u64 pid_tgid = bpf_get_current_pid_tgid();
-    u64 *idp = bpf_map_lookup_elem(&process_ids, &pid_tgid);
-    if (idp == NULL)
-    {
-        return 0;
-    }
-    u64 id = *idp;
+    return process_argv(ctx, argv, SYS_EXECVE_TC_ARGV);
+}
 
-    // put the event on the stack and satisfy the verifier
-    telemetry_event_t tev = {0};
-    ptelemetry_event_t ev = &tev;
-
-    u32 index = 0;
-    u32 *pii = bpf_map_lookup_elem(&read_flush_index, &index);
-    if (NULL == pii)
-    {
-        bpf_map_update_elem(&read_flush_index, &index, &index, BPF_ANY);
-        goto Tail;
-    }
-
-    int count = 0;
-    u32 ii = pii[0];
-    char *ptr = NULL;
-    int ret = 0;
-
-    // this number was arrived at experimentally, increasing it will result in too many
-    // instructions for older kernels
-    READ_LOOP_N(argv, TE_COMMAND_LINE, 6);
-
-    bpf_map_update_elem(&read_flush_index, &index, &ii, BPF_ANY);
-
-Tail:
-    bpf_tail_call(ctx, &tail_call_table, SYS_EXECVE_TC_ARGV);
-
-Next:;
-    u32 reset = 0;
-    bpf_map_update_elem(&read_flush_index, &reset, &reset, BPF_ANY);
-    return 0;
+SEC("kprobe/sys_execveat_tc_argv")
+int BPF_KPROBE_SYSCALL(kprobe__sys_execveat_tc_argv,
+                       int fd, const char __user *filename,
+                       const char __user *const __user *argv)
+{
+    return process_argv(ctx, argv, SYS_EXECVEAT_TC_ARGV);
 }
 
 SEC("kprobe/sys_execveat_4_11")
@@ -495,6 +509,8 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execveat_4_11,
     u64 off = 0;
     char br = 0;
     READ_VALUE_N(ev, TE_EXEC_FILENAME, filename, 5);
+
+    bpf_tail_call(ctx, &tail_call_table, SYS_EXECVEAT_TC_ARGV);
 
 Skip:
     return 0;
