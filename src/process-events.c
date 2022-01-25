@@ -185,30 +185,30 @@ static __always_inline void push_telemetry_event(struct pt_regs *ctx, ptelemetry
     __builtin_memset(ev, 0, sizeof(telemetry_event_t));
 }
 
-#define __READ_LOOP(PTR, T)                                                        \
-    if (!br)                                                                       \
-    {                                                                              \
-        ev->id = id;                                                               \
-        ev->telemetry_type = T;                                                    \
-        ev->u.v.truncated = FALSE;                                                 \
-        count = bpf_probe_read_str(&ev->u.v.value, VALUE_SIZE, (void *)PTR + off); \
-        if (count < 0)                                                             \
-        {                                                                          \
-            goto Next;                                                             \
-        }                                                                          \
-        else if (count == VALUE_SIZE)                                              \
-        {                                                                          \
-            ev->u.v.truncated = TRUE;                                              \
-            off = off + VALUE_SIZE;                                                \
-        }                                                                          \
-        else                                                                       \
-        {                                                                          \
-            br = 1;                                                                \
-        }                                                                          \
-        push_telemetry_event(ctx, ev);                                             \
+#define READ_VALUE(EV, T, PTR)                                                         \
+    if (!br)                                                                           \
+    {                                                                                  \
+        EV->id = id;                                                                   \
+        EV->telemetry_type = T;                                                        \
+        EV->u.v.truncated = FALSE;                                                     \
+        int count = bpf_probe_read_str(&ev->u.v.value, VALUE_SIZE, (void *)PTR + off); \
+        if (count < 0)                                                                 \
+        {                                                                              \
+            goto Next;                                                                 \
+        }                                                                              \
+        if (count == VALUE_SIZE)                                                       \
+        {                                                                              \
+            EV->u.v.truncated = TRUE;                                                  \
+            off = off + VALUE_SIZE;                                                    \
+        }                                                                              \
+        else                                                                           \
+        {                                                                              \
+            br = 1;                                                                    \
+        }                                                                              \
+        push_telemetry_event(ctx, EV);                                                 \
     }
 
-#define __READ_LOOP_N(PTR, T, N) REPEAT_##N(__READ_LOOP(PTR, T);)
+#define READ_VALUE_N(EV, T, PTR, N) REPEAT_##N(READ_VALUE(EV, T, PTR);)
 
 #define READ_LOOP(PTR, T)                                                      \
     ptr = NULL;                                                                \
@@ -225,32 +225,11 @@ static __always_inline void push_telemetry_event(struct pt_regs *ctx, ptelemetry
     {                                                                          \
         u32 off = 0;                                                           \
         char br = 0;                                                           \
-        __READ_LOOP_N(ptr, T, 5);                                              \
+        READ_VALUE_N(ev, T, ptr, 5);                                           \
     }                                                                          \
     ii++;
 
 #define READ_LOOP_N(PTR, T, N) REPEAT_##N(READ_LOOP(PTR, T);)
-
-#define READ_VALUE(EV, T, S)                                                     \
-    if (!br)                                                                     \
-    {                                                                            \
-        EV->id = id;                                                             \
-        EV->telemetry_type = T;                                                  \
-        EV->u.v.truncated = FALSE;                                               \
-        count = bpf_probe_read_str(&ev->u.v.value, VALUE_SIZE, (void *)S + off); \
-        if (count == VALUE_SIZE)                                                 \
-        {                                                                        \
-            EV->u.v.truncated = TRUE;                                            \
-            off = off + VALUE_SIZE;                                              \
-        }                                                                        \
-        else                                                                     \
-        {                                                                        \
-            br = 1;                                                              \
-        }                                                                        \
-        push_telemetry_event(ctx, EV);                                           \
-    }
-
-#define READ_VALUE_N(EV, T, S, N) REPEAT_##N(READ_VALUE(EV, T, S);)
 
 #define SKIP_PATH                                    \
     if (skipped >= to_skip)                          \
@@ -324,7 +303,6 @@ static __always_inline int process_argv(struct pt_regs *ctx,
         goto Tail;
     }
 
-    int count = 0;
     u32 ii = pii[0];
     char *ptr = NULL;
     int ret = 0;
@@ -505,13 +483,13 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execveat_4_11,
     u64 id = *idp;
 
     __builtin_memset(ev, 0, sizeof(telemetry_event_t));
-    u32 count = 0;
     u64 off = 0;
     char br = 0;
     READ_VALUE_N(ev, TE_EXEC_FILENAME, filename, 5);
 
     bpf_tail_call(ctx, &tail_call_table, SYS_EXECVEAT_TC_ARGV);
 
+Next:
 Skip:
     return 0;
 }
@@ -540,13 +518,13 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execve_4_11,
     u64 id = *idp;
 
     __builtin_memset(ev, 0, sizeof(telemetry_event_t));
-    u32 count = 0;
     u64 off = 0;
     char br = 0;
     READ_VALUE_N(ev, TE_EXEC_FILENAME, filename, 5);
 
     bpf_tail_call(ctx, &tail_call_table, SYS_EXECVE_TC_ARGV);
 
+Next:
 Skip:
     return 0;
 }
