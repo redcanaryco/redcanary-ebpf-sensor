@@ -424,8 +424,7 @@ Skip:
 SEC("kprobe/sys_exec_tc_argv")
 int BPF_KPROBE_SYSCALL(kprobe__sys_exec_tc_argv,
                        const char __user *filename,
-                       const char __user *const __user *argv,
-                       const char __user *const __user *envp)
+                       const char __user *const __user *argv)
 {
     u64 pid_tgid = bpf_get_current_pid_tgid();
     u64 *idp = bpf_map_lookup_elem(&process_ids, &pid_tgid);
@@ -460,52 +459,6 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_exec_tc_argv,
 
 Tail:
     bpf_tail_call(ctx, &tail_call_table, SYS_EXEC_TC_ARGV);
-
-Next:;
-    u32 reset = 0;
-    bpf_map_update_elem(&read_flush_index, &reset, &reset, BPF_ANY);
-    bpf_tail_call(ctx, &tail_call_table, SYS_EXEC_TC_ENVP);
-    return 0;
-}
-
-SEC("kprobe/sys_exec_tc_envp")
-int BPF_KPROBE_SYSCALL(kprobe__sys_exec_tc_envp,
-                       const char __user *filename,
-                       const char __user *const __user *argv,
-                       const char __user *const __user *envp)
-{
-    u64 pid_tgid = bpf_get_current_pid_tgid();
-    u32 index = 0;
-    u64 *idp = bpf_map_lookup_elem(&process_ids, &pid_tgid);
-    if (idp == NULL)
-    {
-        return 0;
-    }
-    u64 id = *idp;
-
-    telemetry_event_t tev = {0};
-    ptelemetry_event_t ev = &tev;
-
-    u32 *pii = bpf_map_lookup_elem(&read_flush_index, &index);
-    if (NULL == pii)
-    {
-        bpf_map_update_elem(&read_flush_index, &index, &index, BPF_ANY);
-        goto Tail;
-    }
-
-    int count = 0;
-    u32 ii = pii[0];
-    char *ptr = NULL;
-    int ret = 0;
-
-    // this number was arrived at experimentally, increasing it will result in too many
-    // instructions for older kernels
-    READ_LOOP_N(envp, TE_ENVIRONMENT, 6);
-
-    bpf_map_update_elem(&read_flush_index, &index, &ii, BPF_ANY);
-
-Tail:
-    bpf_tail_call(ctx, &tail_call_table, SYS_EXEC_TC_ENVP);
 
 Next:;
     u32 reset = 0;
