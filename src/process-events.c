@@ -421,8 +421,8 @@ Skip:
     return ev;
 }
 
-SEC("kprobe/sys_exec_tc_argv")
-int BPF_KPROBE_SYSCALL(kprobe__sys_exec_tc_argv,
+SEC("kprobe/sys_execve_tc_argv")
+int BPF_KPROBE_SYSCALL(kprobe__sys_execve_tc_argv,
                        const char __user *filename,
                        const char __user *const __user *argv)
 {
@@ -458,7 +458,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_exec_tc_argv,
     bpf_map_update_elem(&read_flush_index, &index, &ii, BPF_ANY);
 
 Tail:
-    bpf_tail_call(ctx, &tail_call_table, SYS_EXEC_TC_ARGV);
+    bpf_tail_call(ctx, &tail_call_table, SYS_EXECVE_TC_ARGV);
 
 Next:;
     u32 reset = 0;
@@ -496,8 +496,6 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execveat_4_11,
     char br = 0;
     READ_VALUE_N(ev, TE_EXEC_FILENAME, filename, 5);
 
-    bpf_tail_call(ctx, &tail_call_table, SYS_EXEC_TC_ARGV);
-
 Skip:
     return 0;
 }
@@ -531,7 +529,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execve_4_11,
     char br = 0;
     READ_VALUE_N(ev, TE_EXEC_FILENAME, filename, 5);
 
-    bpf_tail_call(ctx, &tail_call_table, SYS_EXEC_TC_ARGV);
+    bpf_tail_call(ctx, &tail_call_table, SYS_EXECVE_TC_ARGV);
 
 Skip:
     return 0;
