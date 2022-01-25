@@ -188,11 +188,15 @@ static __always_inline void push_telemetry_event(struct pt_regs *ctx, ptelemetry
 #define __READ_LOOP(PTR, T)                                                        \
     if (!br)                                                                       \
     {                                                                              \
-        ev->u.v.truncated = FALSE;                                                 \
         ev->id = id;                                                               \
         ev->telemetry_type = T;                                                    \
+        ev->u.v.truncated = FALSE;                                                 \
         count = bpf_probe_read_str(&ev->u.v.value, VALUE_SIZE, (void *)PTR + off); \
-        if (count == VALUE_SIZE)                                                   \
+        if (count < 0)                                                             \
+        {                                                                          \
+            goto Next;                                                             \
+        }                                                                          \
+        else if (count == VALUE_SIZE)                                              \
         {                                                                          \
             ev->u.v.truncated = TRUE;                                              \
             off = off + VALUE_SIZE;                                                \
@@ -207,13 +211,13 @@ static __always_inline void push_telemetry_event(struct pt_regs *ctx, ptelemetry
 #define __READ_LOOP_N(PTR, T, N) REPEAT_##N(__READ_LOOP(PTR, T);)
 
 #define READ_LOOP(PTR, T)                                                      \
-    ptr = 0;                                                                   \
-    ret = bpf_probe_read(&ptr, sizeof(u64), (void *)PTR + (ii * sizeof(u64))); \
+    ptr = NULL;                                                                \
+    ret = bpf_probe_read(&ptr, sizeof(ptr), (void *)PTR + (ii * sizeof(PTR))); \
     if (ret < 0)                                                               \
     {                                                                          \
         goto Next;                                                             \
     }                                                                          \
-    else if ((void *)ptr == NULL)                                              \
+    else if (ptr == NULL)                                                      \
     {                                                                          \
         goto Next;                                                             \
     }                                                                          \
@@ -233,7 +237,6 @@ static __always_inline void push_telemetry_event(struct pt_regs *ctx, ptelemetry
         EV->id = id;                                                             \
         EV->telemetry_type = T;                                                  \
         EV->u.v.truncated = FALSE;                                               \
-        count = 0;                                                               \
         count = bpf_probe_read_str(&ev->u.v.value, VALUE_SIZE, (void *)S + off); \
         if (count == VALUE_SIZE)                                                 \
         {                                                                        \
@@ -444,12 +447,10 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_exec_tc_argv,
         goto Tail;
     }
 
-    long count = 0;
-    u32 ii = 0;
-    // explicit copy from pointer to stack, satisfy verifier
-    __builtin_memcpy(&ii, pii, sizeof(u32));
-    u64 ptr = 0;
-    u64 ret = 0;
+    int count = 0;
+    u32 ii = pii[0];
+    char *ptr = NULL;
+    int ret = 0;
 
     // this number was arrived at experimentally, increasing it will result in too many
     // instructions for older kernels
@@ -492,10 +493,10 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_exec_tc_envp,
         goto Tail;
     }
 
-    long count = 0;
-    u32 ii = *pii;
-    u64 ptr = 0;
-    u64 ret = 0;
+    int count = 0;
+    u32 ii = pii[0];
+    char *ptr = NULL;
+    int ret = 0;
 
     // this number was arrived at experimentally, increasing it will result in too many
     // instructions for older kernels
