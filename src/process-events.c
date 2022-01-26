@@ -303,7 +303,7 @@ static __always_inline int process_argv(struct pt_regs *ctx,
         goto Tail;
     }
 
-    u32 ii = pii[0];
+    u32 ii = *pii;
     char *ptr = NULL;
     int ret = 0;
 
