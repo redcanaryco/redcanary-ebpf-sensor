@@ -148,15 +148,6 @@ struct bpf_map_def SEC("maps/tail_call_table") tail_call_table = {
         read_value(ts, CRC_TASK_STRUCT_REAL_PARENT, &ptr, sizeof(ptr));                                 \
         read_value(ptr, CRC_TASK_STRUCT_TGID, &ppid, sizeof(ppid));                                     \
         read_value(ts, CRC_TASK_STRUCT_LOGINUID, &luid, sizeof(luid));                                  \
-        read_value(ts, CRC_TASK_STRUCT_MM, &ptr, sizeof(ptr));                                          \
-        read_value(ptr, CRC_MM_STRUCT_EXE_FILE, &ptr, sizeof(ptr));                                     \
-        SET_OFFSET(CRC_FILE_F_PATH);                                                                    \
-        ptr = ptr + *(u32 *)offset; /* ptr to f_path */                                                 \
-        read_value(ptr, CRC_PATH_DENTRY, &ptr, sizeof(ptr));                                            \
-        SET_OFFSET(CRC_DENTRY_D_NAME);                                                                  \
-        ptr = ptr + *(u32 *)offset; /* ptr to d_name */                                                 \
-        read_value(ptr, CRC_QSTR_LEN, &length, sizeof(length));                                         \
-        read_value(ptr, CRC_QSTR_NAME, &exe, sizeof(exe));                                              \
     }
 
 SEC("kprobe/do_mount")
@@ -322,12 +313,8 @@ Next:;
     return 0;
 }
 
-static __always_inline int enter_exec(syscall_pattern_type_t sp, int fd,
-                                      const char __user *filename,
-                                      const char __user *const __user *argv,
-                                      const char __user *const __user *envp,
-                                      int flags, struct pt_regs *ctx, u32 ppid,
-                                      u32 luid, const char __user *exe, u32 len)
+static __always_inline int enter_exec(syscall_pattern_type_t sp,
+                                      struct pt_regs *ctx)
 {
     telemetry_event_t sev = {0};
     ptelemetry_event_t ev = &sev;
@@ -339,20 +326,17 @@ static __always_inline int enter_exec(syscall_pattern_type_t sp, int fd,
     ev->u.v.truncated = FALSE;
 
     FILL_TELEMETRY_SYSCALL_EVENT(ev, sp);
-    ev->u.syscall_info.ppid = ppid;
-    ev->u.syscall_info.luid = luid;
+    ev->u.syscall_info.ppid = -1;
+    ev->u.syscall_info.luid = -1;
     push_telemetry_event(ctx, ev);
 
     bpf_map_update_elem(&process_ids, &pid_tgid, &id, BPF_ANY);
     return 0;
 }
 
-static __always_inline ptelemetry_event_t enter_exec_4_11(syscall_pattern_type_t sp, int fd,
-                                                          const char __user *filename,
-                                                          const char __user *const __user *argv,
-                                                          const char __user *const __user *envp,
-                                                          int flags, struct pt_regs *ctx, u32 ppid,
-                                                          u32 luid, const char __user *exe, u32 len)
+static __always_inline ptelemetry_event_t enter_exec_4_11(syscall_pattern_type_t sp,
+                                                          struct pt_regs *ctx,
+                                                          u32 ppid, u32 luid)
 {
     telemetry_event_t sev = {0};
     ptelemetry_event_t ev = &sev;
@@ -467,13 +451,11 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execveat_4_11,
 {
     u32 ppid = -1;
     u32 luid = -1;
-    const char __user *exe = NULL;
-    u32 length = -1;
     GET_OFFSETS_4_8;
-    ptelemetry_event_t ev = enter_exec_4_11(SP_EXECVEAT, fd, filename, argv, envp, flags, ctx, ppid, luid, exe, length);
+    ptelemetry_event_t ev = enter_exec_4_11(SP_EXECVEAT, ctx, ppid, luid);
 
     if (!filename)
-        goto Skip;
+        goto Next;
     u64 pid_tgid = bpf_get_current_pid_tgid();
     u64 *idp = bpf_map_lookup_elem(&process_ids, &pid_tgid);
     if (idp == NULL)
@@ -490,7 +472,6 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execveat_4_11,
     bpf_tail_call(ctx, &tail_call_table, SYS_EXECVEAT_TC_ARGV);
 
 Next:
-Skip:
     return 0;
 }
 
@@ -502,13 +483,11 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execve_4_11,
 {
     u32 ppid = -1;
     u32 luid = -1;
-    const char __user *exe = NULL;
-    u32 length = -1;
     GET_OFFSETS_4_8;
-    ptelemetry_event_t ev = enter_exec_4_11(SP_EXECVE, AT_FDCWD, filename, argv, envp, 0, ctx, ppid, luid, exe, length);
+    ptelemetry_event_t ev = enter_exec_4_11(SP_EXECVE, ctx, ppid, luid);
 
     if (!filename)
-        goto Skip;
+        goto Next;
     u64 pid_tgid = bpf_get_current_pid_tgid();
     u64 *idp = bpf_map_lookup_elem(&process_ids, &pid_tgid);
     if (idp == NULL)
@@ -525,7 +504,6 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execve_4_11,
     bpf_tail_call(ctx, &tail_call_table, SYS_EXECVE_TC_ARGV);
 
 Next:
-Skip:
     return 0;
 }
 
@@ -536,7 +514,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execveat,
                        const char __user *const __user *envp,
                        int flags)
 {
-    return enter_exec(SP_EXECVEAT, fd, filename, argv, envp, flags, ctx, -1, -1, NULL, -1);
+    return enter_exec(SP_EXECVEAT, ctx);
 }
 
 SEC("kprobe/sys_execve")
@@ -545,7 +523,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execve,
                        const char __user *const __user *argv,
                        const char __user *const __user *envp)
 {
-    return enter_exec(SP_EXECVE, AT_FDCWD, filename, argv, envp, 0, ctx, -1, -1, NULL, -1);
+    return enter_exec(SP_EXECVE, ctx);
 }
 
 static __always_inline int exit_exec(struct pt_regs *__ctx, u32 i_dev, u64 i_ino)
@@ -621,8 +599,7 @@ int kretprobe__ret_sys_execveat_4_8(struct pt_regs *ctx)
 static __always_inline int enter_clone(syscall_pattern_type_t sp, unsigned long flags,
                                        void __user *stack, int __user *parent_tid,
                                        int __user *child_tid, unsigned long tls,
-                                       struct pt_regs *ctx, u32 ppid, u32 luid,
-                                       const char __user *exe, u32 len)
+                                       struct pt_regs *ctx, u32 ppid, u32 luid)
 {
     // explicit memcpy to move the struct to the stack and satisfy the verifier
     telemetry_event_t sev = {0};
@@ -637,17 +614,6 @@ static __always_inline int enter_clone(syscall_pattern_type_t sp, unsigned long 
     FILL_TELEMETRY_SYSCALL_EVENT(ev, sp);
     ev->u.syscall_info.ppid = ppid;
     ev->u.syscall_info.luid = luid;
-    push_telemetry_event(ctx, ev);
-
-    ev->id = id;
-    ev->telemetry_type = TE_EXE_PATH;
-    ev->u.v.truncated = FALSE;
-    long count = 0;
-    count = bpf_probe_read_str(&ev->u.v.value, VALUE_SIZE, (void *)exe);
-    if (count == VALUE_SIZE)
-    {
-        ev->u.v.truncated = TRUE;
-    }
     push_telemetry_event(ctx, ev);
 
     clone_info_t clone_info = {
@@ -730,12 +696,8 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_clone_4_8, unsigned long flags, void __user *
 {
     u32 ppid = -1;
     u32 luid = -1;
-    const char __user *exe = NULL;
-    u32 length = -1;
     GET_OFFSETS_4_8;
-    return enter_clone(SP_CLONE, flags, stack, parent_tid, child_tid, tls, ctx, ppid, luid, exe, length);
-Skip:
-    return 0;
+    return enter_clone(SP_CLONE, flags, stack, parent_tid, child_tid, tls, ctx, ppid, luid);
 }
 
 SEC("kprobe/sys_clone")
@@ -747,12 +709,11 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_clone, unsigned long flags, void *stack,
                        int *parent_tid, unsigned long tls, int *child_tid)
 #endif
 {
-    return enter_clone(SP_CLONE, flags, stack, parent_tid, child_tid, tls, ctx, -1, -1, NULL, -1);
+    return enter_clone(SP_CLONE, flags, stack, parent_tid, child_tid, tls, ctx, -1, -1);
 }
 
 static __always_inline int enter_clone3(syscall_pattern_type_t sp, struct clone_args __user *uargs,
-                                        size_t size, struct pt_regs *ctx, u32 ppid, u32 luid,
-                                        const char __user *exe, u32 len)
+                                        size_t size, struct pt_regs *ctx, u32 ppid, u32 luid)
 {
     telemetry_event_t sev = {0};
     ptelemetry_event_t ev = &sev;
@@ -770,17 +731,6 @@ static __always_inline int enter_clone3(syscall_pattern_type_t sp, struct clone_
     push_telemetry_event(ctx, ev);
     pid_tgid = pid_tgid >> 32;
     bpf_map_update_elem(&process_ids, (u32 *)&pid_tgid, &id, BPF_ANY);
-
-    ev->id = id;
-    ev->telemetry_type = TE_EXE_PATH;
-    ev->u.v.truncated = FALSE;
-    long count = 0;
-    count = bpf_probe_read_str(&ev->u.v.value, VALUE_SIZE, (void *)exe);
-    if (count == VALUE_SIZE)
-    {
-        ev->u.v.truncated = TRUE;
-    }
-    push_telemetry_event(ctx, ev);
 
     clone3_info_t clone3_info = {0};
     clone3_info.size = (u64)size;
@@ -873,12 +823,8 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_clone3, struct clone_args __user *uargs, size
     // clone3 was added in 5.3, so this should always be available if clone3 is attachable
     u32 ppid = -1;
     u32 luid = -1;
-    const char __user *exe = NULL;
-    u32 length = -1;
     GET_OFFSETS_4_8;
-    return enter_clone3(SP_CLONE3, uargs, size, ctx, ppid, luid, exe, length);
-Skip:
-    return 0;
+    return enter_clone3(SP_CLONE3, uargs, size, ctx, ppid, luid);
 }
 
 SEC("kretprobe/ret_sys_clone3")
@@ -1012,13 +958,13 @@ int kprobe__read_pid_task_struct(struct pt_regs *ctx)
 SEC("kprobe/sys_fork")
 int BPF_KPROBE_SYSCALL(kprobe__sys_fork)
 {
-    return enter_clone(SP_FORK, 0, NULL, NULL, NULL, 0, ctx, -1, -1, NULL, -1);
+    return enter_clone(SP_FORK, 0, NULL, NULL, NULL, 0, ctx, -1, -1);
 }
 
 SEC("kprobe/sys_vfork")
 int BPF_KPROBE_SYSCALL(kprobe__sys_vfork)
 {
-    return enter_clone(SP_VFORK, 0, NULL, NULL, NULL, 0, ctx, -1, -1, NULL, -1);
+    return enter_clone(SP_VFORK, 0, NULL, NULL, NULL, 0, ctx, -1, -1);
 }
 
 SEC("kprobe/sys_fork_4_8")
@@ -1026,12 +972,8 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_fork_4_8)
 {
     u32 ppid = -1;
     u32 luid = -1;
-    const char __user *exe = NULL;
-    u32 length = -1;
     GET_OFFSETS_4_8;
-    return enter_clone(SP_FORK, 0, NULL, NULL, NULL, 0, ctx, ppid, luid, exe, length);
-Skip:
-    return 0;
+    return enter_clone(SP_FORK, 0, NULL, NULL, NULL, 0, ctx, ppid, luid);
 }
 
 SEC("kprobe/sys_vfork_4_8")
@@ -1039,12 +981,8 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_vfork_4_8)
 {
     u32 ppid = -1;
     u32 luid = -1;
-    const char __user *exe = NULL;
-    u32 length = -1;
     GET_OFFSETS_4_8;
-    return enter_clone(SP_VFORK, 0, NULL, NULL, NULL, 0, ctx, ppid, luid, exe, length);
-Skip:
-    return 0;
+    return enter_clone(SP_VFORK, 0, NULL, NULL, NULL, 0, ctx, ppid, luid);
 }
 
 SEC("kretprobe/ret_sys_clone")
@@ -1066,8 +1004,7 @@ int kretprobe__ret_sys_vfork(struct pt_regs *ctx)
 }
 
 static __always_inline int enter_unshare(syscall_pattern_type_t sp, int flags,
-                                         struct pt_regs *ctx, u32 ppid, u32 luid,
-                                         const char __user *exe, u32 len)
+                                         struct pt_regs *ctx, u32 ppid, u32 luid)
 {
     telemetry_event_t sev = {0};
     ptelemetry_event_t ev = &sev;
@@ -1081,17 +1018,6 @@ static __always_inline int enter_unshare(syscall_pattern_type_t sp, int flags,
     FILL_TELEMETRY_SYSCALL_EVENT(ev, sp);
     ev->u.syscall_info.ppid = ppid;
     ev->u.syscall_info.luid = luid;
-    push_telemetry_event(ctx, ev);
-
-    ev->id = id;
-    ev->telemetry_type = TE_EXE_PATH;
-    ev->u.v.truncated = FALSE;
-    long count = 0;
-    count = bpf_probe_read_str(&ev->u.v.value, VALUE_SIZE, (void *)exe);
-    if (count == VALUE_SIZE)
-    {
-        ev->u.v.truncated = TRUE;
-    }
     push_telemetry_event(ctx, ev);
 
     ev->id = id;
@@ -1137,18 +1063,14 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_unshare_4_8, int flags)
 {
     u32 ppid = -1;
     u32 luid = -1;
-    const char __user *exe = NULL;
-    u32 length = -1;
     GET_OFFSETS_4_8;
-    return enter_unshare(SP_UNSHARE, flags, ctx, ppid, luid, exe, length);
-Skip:
-    return 0;
+    return enter_unshare(SP_UNSHARE, flags, ctx, ppid, luid);
 }
 
 SEC("kprobe/sys_unshare")
 int BPF_KPROBE_SYSCALL(kprobe__sys_unshare, int flags)
 {
-    return enter_unshare(SP_UNSHARE, flags, ctx, -1, -1, NULL, -1);
+    return enter_unshare(SP_UNSHARE, flags, ctx, -1, -1);
 }
 
 SEC("kretprobe/ret_sys_unshare")
@@ -1158,8 +1080,7 @@ int kretprobe__ret_sys_unshare(struct pt_regs *ctx)
 }
 
 static __always_inline int enter_exit(syscall_pattern_type_t sp, int status,
-                                      struct pt_regs *ctx, u32 ppid, u32 luid,
-                                      const char __user *exe, u32 len)
+                                      struct pt_regs *ctx, u32 ppid, u32 luid)
 
 {
     telemetry_event_t sev = {0};
@@ -1176,24 +1097,7 @@ static __always_inline int enter_exit(syscall_pattern_type_t sp, int status,
     ev->u.syscall_info.luid = luid;
     push_telemetry_event(ctx, ev);
 
-    ev->id = id;
-    ev->telemetry_type = TE_EXE_PATH;
-    ev->u.v.truncated = FALSE;
-    long count = 0;
-    count = bpf_probe_read_str(&ev->u.v.value, VALUE_SIZE, (void *)exe);
-    if (count == VALUE_SIZE)
-    {
-        ev->u.v.truncated = TRUE;
-    }
-    push_telemetry_event(ctx, ev);
-
-    ev->id = id;
-    ev->telemetry_type = TE_EXIT_STATUS;
-    ev->u.exit_status = status;
-    push_telemetry_event(ctx, ev);
     bpf_map_update_elem(&process_ids, &pid_tgid, &id, BPF_ANY);
-
-    bpf_tail_call(ctx, &tail_call_table, RET_SYS_EXIT);
 
     return 0;
 }
@@ -1203,25 +1107,20 @@ static __always_inline int exit_exit(struct pt_regs *ctx)
     u64 pid_tgid = bpf_get_current_pid_tgid();
     u64 *id = bpf_map_lookup_elem(&process_ids, &pid_tgid);
 
-    if (!id)
-        goto Flush;
+    if (!id) {
+        return 0;
+    }
 
     ptelemetry_event_t ev = &(telemetry_event_t){
-        .id = 0,
-        .telemetry_type = 0,
-        .u.v = {
-            .value[0] = '\0',
-            .truncated = FALSE,
-        },
+        .id = *id,
+        .telemetry_type = TE_RETCODE,
+        .u.r.retcode = (u32)PT_REGS_RC(ctx),
     };
-    ev->id = *id;
+
     bpf_map_delete_elem(&process_ids, &pid_tgid);
 
-    ev->telemetry_type = TE_RETCODE;
-    ev->u.r.retcode = (u32)PT_REGS_RC(ctx);
     push_telemetry_event(ctx, ev);
 
-Flush:
     return 0;
 }
 
@@ -1236,14 +1135,10 @@ int BPF_KPROBE_SYSCALL(kprobe__do_exit_4_8, int status)
 
     u32 ppid = -1;
     u32 luid = -1;
-    const char __user *exe = NULL;
-    u32 length = -1;
     GET_OFFSETS_4_8;
-    if (enter_exit(SP_EXIT, status, ctx, ppid, luid, exe, length) < 0)
+    if (enter_exit(SP_EXIT, status, ctx, ppid, luid) < 0)
         return 0;
     return exit_exit(ctx);
-Skip:
-    return 0;
 }
 
 // do_exit probes must call enter_exit() and exit_exit() since do_exit is __no_return
@@ -1254,7 +1149,7 @@ int BPF_KPROBE_SYSCALL(kprobe__do_exit, int status)
     u64 pid_tgid = bpf_get_current_pid_tgid();
     if ((pid_tgid >> 32) ^ (pid_tgid & 0xFFFFFFFF))
         return 0;
-    if (enter_exit(SP_EXIT, status, ctx, -1, -1, NULL, -1) < 0)
+    if (enter_exit(SP_EXIT, status, ctx, -1, -1) < 0)
         return 0;
     return exit_exit(ctx);
 }
@@ -1269,12 +1164,8 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_exit_4_8, int status)
 
     u32 ppid = -1;
     u32 luid = -1;
-    const char __user *exe = NULL;
-    u32 length = -1;
     GET_OFFSETS_4_8;
-    return enter_exit(SP_EXIT, status, ctx, ppid, luid, exe, length);
-Skip:
-    return 0;
+    return enter_exit(SP_EXIT, status, ctx, ppid, luid);
 }
 
 SEC("kprobe/sys_exit")
@@ -1284,7 +1175,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_exit, int status)
     u64 pid_tgid = bpf_get_current_pid_tgid();
     if ((pid_tgid >> 32) ^ (pid_tgid & 0xFFFFFFFF))
         return 0;
-    return enter_exit(SP_EXIT, status, ctx, -1, -1, NULL, -1);
+    return enter_exit(SP_EXIT, status, ctx, -1, -1);
 }
 
 SEC("kprobe/sys_exit_group_4_8")
@@ -1292,18 +1183,14 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_exit_group_4_8, int status)
 {
     u32 ppid = -1;
     u32 luid = -1;
-    const char __user *exe = NULL;
-    u32 length = -1;
     GET_OFFSETS_4_8;
-    return enter_exit(SP_EXITGROUP, status, ctx, ppid, luid, exe, length);
-Skip:
-    return 0;
+    return enter_exit(SP_EXITGROUP, status, ctx, ppid, luid);
 }
 
 SEC("kprobe/sys_exit_group")
 int BPF_KPROBE_SYSCALL(kprobe__sys_exit_group, int status)
 {
-    return enter_exit(SP_EXITGROUP, status, ctx, -1, -1, NULL, -1);
+    return enter_exit(SP_EXITGROUP, status, ctx, -1, -1);
 }
 
 SEC("kretprobe/ret_sys_exit")
