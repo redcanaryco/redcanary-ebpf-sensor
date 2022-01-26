@@ -88,19 +88,18 @@ struct bpf_map_def SEC("maps/tail_call_table") tail_call_table = {
     .namespace = "",
 };
 
-#define FILL_TELEMETRY_SYSCALL_EVENT(E, SP)                          \
-    u64 pid_tgid = bpf_get_current_pid_tgid();                       \
-    E->telemetry_type = TE_SYSCALL_INFO;                             \
-    E->u.syscall_info.pid = pid_tgid >> 32;                          \
-    E->u.syscall_info.tid = pid_tgid & 0xFFFFFFFF;                   \
-    E->u.syscall_info.ppid = -1;                                     \
-    E->u.syscall_info.luid = -1;                                     \
-    E->u.syscall_info.euid = bpf_get_current_uid_gid() >> 32;        \
-    E->u.syscall_info.egid = bpf_get_current_uid_gid() & 0xFFFFFFFF; \
-    E->u.syscall_info.mono_ns = bpf_ktime_get_ns();                  \
+#define FILL_TELEMETRY_SYSCALL_EVENT(E, SP, PPID, LUID) \
+    u64 pid_tgid = bpf_get_current_pid_tgid();          \
+    u64 uid_gid = bpf_get_current_uid_gid();            \
+    E->telemetry_type = TE_SYSCALL_INFO;                \
+    E->u.syscall_info.pid = pid_tgid >> 32;             \
+    E->u.syscall_info.tid = pid_tgid & 0xFFFFFFFF;      \
+    E->u.syscall_info.ppid = PPID;                      \
+    E->u.syscall_info.luid = LUID;                      \
+    E->u.syscall_info.euid = uid_gid >> 32;             \
+    E->u.syscall_info.egid = uid_gid & 0xFFFFFFFF;      \
+    E->u.syscall_info.mono_ns = bpf_ktime_get_ns();     \
     E->u.syscall_info.syscall_pattern = SP;
-
-#define FILL_TELEMETRY_SYSCALL_RET(E, SP)
 
 /* this must go in the kretprobe so we can grab the new process from `task_struct` */
 #define GET_OFFSETS_4_8_RET_EXEC                                                                        \
@@ -320,27 +319,20 @@ static __always_inline int enter_exec(syscall_pattern_type_t sp,
     ptelemetry_event_t ev = &sev;
 
     u64 id = bpf_get_prandom_u32();
-    ev->id = id;
-    ev->telemetry_type = 0,
-    ev->u.v.value[0] = '\0';
-    ev->u.v.truncated = FALSE;
 
-    FILL_TELEMETRY_SYSCALL_EVENT(ev, sp);
-    ev->u.syscall_info.ppid = -1;
-    ev->u.syscall_info.luid = -1;
+    ev->id = id;
+    FILL_TELEMETRY_SYSCALL_EVENT(ev, sp, -1, -1);
     push_telemetry_event(ctx, ev);
 
     bpf_map_update_elem(&process_ids, &pid_tgid, &id, BPF_ANY);
     return 0;
 }
 
-static __always_inline ptelemetry_event_t enter_exec_4_11(syscall_pattern_type_t sp,
-                                                          struct pt_regs *ctx,
-                                                          u32 ppid, u32 luid)
+static __always_inline void enter_exec_4_11(syscall_pattern_type_t sp,
+                                            struct pt_regs *ctx,
+                                            u32 ppid, u32 luid,
+                                            ptelemetry_event_t ev)
 {
-    telemetry_event_t sev = {0};
-    ptelemetry_event_t ev = &sev;
-
     // if the ID already exists, we are tail-calling into ourselves, skip ahead to reading the path
     u64 p_t = bpf_get_current_pid_tgid();
     u64 id = (u64)bpf_map_lookup_elem(&process_ids, &p_t);
@@ -351,14 +343,9 @@ static __always_inline ptelemetry_event_t enter_exec_4_11(syscall_pattern_type_t
     }
 
     id = bpf_get_prandom_u32();
-    ev->id = id;
-    ev->telemetry_type = 0,
-    ev->u.v.value[0] = '\0';
-    ev->u.v.truncated = FALSE;
 
-    FILL_TELEMETRY_SYSCALL_EVENT(ev, sp);
-    ev->u.syscall_info.ppid = ppid;
-    ev->u.syscall_info.luid = luid;
+    ev->id = id;
+    FILL_TELEMETRY_SYSCALL_EVENT(ev, sp, ppid, luid);
     push_telemetry_event(ctx, ev);
 
     bpf_map_update_elem(&process_ids, &pid_tgid, &id, BPF_ANY);
@@ -375,26 +362,25 @@ Pwd:;
     u32 to_skip = 0;
     u32 skipped = 0;
 
-    // since index will start at zero, we can use it here
-    u64 offset = 0;
     void *ptr = (void *)bpf_get_current_task();
-    if (read_value(ptr, CRC_TASK_STRUCT_FS, &ptr, sizeof(ptr)) < 0)
+    if (read_value(ptr, CRC_TASK_STRUCT_FS, &ptr, sizeof(ptr)) < 0) // task_struct->fs
         goto Skip;
 
-    offset = CRC_FS_STRUCT_PWD;
-    offset = (u64)bpf_map_lookup_elem(&offsets, &offset);
-    if (!offset)
+    ptr = offset_ptr(ptr, CRC_FS_STRUCT_PWD); // &(fs->pwd)
+    if (ptr == NULL)
         goto Skip;
-    ptr = ptr + *(u32 *)offset; // ptr to pwd
 
-    if (read_value(ptr, CRC_PATH_DENTRY, &ptr, sizeof(ptr)) < 0)
+    if (read_value(ptr, CRC_PATH_DENTRY, &ptr, sizeof(ptr)) < 0) // pwd->d_entry
         goto Skip;
+
+    void *offset = NULL;
+    u64 offset_key = 0;
 
     SET_OFFSET(CRC_DENTRY_D_NAME);
-    u32 qstr_len = *(u32 *)offset; // variable name doesn't match here, we're reusing it to preserve stack
+    u32 name = *(u32 *)offset; // variable name doesn't match here, we're reusing it to preserve stack
 
     SET_OFFSET(CRC_QSTR_NAME);
-    u32 name = qstr_len + *(u32 *)offset; // offset to name char ptr within qstr of dentry
+    name = name + *(u32 *)offset; // offset to name char ptr within qstr of dentry
 
     SET_OFFSET(CRC_DENTRY_D_PARENT);
     u32 parent = *(u32 *)offset; // offset of d_parent
@@ -422,8 +408,6 @@ Send:
 Skip:
     skipped = 0;
     bpf_map_delete_elem(&read_path_skip, &skipped);
-    ev->id = id;
-    return ev;
 }
 
 SEC("kprobe/sys_execve_tc_argv")
@@ -452,7 +436,12 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execveat_4_11,
     u32 ppid = -1;
     u32 luid = -1;
     GET_OFFSETS_4_8;
-    ptelemetry_event_t ev = enter_exec_4_11(SP_EXECVEAT, ctx, ppid, luid);
+
+    // create the event early so it can be re-used to save stack space
+    telemetry_event_t sev = {0};
+    ptelemetry_event_t ev = &sev;
+
+    enter_exec_4_11(SP_EXECVEAT, ctx, ppid, luid, ev);
 
     if (!filename)
         goto Next;
@@ -484,7 +473,12 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execve_4_11,
     u32 ppid = -1;
     u32 luid = -1;
     GET_OFFSETS_4_8;
-    ptelemetry_event_t ev = enter_exec_4_11(SP_EXECVE, ctx, ppid, luid);
+
+    // create the event early so it can be re-used to save stack space
+    telemetry_event_t sev = {0};
+    ptelemetry_event_t ev = &sev;
+
+    enter_exec_4_11(SP_EXECVE, ctx, ppid, luid, ev);
 
     if (!filename)
         goto Next;
@@ -604,16 +598,10 @@ static __always_inline int enter_clone(syscall_pattern_type_t sp, unsigned long 
     // explicit memcpy to move the struct to the stack and satisfy the verifier
     telemetry_event_t sev = {0};
     ptelemetry_event_t ev = &sev;
-
     u64 id = bpf_get_prandom_u32();
-    ev->id = id;
-    ev->telemetry_type = 0,
-    ev->u.v.value[0] = '\0';
-    ev->u.v.truncated = FALSE;
 
-    FILL_TELEMETRY_SYSCALL_EVENT(ev, sp);
-    ev->u.syscall_info.ppid = ppid;
-    ev->u.syscall_info.luid = luid;
+    ev->id = id;
+    FILL_TELEMETRY_SYSCALL_EVENT(ev, sp, ppid, luid);
     push_telemetry_event(ctx, ev);
 
     clone_info_t clone_info = {
@@ -717,18 +705,12 @@ static __always_inline int enter_clone3(syscall_pattern_type_t sp, struct clone_
 {
     telemetry_event_t sev = {0};
     ptelemetry_event_t ev = &sev;
-
     u64 id = bpf_get_prandom_u32();
+
     ev->id = id;
-    ev->telemetry_type = 0,
-    ev->u.v.value[0] = '\0';
-    ev->u.v.truncated = FALSE;
-
-    FILL_TELEMETRY_SYSCALL_EVENT(ev, sp);
-
-    ev->u.syscall_info.ppid = ppid;
-    ev->u.syscall_info.luid = luid;
+    FILL_TELEMETRY_SYSCALL_EVENT(ev, sp, ppid, luid);
     push_telemetry_event(ctx, ev);
+
     pid_tgid = pid_tgid >> 32;
     bpf_map_update_elem(&process_ids, (u32 *)&pid_tgid, &id, BPF_ANY);
 
@@ -1010,14 +992,9 @@ static __always_inline int enter_unshare(syscall_pattern_type_t sp, int flags,
     ptelemetry_event_t ev = &sev;
 
     u64 id = bpf_get_prandom_u32();
-    ev->id = id;
-    ev->telemetry_type = 0,
-    ev->u.v.value[0] = '\0';
-    ev->u.v.truncated = FALSE;
 
-    FILL_TELEMETRY_SYSCALL_EVENT(ev, sp);
-    ev->u.syscall_info.ppid = ppid;
-    ev->u.syscall_info.luid = luid;
+    ev->id = id;
+    FILL_TELEMETRY_SYSCALL_EVENT(ev, sp, ppid, luid);
     push_telemetry_event(ctx, ev);
 
     ev->id = id;
@@ -1087,14 +1064,9 @@ static __always_inline int enter_exit(syscall_pattern_type_t sp, int status,
     ptelemetry_event_t ev = &sev;
 
     u64 id = bpf_get_prandom_u32();
-    ev->id = id;
-    ev->telemetry_type = 0,
-    ev->u.v.value[0] = '\0';
-    ev->u.v.truncated = FALSE;
 
-    FILL_TELEMETRY_SYSCALL_EVENT(ev, sp);
-    ev->u.syscall_info.ppid = ppid;
-    ev->u.syscall_info.luid = luid;
+    ev->id = id;
+    FILL_TELEMETRY_SYSCALL_EVENT(ev, sp, ppid, luid);
     push_telemetry_event(ctx, ev);
 
     bpf_map_update_elem(&process_ids, &pid_tgid, &id, BPF_ANY);

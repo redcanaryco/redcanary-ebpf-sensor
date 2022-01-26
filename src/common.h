@@ -26,10 +26,21 @@ struct bpf_map_def SEC("maps/offsets") offsets = {
 
 // This macro assumes you have a label named Skip to jump to
 #define SET_OFFSET(CRC)                                   \
-    offset = CRC;                                         \
-    offset = (u64)bpf_map_lookup_elem(&offsets, &offset); \
+    offset_key = CRC;                                     \
+    offset = bpf_map_lookup_elem(&offsets, &offset_key);  \
     if (!offset)                                          \
         goto Skip;
+
+static __always_inline void* offset_ptr(void *base, u64 offset_key)
+{
+    u32 *offset = (u32 *)bpf_map_lookup_elem(&offsets, &offset_key);
+    if (!offset)
+    {
+        return NULL;
+    }
+
+    return base + *offset;
+}
 
 static __always_inline int read_value(void *base, u64 offset, void *dest, size_t dest_size)
 {
