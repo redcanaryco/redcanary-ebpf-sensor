@@ -3,6 +3,7 @@
 #include <linux/kconfig.h>
 #include <linux/ptrace.h>
 #include <linux/version.h>
+#include <linux/err.h>
 #include <uapi/linux/bpf.h>
 #include <linux/uio.h>
 #include <linux/fcntl.h>
@@ -39,6 +40,15 @@ struct bpf_map_def SEC("maps/read_path_skip") read_path_skip = {
     .key_size = sizeof(u32),
     .value_size = sizeof(u32),
     .max_entries = 1,
+    .pinning = 0,
+    .namespace = "",
+};
+
+struct bpf_map_def SEC("maps/exec_path_info_store") exec_path_info_store = {
+    .type = BPF_MAP_TYPE_HASH,
+    .key_size = sizeof(u64),
+    .value_size = sizeof(u64),
+    .max_entries = 1024,
     .pinning = 0,
     .namespace = "",
 };
@@ -244,7 +254,11 @@ static __always_inline void push_telemetry_event(struct pt_regs *ctx, ptelemetry
     ev->id = id;                                                            \
     __builtin_memset(&ev->u.v.value, 0, VALUE_SIZE);                        \
     count = bpf_probe_read_str(&ev->u.v.value, VALUE_SIZE, offset);         \
-    if (count >= VALUE_SIZE)                                                \
+    if (count < 0)                                                          \
+    {                                                                       \
+        goto Skip;                                                          \
+    }                                                                       \
+    else if (count == VALUE_SIZE)                                           \
     {                                                                       \
         br = 1;                                                             \
         ev->u.v.truncated = TRUE;                                           \
@@ -255,11 +269,8 @@ static __always_inline void push_telemetry_event(struct pt_regs *ctx, ptelemetry
     {                                                                       \
         /* save it here since push_telemetry_event clears ev */             \
         br = ev->u.v.value[0];                                              \
-        if (count > 0)                                                      \
-        {                                                                   \
-            ev->u.v.truncated = FALSE;                                      \
-            push_telemetry_event(ctx, ev);                                  \
-        }                                                                   \
+        ev->u.v.truncated = FALSE;                                          \
+        push_telemetry_event(ctx, ev);                                      \
         if (br == '/')                                                      \
             goto Skip;                                                      \
         /* we're done here, follow the pointer */                           \
@@ -401,9 +412,7 @@ static __always_inline u64 enter_exec_4_11(syscall_pattern_type_t sp,
 
     bpf_map_update_elem(&process_ids, &pid_tgid, &id, BPF_ANY);
 
-    // this has to be the same size as to_skip and skipped in Pwd
     u32 to_skip = 0;
-    // reuse count as idx and value to save stack space
     bpf_map_update_elem(&read_path_skip, &to_skip, &to_skip, BPF_ANY);
 
 Pwd:;
@@ -453,18 +462,11 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execveat_4_11,
     ptelemetry_event_t ev = &sev;
 
     u64 id = enter_exec_4_11(SP_EXECVEAT, ctx, ppid, luid, ev);
-
-    if (!filename)
-        goto Next;
-
-    __builtin_memset(ev, 0, sizeof(telemetry_event_t));
-    u64 off = 0;
-    char br = 0;
-    READ_VALUE_N(ev, TE_EXEC_FILENAME, filename, 5);
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+    bpf_map_update_elem(&exec_path_info_store, &pid_tgid, &id, BPF_ANY);
 
     bpf_tail_call(ctx, &tail_call_table, SYS_EXECVEAT_TC_ARGV);
 
-Next:
     return 0;
 }
 
@@ -558,6 +560,33 @@ static __always_inline int exit_exec(struct pt_regs *__ctx, u32 i_dev, u64 i_ino
     ev->u.r.retcode = retcode;
     push_telemetry_event(__ctx, ev);
 
+    return 0;
+}
+
+SEC("kretprobe/ret_do_open_execat")
+int kretprobe__ret_do_open_execat(struct pt_regs *ctx)
+{
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+    u64 *id = bpf_map_lookup_elem(&exec_path_info_store, &pid_tgid);
+    if (id == NULL)
+        return 0;
+
+    void *ptr = (void *)PT_REGS_RC(ctx);
+    if (IS_ERR(ptr))
+        goto Skip;
+
+    ptr = offset_ptr(ptr, CRC_FILE_F_PATH); // &(file->f_path)
+    if (ptr == NULL)
+        goto Skip;
+
+    // create the event early so it can be re-used to save stack space
+    telemetry_event_t sev = {0};
+    ptelemetry_event_t ev = &sev;
+
+    push_path(ctx, ev, ptr, DO_OPEN_EXECAT, TE_EXEC_FILENAME_REV, *id);
+
+Skip:
+    bpf_map_delete_elem(&exec_path_info_store, &pid_tgid);
     return 0;
 }
 
