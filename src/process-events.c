@@ -274,8 +274,9 @@ static __always_inline void push_telemetry_event(struct pt_regs *ctx, ptelemetry
         if (br == '/')                                                      \
             goto Skip;                                                      \
         /* we're done here, follow the pointer */                           \
+        void *old_ptr = ptr;                                                \
         bpf_probe_read(&ptr, sizeof(ptr), ptr + parent);                    \
-        if (!ptr)                                                           \
+        if (!ptr || old_ptr == ptr)                                         \
             goto Skip;                                                      \
         to_skip += 1;                                                       \
         br = 0;                                                             \
