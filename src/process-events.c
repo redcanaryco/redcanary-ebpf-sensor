@@ -185,35 +185,39 @@ static __always_inline void push_telemetry_event(struct pt_regs *ctx, ptelemetry
     __builtin_memset(ev, 0, sizeof(telemetry_event_t));
 }
 
-#define __READ_LOOP(PTR, T)                                                        \
-    if (!br)                                                                       \
-    {                                                                              \
-        ev->u.v.truncated = FALSE;                                                 \
-        ev->id = id;                                                               \
-        ev->telemetry_type = T;                                                    \
-        count = bpf_probe_read_str(&ev->u.v.value, VALUE_SIZE, (void *)PTR + off); \
-        if (count == VALUE_SIZE)                                                   \
-        {                                                                          \
-            ev->u.v.truncated = TRUE;                                              \
-            off = off + VALUE_SIZE;                                                \
-        }                                                                          \
-        else                                                                       \
-        {                                                                          \
-            br = 1;                                                                \
-        }                                                                          \
-        push_telemetry_event(ctx, ev);                                             \
+#define READ_VALUE(EV, T, PTR)                                                         \
+    if (!br)                                                                           \
+    {                                                                                  \
+        EV->id = id;                                                                   \
+        EV->telemetry_type = T;                                                        \
+        EV->u.v.truncated = FALSE;                                                     \
+        int count = bpf_probe_read_str(&ev->u.v.value, VALUE_SIZE, (void *)PTR + off); \
+        if (count < 0)                                                                 \
+        {                                                                              \
+            goto Next;                                                                 \
+        }                                                                              \
+        if (count == VALUE_SIZE)                                                       \
+        {                                                                              \
+            EV->u.v.truncated = TRUE;                                                  \
+            off = off + VALUE_SIZE;                                                    \
+        }                                                                              \
+        else                                                                           \
+        {                                                                              \
+            br = 1;                                                                    \
+        }                                                                              \
+        push_telemetry_event(ctx, EV);                                                 \
     }
 
-#define __READ_LOOP_N(PTR, T, N) REPEAT_##N(__READ_LOOP(PTR, T);)
+#define READ_VALUE_N(EV, T, PTR, N) REPEAT_##N(READ_VALUE(EV, T, PTR);)
 
 #define READ_LOOP(PTR, T)                                                      \
-    ptr = 0;                                                                   \
-    ret = bpf_probe_read(&ptr, sizeof(u64), (void *)PTR + (ii * sizeof(u64))); \
+    ptr = NULL;                                                                \
+    ret = bpf_probe_read(&ptr, sizeof(ptr), (void *)PTR + (ii * sizeof(PTR))); \
     if (ret < 0)                                                               \
     {                                                                          \
         goto Next;                                                             \
     }                                                                          \
-    else if ((void *)ptr == NULL)                                              \
+    else if (ptr == NULL)                                                      \
     {                                                                          \
         goto Next;                                                             \
     }                                                                          \
@@ -221,33 +225,11 @@ static __always_inline void push_telemetry_event(struct pt_regs *ctx, ptelemetry
     {                                                                          \
         u32 off = 0;                                                           \
         char br = 0;                                                           \
-        __READ_LOOP_N(ptr, T, 5);                                              \
+        READ_VALUE_N(ev, T, ptr, 5);                                           \
     }                                                                          \
     ii++;
 
 #define READ_LOOP_N(PTR, T, N) REPEAT_##N(READ_LOOP(PTR, T);)
-
-#define READ_VALUE(EV, T, S)                                                     \
-    if (!br)                                                                     \
-    {                                                                            \
-        EV->id = id;                                                             \
-        EV->telemetry_type = T;                                                  \
-        EV->u.v.truncated = FALSE;                                               \
-        count = 0;                                                               \
-        count = bpf_probe_read_str(&ev->u.v.value, VALUE_SIZE, (void *)S + off); \
-        if (count == VALUE_SIZE)                                                 \
-        {                                                                        \
-            EV->u.v.truncated = TRUE;                                            \
-            off = off + VALUE_SIZE;                                              \
-        }                                                                        \
-        else                                                                     \
-        {                                                                        \
-            br = 1;                                                              \
-        }                                                                        \
-        push_telemetry_event(ctx, EV);                                           \
-    }
-
-#define READ_VALUE_N(EV, T, S, N) REPEAT_##N(READ_VALUE(EV, T, S);)
 
 #define SKIP_PATH                                    \
     if (skipped >= to_skip)                          \
@@ -297,6 +279,48 @@ static __always_inline void push_telemetry_event(struct pt_regs *ctx, ptelemetry
     }
 
 #define SEND_PATH_N(N) REPEAT_##N(SEND_PATH;)
+
+static __always_inline int process_argv(struct pt_regs *ctx,
+                                        const char __user *const __user *argv,
+                                        u32 tail_index) {
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+    u64 *idp = bpf_map_lookup_elem(&process_ids, &pid_tgid);
+    if (idp == NULL)
+    {
+        return 0;
+    }
+    u64 id = *idp;
+
+    // put the event on the stack and satisfy the verifier
+    telemetry_event_t tev = {0};
+    ptelemetry_event_t ev = &tev;
+
+    u32 index = 0;
+    u32 *pii = bpf_map_lookup_elem(&read_flush_index, &index);
+    if (NULL == pii)
+    {
+        bpf_map_update_elem(&read_flush_index, &index, &index, BPF_ANY);
+        goto Tail;
+    }
+
+    u32 ii = *pii;
+    char *ptr = NULL;
+    int ret = 0;
+
+    // this number was arrived at experimentally, increasing it will result in too many
+    // instructions for older kernels
+    READ_LOOP_N(argv, TE_COMMAND_LINE, 6);
+
+    bpf_map_update_elem(&read_flush_index, &index, &ii, BPF_ANY);
+
+Tail:
+    bpf_tail_call(ctx, &tail_call_table, tail_index);
+
+Next:;
+    u32 reset = 0;
+    bpf_map_update_elem(&read_flush_index, &reset, &reset, BPF_ANY);
+    return 0;
+}
 
 static __always_inline int enter_exec(syscall_pattern_type_t sp, int fd,
                                       const char __user *filename,
@@ -418,98 +442,20 @@ Skip:
     return ev;
 }
 
-SEC("kprobe/sys_exec_tc_argv")
-int BPF_KPROBE_SYSCALL(kprobe__sys_exec_tc_argv,
+SEC("kprobe/sys_execve_tc_argv")
+int BPF_KPROBE_SYSCALL(kprobe__sys_execve_tc_argv,
                        const char __user *filename,
-                       const char __user *const __user *argv,
-                       const char __user *const __user *envp)
+                       const char __user *const __user *argv)
 {
-    u64 pid_tgid = bpf_get_current_pid_tgid();
-    u64 *idp = bpf_map_lookup_elem(&process_ids, &pid_tgid);
-    if (idp == NULL)
-    {
-        return 0;
-    }
-    u64 id = *idp;
-
-    // put the event on the stack and satisfy the verifier
-    telemetry_event_t tev = {0};
-    ptelemetry_event_t ev = &tev;
-
-    u32 index = 0;
-    u32 *pii = bpf_map_lookup_elem(&read_flush_index, &index);
-    if (NULL == pii)
-    {
-        bpf_map_update_elem(&read_flush_index, &index, &index, BPF_ANY);
-        goto Tail;
-    }
-
-    long count = 0;
-    u32 ii = 0;
-    // explicit copy from pointer to stack, satisfy verifier
-    __builtin_memcpy(&ii, pii, sizeof(u32));
-    u64 ptr = 0;
-    u64 ret = 0;
-
-    // this number was arrived at experimentally, increasing it will result in too many
-    // instructions for older kernels
-    READ_LOOP_N(argv, TE_COMMAND_LINE, 6);
-
-    bpf_map_update_elem(&read_flush_index, &index, &ii, BPF_ANY);
-
-Tail:
-    bpf_tail_call(ctx, &tail_call_table, SYS_EXEC_TC_ARGV);
-
-Next:;
-    u32 reset = 0;
-    bpf_map_update_elem(&read_flush_index, &reset, &reset, BPF_ANY);
-    bpf_tail_call(ctx, &tail_call_table, SYS_EXEC_TC_ENVP);
-    return 0;
+    return process_argv(ctx, argv, SYS_EXECVE_TC_ARGV);
 }
 
-SEC("kprobe/sys_exec_tc_envp")
-int BPF_KPROBE_SYSCALL(kprobe__sys_exec_tc_envp,
-                       const char __user *filename,
-                       const char __user *const __user *argv,
-                       const char __user *const __user *envp)
+SEC("kprobe/sys_execveat_tc_argv")
+int BPF_KPROBE_SYSCALL(kprobe__sys_execveat_tc_argv,
+                       int fd, const char __user *filename,
+                       const char __user *const __user *argv)
 {
-    u64 pid_tgid = bpf_get_current_pid_tgid();
-    u32 index = 0;
-    u64 *idp = bpf_map_lookup_elem(&process_ids, &pid_tgid);
-    if (idp == NULL)
-    {
-        return 0;
-    }
-    u64 id = *idp;
-
-    telemetry_event_t tev = {0};
-    ptelemetry_event_t ev = &tev;
-
-    u32 *pii = bpf_map_lookup_elem(&read_flush_index, &index);
-    if (NULL == pii)
-    {
-        bpf_map_update_elem(&read_flush_index, &index, &index, BPF_ANY);
-        goto Tail;
-    }
-
-    long count = 0;
-    u32 ii = *pii;
-    u64 ptr = 0;
-    u64 ret = 0;
-
-    // this number was arrived at experimentally, increasing it will result in too many
-    // instructions for older kernels
-    READ_LOOP_N(envp, TE_ENVIRONMENT, 6);
-
-    bpf_map_update_elem(&read_flush_index, &index, &ii, BPF_ANY);
-
-Tail:
-    bpf_tail_call(ctx, &tail_call_table, SYS_EXEC_TC_ENVP);
-
-Next:;
-    u32 reset = 0;
-    bpf_map_update_elem(&read_flush_index, &reset, &reset, BPF_ANY);
-    return 0;
+    return process_argv(ctx, argv, SYS_EXECVEAT_TC_ARGV);
 }
 
 SEC("kprobe/sys_execveat_4_11")
@@ -537,13 +483,13 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execveat_4_11,
     u64 id = *idp;
 
     __builtin_memset(ev, 0, sizeof(telemetry_event_t));
-    u32 count = 0;
     u64 off = 0;
     char br = 0;
     READ_VALUE_N(ev, TE_EXEC_FILENAME, filename, 5);
 
-    bpf_tail_call(ctx, &tail_call_table, SYS_EXEC_TC_ARGV);
+    bpf_tail_call(ctx, &tail_call_table, SYS_EXECVEAT_TC_ARGV);
 
+Next:
 Skip:
     return 0;
 }
@@ -572,13 +518,13 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execve_4_11,
     u64 id = *idp;
 
     __builtin_memset(ev, 0, sizeof(telemetry_event_t));
-    u32 count = 0;
     u64 off = 0;
     char br = 0;
     READ_VALUE_N(ev, TE_EXEC_FILENAME, filename, 5);
 
-    bpf_tail_call(ctx, &tail_call_table, SYS_EXEC_TC_ARGV);
+    bpf_tail_call(ctx, &tail_call_table, SYS_EXECVE_TC_ARGV);
 
+Next:
 Skip:
     return 0;
 }
