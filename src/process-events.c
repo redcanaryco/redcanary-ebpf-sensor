@@ -232,18 +232,18 @@ static __always_inline void push_telemetry_event(struct pt_regs *ctx, ptelemetry
 
 #define SKIP_PATH_N(N) REPEAT_##N(SKIP_PATH;)
 
-#define SEND_PATH                                                           \
-    ev->id = id;                                                            \
-    ev->telemetry_type = TE_PWD;                                            \
+#define SEND_PATH(T)                                                        \
     if (br == 0)                                                            \
     {                                                                       \
-        bpf_probe_read(&offset, sizeof(offset), ptr + name);                \
+        if (bpf_probe_read(&offset, sizeof(offset), ptr + name) < 0)        \
+            goto Skip;                                                      \
         if (!offset)                                                        \
             goto Skip;                                                      \
     }                                                                       \
+    ev->telemetry_type = T;                                                 \
+    ev->id = id;                                                            \
     __builtin_memset(&ev->u.v.value, 0, VALUE_SIZE);                        \
-    count = bpf_probe_read_str(&ev->u.v.value, VALUE_SIZE, (void *)offset); \
-    br = ev->u.v.value[0];                                                  \
+    count = bpf_probe_read_str(&ev->u.v.value, VALUE_SIZE, offset);         \
     if (count >= VALUE_SIZE)                                                \
     {                                                                       \
         br = 1;                                                             \
@@ -253,22 +253,72 @@ static __always_inline void push_telemetry_event(struct pt_regs *ctx, ptelemetry
     }                                                                       \
     else                                                                    \
     {                                                                       \
+        /* save it here since push_telemetry_event clears ev */             \
+        br = ev->u.v.value[0];                                              \
         if (count > 0)                                                      \
         {                                                                   \
             ev->u.v.truncated = FALSE;                                      \
             push_telemetry_event(ctx, ev);                                  \
         }                                                                   \
-        /* we're done here, follow the pointer */                           \
-        bpf_probe_read(&ptr, sizeof(ptr), ptr + parent);                    \
-        to_skip += 1;                                                       \
-        if (!ptr)                                                           \
-            goto Skip;                                                      \
         if (br == '/')                                                      \
             goto Skip;                                                      \
+        /* we're done here, follow the pointer */                           \
+        bpf_probe_read(&ptr, sizeof(ptr), ptr + parent);                    \
+        if (!ptr)                                                           \
+            goto Skip;                                                      \
+        to_skip += 1;                                                       \
         br = 0;                                                             \
     }
 
-#define SEND_PATH_N(N) REPEAT_##N(SEND_PATH;)
+#define SEND_PATH_N(N, T) REPEAT_##N(SEND_PATH(T);)
+
+static __always_inline void push_path(struct pt_regs *ctx, ptelemetry_event_t ev,
+                                      void *ptr, tail_call_slot_t slot,
+                                      telemetry_event_type_t type, u64 id) {
+    if (read_value(ptr, CRC_PATH_DENTRY, &ptr, sizeof(ptr)) < 0) // path->d_entry
+        goto Skip;
+
+    void *offset = NULL;
+    u64 offset_key = 0;
+
+    SET_OFFSET(CRC_DENTRY_D_NAME);
+    u32 name = *(u32 *)offset; // variable name doesn't match here, we're reusing it to preserve stack
+
+    SET_OFFSET(CRC_QSTR_NAME);
+    name = name + *(u32 *)offset; // offset to name char ptr within qstr of dentry
+
+    SET_OFFSET(CRC_DENTRY_D_PARENT);
+    u32 parent = *(u32 *)offset; // offset of d_parent
+
+    u32 to_skip = 0;
+    u32 *to_skip_p = (u32 *)bpf_map_lookup_elem(&read_path_skip, &to_skip);
+    if (to_skip_p)
+    {
+        to_skip = *to_skip_p;
+    }
+
+    u32 skipped = 0;
+    if (to_skip != 0)
+    {
+        SKIP_PATH_N(125);
+    }
+
+Send:;
+    char br = 0;
+    int count = 0;
+    SEND_PATH_N(10, type);
+
+    // update to_skip, reuse skipped as index by resetting it
+    skipped = 0;
+    bpf_map_update_elem(&read_path_skip, &skipped, &to_skip, BPF_ANY);
+
+    // tail call back in
+    bpf_tail_call(ctx, &tail_call_table, slot);
+
+Skip:
+    skipped = 0;
+    bpf_map_delete_elem(&read_path_skip, &skipped);
+}
 
 static __always_inline int process_argv(struct pt_regs *ctx,
                                         const char __user *const __user *argv,
@@ -328,17 +378,18 @@ static __always_inline int enter_exec(syscall_pattern_type_t sp,
     return 0;
 }
 
-static __always_inline void enter_exec_4_11(syscall_pattern_type_t sp,
-                                            struct pt_regs *ctx,
-                                            u32 ppid, u32 luid,
-                                            ptelemetry_event_t ev)
+static __always_inline u64 enter_exec_4_11(syscall_pattern_type_t sp,
+                                           struct pt_regs *ctx,
+                                           u32 ppid, u32 luid,
+                                           ptelemetry_event_t ev)
 {
     // if the ID already exists, we are tail-calling into ourselves, skip ahead to reading the path
     u64 p_t = bpf_get_current_pid_tgid();
-    u64 id = (u64)bpf_map_lookup_elem(&process_ids, &p_t);
-    if (id)
+    u64 *id_p = bpf_map_lookup_elem(&process_ids, &p_t);
+    u64 id = 0;
+    if (id_p)
     {
-        __builtin_memcpy(&id, (void *)id, sizeof(u64));
+        id = *id_p;
         goto Pwd;
     }
 
@@ -351,63 +402,23 @@ static __always_inline void enter_exec_4_11(syscall_pattern_type_t sp,
     bpf_map_update_elem(&process_ids, &pid_tgid, &id, BPF_ANY);
 
     // this has to be the same size as to_skip and skipped in Pwd
-    u32 count = 0;
-    char br = 0;
+    u32 to_skip = 0;
     // reuse count as idx and value to save stack space
-    bpf_map_update_elem(&read_path_skip, &count, &count, BPF_ANY);
+    bpf_map_update_elem(&read_path_skip, &to_skip, &to_skip, BPF_ANY);
 
 Pwd:;
-
     // the verifier complains if these are instantiated before the Pwd:; label
-    u32 to_skip = 0;
-    u32 skipped = 0;
-
     void *ptr = (void *)bpf_get_current_task();
     if (read_value(ptr, CRC_TASK_STRUCT_FS, &ptr, sizeof(ptr)) < 0) // task_struct->fs
-        goto Skip;
+        return id;
 
     ptr = offset_ptr(ptr, CRC_FS_STRUCT_PWD); // &(fs->pwd)
     if (ptr == NULL)
-        goto Skip;
+        return id;
 
-    if (read_value(ptr, CRC_PATH_DENTRY, &ptr, sizeof(ptr)) < 0) // pwd->d_entry
-        goto Skip;
+    push_path(ctx, ev, ptr, SYS_EXECVE_4_11, TE_PWD, id);
 
-    void *offset = NULL;
-    u64 offset_key = 0;
-
-    SET_OFFSET(CRC_DENTRY_D_NAME);
-    u32 name = *(u32 *)offset; // variable name doesn't match here, we're reusing it to preserve stack
-
-    SET_OFFSET(CRC_QSTR_NAME);
-    name = name + *(u32 *)offset; // offset to name char ptr within qstr of dentry
-
-    SET_OFFSET(CRC_DENTRY_D_PARENT);
-    u32 parent = *(u32 *)offset; // offset of d_parent
-
-    u32 *_to_skip = (u32 *)bpf_map_lookup_elem(&read_path_skip, &to_skip);
-    if (_to_skip)
-    {
-        to_skip = *_to_skip;
-    }
-
-    if (to_skip != 0)
-    {
-        SKIP_PATH_N(125);
-    }
-
-Send:
-    SEND_PATH_N(10);
-
-    // update to_skip, reuse skipped as index by resetting it
-    skipped = 0;
-    bpf_map_update_elem(&read_path_skip, &skipped, &to_skip, BPF_ANY);
-    // tail call back in
-    bpf_tail_call(ctx, &tail_call_table, SYS_EXECVE_4_11);
-
-Skip:
-    skipped = 0;
-    bpf_map_delete_elem(&read_path_skip, &skipped);
+    return id;
 }
 
 SEC("kprobe/sys_execve_tc_argv")
@@ -441,17 +452,10 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execveat_4_11,
     telemetry_event_t sev = {0};
     ptelemetry_event_t ev = &sev;
 
-    enter_exec_4_11(SP_EXECVEAT, ctx, ppid, luid, ev);
+    u64 id = enter_exec_4_11(SP_EXECVEAT, ctx, ppid, luid, ev);
 
     if (!filename)
         goto Next;
-    u64 pid_tgid = bpf_get_current_pid_tgid();
-    u64 *idp = bpf_map_lookup_elem(&process_ids, &pid_tgid);
-    if (idp == NULL)
-    {
-        return 0;
-    }
-    u64 id = *idp;
 
     __builtin_memset(ev, 0, sizeof(telemetry_event_t));
     u64 off = 0;
@@ -478,17 +482,10 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execve_4_11,
     telemetry_event_t sev = {0};
     ptelemetry_event_t ev = &sev;
 
-    enter_exec_4_11(SP_EXECVE, ctx, ppid, luid, ev);
+    u64 id = enter_exec_4_11(SP_EXECVE, ctx, ppid, luid, ev);
 
     if (!filename)
         goto Next;
-    u64 pid_tgid = bpf_get_current_pid_tgid();
-    u64 *idp = bpf_map_lookup_elem(&process_ids, &pid_tgid);
-    if (idp == NULL)
-    {
-        return 0;
-    }
-    u64 id = *idp;
 
     __builtin_memset(ev, 0, sizeof(telemetry_event_t));
     u64 off = 0;
