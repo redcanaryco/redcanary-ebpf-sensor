@@ -44,15 +44,6 @@ struct bpf_map_def SEC("maps/read_path_skip") read_path_skip = {
     .namespace = "",
 };
 
-struct bpf_map_def SEC("maps/exec_path_info_store") exec_path_info_store = {
-    .type = BPF_MAP_TYPE_HASH,
-    .key_size = sizeof(u64),
-    .value_size = sizeof(u64),
-    .max_entries = 1024,
-    .pinning = 0,
-    .namespace = "",
-};
-
 struct bpf_map_def SEC("maps/clone_info_store") clone_info_store = {
     .type = BPF_MAP_TYPE_PERCPU_ARRAY,
     .key_size = sizeof(u32),
@@ -462,9 +453,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execveat_4_11,
     telemetry_event_t sev = {0};
     ptelemetry_event_t ev = &sev;
 
-    u64 id = enter_exec_4_11(SP_EXECVEAT, ctx, ppid, luid, ev);
-    u64 pid_tgid = bpf_get_current_pid_tgid();
-    bpf_map_update_elem(&exec_path_info_store, &pid_tgid, &id, BPF_ANY);
+    enter_exec_4_11(SP_EXECVEAT, ctx, ppid, luid, ev);
 
     bpf_tail_call(ctx, &tail_call_table, SYS_EXECVEAT_TC_ARGV);
 
@@ -564,33 +553,6 @@ static __always_inline int exit_exec(struct pt_regs *__ctx, u32 i_dev, u64 i_ino
     return 0;
 }
 
-SEC("kretprobe/ret_do_open_execat")
-int kretprobe__ret_do_open_execat(struct pt_regs *ctx)
-{
-    u64 pid_tgid = bpf_get_current_pid_tgid();
-    u64 *id = bpf_map_lookup_elem(&exec_path_info_store, &pid_tgid);
-    if (id == NULL)
-        return 0;
-
-    void *ptr = (void *)PT_REGS_RC(ctx);
-    if (IS_ERR(ptr))
-        goto Skip;
-
-    ptr = offset_ptr(ptr, CRC_FILE_F_PATH); // &(file->f_path)
-    if (ptr == NULL)
-        goto Skip;
-
-    // create the event early so it can be re-used to save stack space
-    telemetry_event_t sev = {0};
-    ptelemetry_event_t ev = &sev;
-
-    push_path(ctx, ev, ptr, DO_OPEN_EXECAT, TE_EXEC_FILENAME_REV, *id);
-
-Skip:
-    bpf_map_delete_elem(&exec_path_info_store, &pid_tgid);
-    return 0;
-}
-
 SEC("kretprobe/ret_sys_execve")
 int kretprobe__ret_sys_execve(struct pt_regs *ctx)
 {
@@ -613,8 +575,68 @@ int kretprobe__ret_sys_execve_4_8(struct pt_regs *ctx)
 SEC("kretprobe/ret_sys_execveat_4_8")
 int kretprobe__ret_sys_execveat_4_8(struct pt_regs *ctx)
 {
-    GET_OFFSETS_4_8_RET_EXEC;
-    return exit_exec(ctx, i_dev, i_ino);
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+    u64 *id = bpf_map_lookup_elem(&process_ids, &pid_tgid);
+    if (!id)
+        return 0;
+
+    // re-use the same ev to save stack space
+    telemetry_event_t sev = {0};
+    ptelemetry_event_t ev = &sev;
+
+    u32 retcode = (u32)PT_REGS_RC(ctx);
+    if (retcode != 0) {
+        ev->id = *id;
+        ev->telemetry_type = TE_DISCARD;
+        ev->u.r.retcode = retcode;
+        push_telemetry_event(ctx, ev);
+
+        goto Done;
+    }
+
+    u64 offset_key = CRC_LOADED;
+    void *offset = bpf_map_lookup_elem(&offsets, &offset_key);
+    if (!offset)
+        goto Done;
+
+    void *ts = (void *)bpf_get_current_task();
+    if (!ts)
+        goto Done;
+
+    void *ptr = NULL;
+    read_value(ts, CRC_TASK_STRUCT_MM, &ptr, sizeof(ptr));
+    read_value(ptr, CRC_MM_STRUCT_EXE_FILE, &ptr, sizeof(ptr));
+
+    void *file = offset_ptr(ptr, CRC_FILE_F_PATH);
+    push_path(ctx, ev, file, DO_OPEN_EXECAT, TE_EXEC_FILENAME_REV, *id);
+
+    u32 i_dev = 0;
+    u32 i_ino = 0;
+    void *sptr = NULL;
+    read_value(ptr, CRC_FILE_F_INODE, &ptr, sizeof(ptr));
+    read_value(ptr, CRC_INODE_I_SB, &sptr, sizeof(sptr));
+    read_value(sptr, CRC_SBLOCK_S_DEV, &i_dev, sizeof(i_dev));
+    read_value(ptr, CRC_INODE_I_INO, &i_ino, sizeof(i_ino));
+
+    ev->id = *id;
+    ev->telemetry_type = TE_FILE_INFO;
+    ev->u.file_info = (file_info_t) {
+        .inode = i_ino,
+        .devmajor = MAJOR(i_dev),
+        .devminor = MINOR(i_dev),
+    };
+
+    bpf_get_current_comm(&ev->u.file_info.comm, sizeof(ev->u.file_info.comm));
+    push_telemetry_event(ctx, ev);
+
+    ev->id = *id;
+    ev->telemetry_type = TE_RETCODE;
+    ev->u.r.retcode = retcode;
+    push_telemetry_event(ctx, ev);
+
+Done:
+    bpf_map_delete_elem(&process_ids, &pid_tgid);
+    return 0;
 }
 
 static __always_inline int enter_clone(syscall_pattern_type_t sp, unsigned long flags,
