@@ -3,7 +3,6 @@
 #include <linux/kconfig.h>
 #include <linux/ptrace.h>
 #include <linux/version.h>
-#include <linux/err.h>
 #include <uapi/linux/bpf.h>
 #include <linux/uio.h>
 #include <linux/fcntl.h>
@@ -101,31 +100,6 @@ struct bpf_map_def SEC("maps/tail_call_table") tail_call_table = {
     E->u.syscall_info.egid = uid_gid & 0xFFFFFFFF;      \
     E->u.syscall_info.mono_ns = bpf_ktime_get_ns();     \
     E->u.syscall_info.syscall_pattern = SP;
-
-/* this must go in the kretprobe so we can grab the new process from `task_struct` */
-#define GET_OFFSETS_4_8_RET_EXEC                                                                        \
-    /* if "loaded" doesn't exist in the map, we get NULL back and won't read from offsets               \
-     * when offsets are loaded into the offsets map, "loaded" should be given any value                 \
-     */                                                                                                 \
-    u64 offset = CRC_LOADED;                                                                            \
-    offset = (u64)bpf_map_lookup_elem(&offsets, &offset); /* squeezing out as much stack as possible */ \
-    /* since we're using offsets to read from the structs, we don't need to bother with                 \
-     * understanding their structure                                                                    \
-     */                                                                                                 \
-    u32 i_dev = 0;                                                                                      \
-    u64 i_ino = 0;                                                                                      \
-    void *ts = (void *)bpf_get_current_task();                                                          \
-    void *ptr = NULL;                                                                                   \
-    void *sptr = NULL;                                                                                  \
-    if (ts && offset)                                                                                   \
-    {                                                                                                   \
-        read_value(ts, CRC_TASK_STRUCT_MM, &ptr, sizeof(ptr));                                          \
-        read_value(ptr, CRC_MM_STRUCT_EXE_FILE, &ptr, sizeof(ptr));                                     \
-        read_value(ptr, CRC_FILE_F_INODE, &ptr, sizeof(ptr));                                           \
-        read_value(ptr, CRC_INODE_I_SB, &sptr, sizeof(sptr));                                           \
-        read_value(sptr, CRC_SBLOCK_S_DEV, &i_dev, sizeof(i_dev));                                      \
-        read_value(ptr, CRC_INODE_I_INO, &i_ino, sizeof(i_ino));                                        \
-    }
 
 #define GET_OFFSETS_4_8                                                                                 \
     /* if "loaded" doesn't exist in the map, we get NULL back and won't read from offsets               \
