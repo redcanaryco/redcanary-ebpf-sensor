@@ -647,7 +647,7 @@ int kretprobe__ret_sys_execveat_4_8(struct pt_regs *ctx)
         goto Done;
 
     void *path = offset_ptr(ptr, CRC_FILE_F_PATH);
-    push_path(ctx, ev, path, DO_OPEN_EXECAT, TE_EXEC_FILENAME_REV, *id);
+    push_path(ctx, ev, path, RET_SYS_EXECVEAT_4_8, TE_EXEC_FILENAME_REV, *id);
 
     push_exit_exec(ctx, *id, extract_file_info(ptr), ev);
 
