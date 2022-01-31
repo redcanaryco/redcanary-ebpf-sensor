@@ -275,6 +275,72 @@ static __always_inline void push_telemetry_event(struct pt_regs *ctx, ptelemetry
 
 #define SEND_PATH_N(N, T) REPEAT_##N(SEND_PATH(T);)
 
+static __always_inline bool check_discard(struct pt_regs *ctx, ptelemetry_event_t ev, u64 *id)
+{
+    u32 retcode = (u32)PT_REGS_RC(ctx);
+    if (retcode != 0) {
+        ev->id = *id;
+        ev->telemetry_type = TE_DISCARD;
+        ev->u.r.retcode = retcode;
+        push_telemetry_event(ctx, ev);
+
+        return true;
+    }
+
+    return false;
+}
+
+static __always_inline void* get_current_exe()
+{
+    u64 offset_key = CRC_LOADED;
+    void *offset = bpf_map_lookup_elem(&offsets, &offset_key);
+    if (!offset)
+        return NULL;
+
+    void *ts = (void *)bpf_get_current_task();
+    if (!ts)
+        return NULL;
+
+    void *ptr = NULL;
+    read_value(ts, CRC_TASK_STRUCT_MM, &ptr, sizeof(ptr));
+    read_value(ptr, CRC_MM_STRUCT_EXE_FILE, &ptr, sizeof(ptr));
+
+    return ptr;
+}
+
+// it's argument should be a pointer to a file
+static __always_inline file_info_t extract_file_info(void *ptr)
+{
+    u32 i_dev = 0;
+    u64 i_ino = 0;
+    void *sptr = NULL;
+    read_value(ptr, CRC_FILE_F_INODE, &ptr, sizeof(ptr));
+    read_value(ptr, CRC_INODE_I_SB, &sptr, sizeof(sptr));
+    read_value(sptr, CRC_SBLOCK_S_DEV, &i_dev, sizeof(i_dev));
+    read_value(ptr, CRC_INODE_I_INO, &i_ino, sizeof(i_ino));
+
+    return (file_info_t) {
+        .inode = i_ino,
+        .devmajor = MAJOR(i_dev),
+        .devminor = MINOR(i_dev),
+    };
+}
+
+static __always_inline void push_exit_exec(struct pt_regs *ctx, u64 id,
+                                           file_info_t file_info, ptelemetry_event_t ev)
+{
+    ev->id = id;
+    ev->telemetry_type = TE_FILE_INFO;
+    ev->u.file_info = file_info;
+    bpf_get_current_comm(&ev->u.file_info.comm, sizeof(ev->u.file_info.comm));
+    push_telemetry_event(ctx, ev);
+
+    ev->id = id;
+    ev->telemetry_type = TE_RETCODE;
+    ev->u.r.retcode = (u32)PT_REGS_RC(ctx);
+    push_telemetry_event(ctx, ev);
+}
+
 static __always_inline void push_path(struct pt_regs *ctx, ptelemetry_event_t ev,
                                       void *ptr, tail_call_slot_t slot,
                                       telemetry_event_type_t type, u64 id) {
@@ -509,67 +575,82 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execve,
     return enter_exec(SP_EXECVE, ctx);
 }
 
-static __always_inline int exit_exec(struct pt_regs *__ctx, u32 i_dev, u64 i_ino)
-{
-    u64 pid_tgid = bpf_get_current_pid_tgid();
-    u64 *id = bpf_map_lookup_elem(&process_ids, &pid_tgid);
-
-    if (!id) {
-        return 0;
-    }
-
-    bpf_map_delete_elem(&process_ids, &pid_tgid);
-
-    u32 retcode = (u32)PT_REGS_RC(__ctx);
-    if (retcode != 0) {
-        ptelemetry_event_t ev = &(telemetry_event_t){
-            .id = *id,
-            .telemetry_type = TE_DISCARD,
-            .u.r.retcode = retcode,
-        };
-        push_telemetry_event(__ctx, ev);
-        return 0;
-    }
-
-    ptelemetry_event_t ev = &(telemetry_event_t){
-        .id = *id,
-        .telemetry_type = TE_FILE_INFO,
-        .u.file_info = {
-            .inode = i_ino,
-            .devmajor = MAJOR(i_dev),
-            .devminor = MINOR(i_dev),
-        },
-    };
-
-    bpf_get_current_comm(&ev->u.file_info.comm, sizeof(ev->u.file_info.comm));
-    push_telemetry_event(__ctx, ev);
-
-    // re-use the same ev to save stack space
-    ev->id = *id;
-    ev->telemetry_type = TE_RETCODE;
-    ev->u.r.retcode = retcode;
-    push_telemetry_event(__ctx, ev);
-
-    return 0;
-}
-
 SEC("kretprobe/ret_sys_execve")
 int kretprobe__ret_sys_execve(struct pt_regs *ctx)
 {
-    return exit_exec(ctx, -1, -1);
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+    u64 *id = bpf_map_lookup_elem(&process_ids, &pid_tgid);
+    if (!id)
+        return 0;
+
+    // re-use the same ev to save stack space
+    telemetry_event_t sev = {0};
+    ptelemetry_event_t ev = &sev;
+
+    if (check_discard(ctx, ev, id))
+        goto Done;
+
+    push_exit_exec(ctx, *id, (file_info_t) {
+        .inode = 0,
+        .devmajor = 0,
+        .devminor = 0,
+    }, ev);
+
+ Done:
+    bpf_map_delete_elem(&process_ids, &pid_tgid);
+    return 0;
 }
 
 SEC("kretprobe/ret_sys_execveat")
 int kretprobe__ret_sys_execveat(struct pt_regs *ctx)
 {
-    return exit_exec(ctx, -1, -1);
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+    u64 *id = bpf_map_lookup_elem(&process_ids, &pid_tgid);
+    if (!id)
+        return 0;
+
+    // re-use the same ev to save stack space
+    telemetry_event_t sev = {0};
+    ptelemetry_event_t ev = &sev;
+
+    if (check_discard(ctx, ev, id))
+        goto Done;
+
+    push_exit_exec(ctx, *id, (file_info_t) {
+        .inode = 0,
+        .devmajor = 0,
+        .devminor = 0,
+    }, ev);
+
+ Done:
+    bpf_map_delete_elem(&process_ids, &pid_tgid);
+    return 0;
 }
 
 SEC("kretprobe/ret_sys_execve_4_8")
 int kretprobe__ret_sys_execve_4_8(struct pt_regs *ctx)
 {
-    GET_OFFSETS_4_8_RET_EXEC;
-    return exit_exec(ctx, i_dev, i_ino);
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+    u64 *id = bpf_map_lookup_elem(&process_ids, &pid_tgid);
+    if (!id)
+        return 0;
+
+    // re-use the same ev to save stack space
+    telemetry_event_t sev = {0};
+    ptelemetry_event_t ev = &sev;
+
+    if (check_discard(ctx, ev, id))
+        goto Done;
+
+    void *ptr = get_current_exe();
+    if (!ptr)
+        goto Done;
+
+    push_exit_exec(ctx, *id, extract_file_info(ptr), ev);
+
+Done:
+    bpf_map_delete_elem(&process_ids, &pid_tgid);
+    return 0;
 }
 
 SEC("kretprobe/ret_sys_execveat_4_8")
@@ -584,55 +665,17 @@ int kretprobe__ret_sys_execveat_4_8(struct pt_regs *ctx)
     telemetry_event_t sev = {0};
     ptelemetry_event_t ev = &sev;
 
-    u32 retcode = (u32)PT_REGS_RC(ctx);
-    if (retcode != 0) {
-        ev->id = *id;
-        ev->telemetry_type = TE_DISCARD;
-        ev->u.r.retcode = retcode;
-        push_telemetry_event(ctx, ev);
-
-        goto Done;
-    }
-
-    u64 offset_key = CRC_LOADED;
-    void *offset = bpf_map_lookup_elem(&offsets, &offset_key);
-    if (!offset)
+    if (check_discard(ctx, ev, id))
         goto Done;
 
-    void *ts = (void *)bpf_get_current_task();
-    if (!ts)
+    void *ptr = get_current_exe();
+    if (!ptr)
         goto Done;
 
-    void *ptr = NULL;
-    read_value(ts, CRC_TASK_STRUCT_MM, &ptr, sizeof(ptr));
-    read_value(ptr, CRC_MM_STRUCT_EXE_FILE, &ptr, sizeof(ptr));
+    void *path = offset_ptr(ptr, CRC_FILE_F_PATH);
+    push_path(ctx, ev, path, DO_OPEN_EXECAT, TE_EXEC_FILENAME_REV, *id);
 
-    void *file = offset_ptr(ptr, CRC_FILE_F_PATH);
-    push_path(ctx, ev, file, DO_OPEN_EXECAT, TE_EXEC_FILENAME_REV, *id);
-
-    u32 i_dev = 0;
-    u32 i_ino = 0;
-    void *sptr = NULL;
-    read_value(ptr, CRC_FILE_F_INODE, &ptr, sizeof(ptr));
-    read_value(ptr, CRC_INODE_I_SB, &sptr, sizeof(sptr));
-    read_value(sptr, CRC_SBLOCK_S_DEV, &i_dev, sizeof(i_dev));
-    read_value(ptr, CRC_INODE_I_INO, &i_ino, sizeof(i_ino));
-
-    ev->id = *id;
-    ev->telemetry_type = TE_FILE_INFO;
-    ev->u.file_info = (file_info_t) {
-        .inode = i_ino,
-        .devmajor = MAJOR(i_dev),
-        .devminor = MINOR(i_dev),
-    };
-
-    bpf_get_current_comm(&ev->u.file_info.comm, sizeof(ev->u.file_info.comm));
-    push_telemetry_event(ctx, ev);
-
-    ev->id = *id;
-    ev->telemetry_type = TE_RETCODE;
-    ev->u.r.retcode = retcode;
-    push_telemetry_event(ctx, ev);
+    push_exit_exec(ctx, *id, extract_file_info(ptr), ev);
 
 Done:
     bpf_map_delete_elem(&process_ids, &pid_tgid);
