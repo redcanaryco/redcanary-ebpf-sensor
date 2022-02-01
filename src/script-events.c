@@ -160,34 +160,30 @@ int kprobe__handle_pwd(struct pt_regs *ctx)
         __builtin_memcpy(&id, (void *)id, sizeof(u64));
     }
 
-    // since index will start at zero, we can use it here
-    u64 offset = 0;
     void *ptr = (void *)bpf_get_current_task();
     if (read_value(ptr, CRC_TASK_STRUCT_FS, &ptr, sizeof(ptr)) < 0)
         goto Skip;
 
-    offset = CRC_FS_STRUCT_PWD;
-    offset = (u64)bpf_map_lookup_elem(&offsets, &offset);
-    if (!offset)
-    {
+    ptr = offset_ptr(ptr, CRC_FS_STRUCT_PWD); // &(fs->pwd)
+    if (ptr == NULL)
         goto Skip;
-    }
-
-    ptr = ptr + *(u32 *)offset; // ptr to pwd
 
     if (read_value(ptr, CRC_PATH_DENTRY, &ptr, sizeof(ptr)) < 0)
     {
         goto Skip;
     }
 
+    u32 *offset = NULL;
+    u64 offset_key = 0;
+
     SET_OFFSET(CRC_DENTRY_D_NAME);
-    u32 qstr_len = *(u32 *)offset; // variable name doesn't match here, we're reusing it to preserve stack
+    u32 name = *offset; // variable name doesn't match here, we're reusing it to preserve stack
 
     SET_OFFSET(CRC_QSTR_NAME);
-    u32 name = qstr_len + *(u32 *)offset; // offset to name char ptr within qstr of dentry
+    name = name + *offset; // offset to name char ptr within qstr of dentry
 
     SET_OFFSET(CRC_DENTRY_D_PARENT);
-    u32 parent = *(u32 *)offset; // offset of d_parent
+    u32 parent = *offset; // offset of d_parent
 
     u32 *_to_skip = (u32 *)bpf_map_lookup_elem(&read_path_skip, &to_skip);
     if (_to_skip)

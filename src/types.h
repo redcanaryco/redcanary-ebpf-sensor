@@ -96,10 +96,7 @@ typedef enum
 {
     TE_UNSPEC,
     TE_SYSCALL_INFO,
-    TE_EXE_PATH,
-    TE_PATH,
     TE_COMMAND_LINE,
-    TE_ENVIRONMENT,
     TE_CURRENT_WORKING_DIRECTORY,
     TE_FILE_INFO,
     TE_RETCODE,
@@ -109,6 +106,7 @@ typedef enum
     TE_UNSHARE_FLAGS,
     TE_EXIT_STATUS,
     TE_EXEC_FILENAME,
+    TE_EXEC_FILENAME_REV,
     TE_PWD,
     TE_SCRIPT,
     TE_CHAR_STR,
@@ -364,16 +362,9 @@ struct clone_args
 
 typedef enum
 {
-    SYS_EXECVE_4_8,
-    SYS_EXECVEAT_4_8,
     SYS_EXECVE_4_11,
-    SYS_EXECVEAT_4_11,
+    RET_SYS_EXECVEAT_4_8,
     SYS_EXECVE_TC_ARGV,
     SYS_EXECVEAT_TC_ARGV,
-    RET_SYS_EXECVE,
-    RET_SYS_CLONE,
-    RET_SYS_CLONE3,
-    RET_SYS_UNSHARE,
-    RET_SYS_EXIT,
     HANDLE_PWD,
 } tail_call_slot_t;
