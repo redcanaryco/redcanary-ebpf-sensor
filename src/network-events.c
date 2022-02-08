@@ -131,7 +131,7 @@ int kretprobe__ret_inet_csk_accept(struct pt_regs *ctx)
     }
 
     // Get Process data and set pid and comm string
-    ev.u.network_info.process.pid = (u32) (bpf_get_current_pid_tgid() >> 32);
+    ev.u.network_info.process.pid = (u32)(bpf_get_current_pid_tgid() >> 32);
     bpf_get_current_comm(ev.u.network_info.process.comm, sizeof(ev.u.network_info.process.comm));
 
     // Output data to generator
@@ -144,7 +144,7 @@ int kretprobe__ret_inet_csk_accept(struct pt_regs *ctx)
 SEC("kretprobe/ret___skb_recv_udp")
 int kretprobe__ret___skb_recv_udp(struct pt_regs *ctx)
 {
-    //unsigned char version = 0;
+    // unsigned char version = 0;
     telemetry_event_t ev;
     __builtin_memset(&ev, 0, sizeof(ev));
 
@@ -159,7 +159,6 @@ int kretprobe__ret___skb_recv_udp(struct pt_regs *ctx)
 
     if (skbuff_base == NULL)
     {
-        bpf_printk("In __skb_recv_udp: skbuff_base\n");
         return 0;
     }
 
@@ -167,7 +166,7 @@ int kretprobe__ret___skb_recv_udp(struct pt_regs *ctx)
     ev.u.network_info.protocol_type = IPPROTO_UDP;
 
     // Get current pid
-    ev.u.network_info.process.pid = (u32) (bpf_get_current_pid_tgid() >> 32);
+    ev.u.network_info.process.pid = (u32)(bpf_get_current_pid_tgid() >> 32);
 
     unsigned char *skb_head = NULL;
     unsigned short mac_header = 0;
@@ -181,35 +180,30 @@ int kretprobe__ret___skb_recv_udp(struct pt_regs *ctx)
     int ret = read_value(skbuff_base, CRC_SKBUFF_HEAD, &skb_head, sizeof(skb_head));
     if (ret == -1)
     {
-        bpf_printk("In __skb_recv_udp: read skbuff->head\n");
         return 0;
     }
 
     ret = read_value(skbuff_base, CRC_SKBUFF_MAC_HDR, &mac_header, sizeof(mac_header));
     if (ret == -1)
     {
-        bpf_printk("In __skb_recv_udp: read transport header\n");
         return 0;
     }
 
     ret = read_value(skbuff_base, CRC_TRANSPORT_HDR, &transport_header, sizeof(transport_header));
     if (ret == -1)
     {
-        bpf_printk("In __skb_recv_udp: read transport header\n");
         return 0;
     }
 
     ret = read_value(skbuff_base, CRC_NETWORK_HDR, &network_header, sizeof(network_header));
     if (ret == -1)
     {
-        bpf_printk("In __skb_recv_udp: network header\n");
         return 0;
     }
 
     ret = read_value(skbuff_base, CRC_SKBUFF_PROTO, &proto, sizeof(proto));
     if (ret == -1)
     {
-        bpf_printk("In __skb_recv_udp: skbuff->proto\n");
         return 0;
     }
 
@@ -219,17 +213,14 @@ int kretprobe__ret___skb_recv_udp(struct pt_regs *ctx)
     struct ethhdr *eth = (struct ethhdr *)(skb_head + mac_header);
     struct iphdr *ip = (struct iphdr *)(skb_head + network_header);
     struct udphdr *udp = (struct udphdr *)(skb_head + transport_header);
-    //bpf_probe_read(&version, sizeof(version), (void *)(ip));
-    //version = ((version & 0xf0) >> 4); // Get the upper 4 bits
+    // bpf_probe_read(&version, sizeof(version), (void *)(ip));
+    // version = ((version & 0xf0) >> 4); // Get the upper 4 bits
     bpf_probe_read(&proto, sizeof(proto), (void *)(&eth->h_proto));
-    bpf_printk("eth->h_proto: 0x%x\n", proto);
     if (proto == 0x8)
     {
-        bpf_printk("In __skb_recv_udp: In ipv4\n");
         ev.u.network_info.ip_type = AF_INET;
         bpf_probe_read(&proto, sizeof(proto), (void *)(&ip->protocol));
         proto = proto & 0xff;
-        bpf_printk("ipv4->protocol: 0x%x\n", proto);
 
         if (proto == IPPROTO_UDP)
         {
@@ -239,18 +230,15 @@ int kretprobe__ret___skb_recv_udp(struct pt_regs *ctx)
         else
         {
             // If it is not udp we don't care
-            bpf_printk("In __skb_recv_udp: Unknown protocol\n");
             return 0;
         }
     }
     else if (proto == 0xdd86)
     {
-        bpf_printk("In __skb_recv_udp: In ipv6\n");
         ev.u.network_info.ip_type = AF_INET6;
         struct ipv6hdr *ipv6 = (struct ipv6hdr *)(skb_head + network_header);
         bpf_probe_read(&proto, sizeof(proto), (void *)(&ipv6->nexthdr));
         proto = proto & 0xff;
-        bpf_printk("ipv6->nexthdr: 0x%x\n", proto);
         if (proto == IPPROTO_UDP)
         {
             bpf_probe_read(&ev.u.network_info.protos.ipv6.dest_addr, sizeof(ev.u.network_info.protos.ipv6.dest_addr), (void *)(&ipv6->daddr));
@@ -259,14 +247,11 @@ int kretprobe__ret___skb_recv_udp(struct pt_regs *ctx)
         else
         {
             // If it is not udp we don't care
-            bpf_printk("In __skb_recv_udp: Unknown protocol\n");
             return 0;
         }
     }
     else
     {
-        // We should not ever get here
-        //bpf_printk("Couldn't get ip version: %d\n", version);
         return 0;
     }
     bpf_probe_read(&ev.u.network_info.dest_port, sizeof(ev.u.network_info.dest_port), (void *)(&udp->dest));
@@ -313,9 +298,9 @@ int kretprobe__ret_udp_outgoing(struct pt_regs *ctx)
 
     // Get current pid
     u64 pid_tgid = bpf_get_current_pid_tgid();
-    u32 index = (u32) pid_tgid;
+    u32 index = (u32)pid_tgid;
 
-    ev.u.network_info.process.pid = (u32) (pid_tgid >> 32);
+    ev.u.network_info.process.pid = (u32)(pid_tgid >> 32);
 
     // Lookup the corresponding sk_buff* that we saved when udp_outgoing
     skpp = bpf_map_lookup_elem(&udp_outgoing_map, &index);
@@ -437,7 +422,7 @@ int kretprobe__ret_tcp_connect(struct pt_regs *ctx)
 
     // Get current pid
     u64 pid_tgid = bpf_get_current_pid_tgid();
-    u32 index = (u32) pid_tgid;
+    u32 index = (u32)pid_tgid;
     _sock *skpp;
 
     // if ipv4 do one thing else do the other
@@ -480,7 +465,7 @@ int kretprobe__ret_tcp_connect(struct pt_regs *ctx)
     ev.u.network_info.dest_port = SWAP_U16(ev.u.network_info.dest_port);
 
     // Get Process data and set pid and comm string
-    ev.u.network_info.process.pid = (u32) (pid_tgid >> 32);
+    ev.u.network_info.process.pid = (u32)(pid_tgid >> 32);
     bpf_get_current_comm(ev.u.network_info.process.comm, sizeof(ev.u.network_info.process.comm));
 
     // Output data to generator
