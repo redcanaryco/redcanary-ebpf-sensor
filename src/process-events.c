@@ -146,6 +146,13 @@ int kprobe__do_mount(struct pt_regs *ctx)
 
 static __always_inline void push_telemetry_event(struct pt_regs *ctx, ptelemetry_event_t ev)
 {
+    // check mm field of task_struct
+    // skip pushing kernel process events as they have an mm field of NULL
+    void *ts = (void *)bpf_get_current_task();
+    void *ptr = NULL;
+    read_value(ts, CRC_TASK_STRUCT_MM, &ptr, sizeof(ptr));
+    if (!ptr) return;
+
     bpf_perf_event_output(ctx, &process_events, BPF_F_CURRENT_CPU, ev, sizeof(*ev));
     __builtin_memset(ev, 0, sizeof(telemetry_event_t));
 }
