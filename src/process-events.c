@@ -117,14 +117,14 @@ struct bpf_map_def SEC("maps/tail_call_table") tail_call_table = {
      */                                                                                                 \
     void *ts = (void *)bpf_get_current_task();                                                          \
     void *ptr = NULL;                                                                                   \
-    /* check mm field of task_struct                                                                    \
-     * skip kernel processes as they have an mm field of NULL                                           \
-     */                                                                                                 \
     void *mmptr = NULL;                                                                                 \
-    read_value(ts, CRC_TASK_STRUCT_MM, &mmptr, sizeof(mmptr));                                          \
-    if (!mmptr) return 0;                                                                               \
     if (ts)                                                                                             \
     {                                                                                                   \
+        /* check mm field of task_struct                                                                \
+         * skip kernel processes as they have an mm field of NULL                                       \
+         */                                                                                             \
+        read_value(ts, CRC_TASK_STRUCT_MM, &mmptr, sizeof(mmptr));                                      \
+        if (!mmptr) return 0;                                                                           \
         read_value(ts, CRC_TASK_STRUCT_REAL_PARENT, &ptr, sizeof(ptr));                                 \
         read_value(ptr, CRC_TASK_STRUCT_TGID, &ppid, sizeof(ppid));                                     \
         read_value(ts, CRC_TASK_STRUCT_LOGINUID, &luid, sizeof(luid));                                  \
