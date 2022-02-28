@@ -411,22 +411,6 @@ Next:;
     return 0;
 }
 
-static __always_inline int enter_exec(syscall_pattern_type_t sp,
-                                      struct pt_regs *ctx)
-{
-    telemetry_event_t sev = {0};
-    ptelemetry_event_t ev = &sev;
-
-    u64 id = bpf_get_prandom_u32();
-
-    ev->id = id;
-    FILL_TELEMETRY_SYSCALL_EVENT(ev, sp, -1, -1);
-    push_telemetry_event(ctx, ev);
-
-    bpf_map_update_elem(&process_ids, &pid_tgid, &id, BPF_ANY);
-    return 0;
-}
-
 static __always_inline u64 enter_exec_4_11(syscall_pattern_type_t sp,
                                            struct pt_regs *ctx,
                                            u32 ppid, u32 luid,
@@ -533,77 +517,6 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execve_4_11,
     bpf_tail_call(ctx, &tail_call_table, SYS_EXECVE_TC_ARGV);
 
 Next:
-    return 0;
-}
-
-SEC("kprobe/sys_execveat")
-int BPF_KPROBE_SYSCALL(kprobe__sys_execveat,
-                       int fd, const char __user *filename,
-                       const char __user *const __user *argv,
-                       const char __user *const __user *envp,
-                       int flags)
-{
-    return enter_exec(SP_EXECVEAT, ctx);
-}
-
-SEC("kprobe/sys_execve")
-int BPF_KPROBE_SYSCALL(kprobe__sys_execve,
-                       const char __user *filename,
-                       const char __user *const __user *argv,
-                       const char __user *const __user *envp)
-{
-    return enter_exec(SP_EXECVE, ctx);
-}
-
-SEC("kretprobe/ret_sys_execve")
-int kretprobe__ret_sys_execve(struct pt_regs *ctx)
-{
-    u64 pid_tgid = bpf_get_current_pid_tgid();
-    u64 *id = bpf_map_lookup_elem(&process_ids, &pid_tgid);
-    if (!id)
-        return 0;
-
-    // re-use the same ev to save stack space
-    telemetry_event_t sev = {0};
-    ptelemetry_event_t ev = &sev;
-
-    if (check_discard(ctx, ev, id))
-        goto Done;
-
-    push_exit_exec(ctx, *id, (file_info_t) {
-        .inode = 0,
-        .devmajor = 0,
-        .devminor = 0,
-    }, ev);
-
- Done:
-    bpf_map_delete_elem(&process_ids, &pid_tgid);
-    return 0;
-}
-
-SEC("kretprobe/ret_sys_execveat")
-int kretprobe__ret_sys_execveat(struct pt_regs *ctx)
-{
-    u64 pid_tgid = bpf_get_current_pid_tgid();
-    u64 *id = bpf_map_lookup_elem(&process_ids, &pid_tgid);
-    if (!id)
-        return 0;
-
-    // re-use the same ev to save stack space
-    telemetry_event_t sev = {0};
-    ptelemetry_event_t ev = &sev;
-
-    if (check_discard(ctx, ev, id))
-        goto Done;
-
-    push_exit_exec(ctx, *id, (file_info_t) {
-        .inode = 0,
-        .devmajor = 0,
-        .devminor = 0,
-    }, ev);
-
- Done:
-    bpf_map_delete_elem(&process_ids, &pid_tgid);
     return 0;
 }
 
@@ -760,18 +673,6 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_clone_4_8, unsigned long flags, void __user *
     return enter_clone(SP_CLONE, flags, stack, parent_tid, child_tid, tls, ctx, ppid, luid);
 }
 
-SEC("kprobe/sys_clone")
-#if defined(__TARGET_ARCH_x86)
-int BPF_KPROBE_SYSCALL(kprobe__sys_clone, unsigned long flags, void *stack,
-                       int *parent_tid, int *child_tid, unsigned long tls)
-#elif defined(__TARGET_ARCH_arm64)
-int BPF_KPROBE_SYSCALL(kprobe__sys_clone, unsigned long flags, void *stack,
-                       int *parent_tid, unsigned long tls, int *child_tid)
-#endif
-{
-    return enter_clone(SP_CLONE, flags, stack, parent_tid, child_tid, tls, ctx, -1, -1);
-}
-
 static __always_inline int enter_clone3(syscall_pattern_type_t sp, struct clone_args __user *uargs,
                                         size_t size, struct pt_regs *ctx, u32 ppid, u32 luid)
 {
@@ -887,74 +788,6 @@ int kretprobe__ret_sys_clone3(struct pt_regs *ctx)
     return exit_clone3(ctx);
 }
 
-// This probe can generically read the inode from a task_struct at any point
-// where the first argument is a pointer to a task_struct, the event emit
-// is a file type event with inode information, and a RETCODE with the correct
-// PID, intended for use with tracing exec family calls.
-SEC("kprobe/read_inode_task_struct")
-int kprobe__read_inode_task_struct(struct pt_regs *ctx)
-{
-    // get new current
-    void *ts = (void *)PT_REGS_PARM1(ctx);
-
-    // get the true pid
-    u32 pid = 0;
-    u32 tgid = 0;
-    read_value(ts, CRC_TASK_STRUCT_PID, &pid, sizeof(pid));
-    read_value(ts, CRC_TASK_STRUCT_TGID, &tgid, sizeof(tgid));
-    u64 pid_tgid = (u64)tgid << 32 | pid;
-
-    // Get the inode number and device number
-    u32 i_dev = 0;
-    u64 i_ino = 0;
-    void *ptr = NULL;
-    void *sptr = NULL;
-    read_value(ts, CRC_TASK_STRUCT_MM, &ptr, sizeof(ptr));
-    read_value(ptr, CRC_MM_STRUCT_EXE_FILE, &ptr, sizeof(ptr));
-    read_value(ptr, CRC_FILE_F_INODE, &ptr, sizeof(ptr));
-    read_value(ptr, CRC_INODE_I_SB, &sptr, sizeof(sptr));
-    read_value(sptr, CRC_SBLOCK_S_DEV, &i_dev, sizeof(i_dev));
-    read_value(ptr, CRC_INODE_I_INO, &i_ino, sizeof(i_ino));
-
-    u64 *id = bpf_map_lookup_elem(&process_ids, &pid_tgid);
-
-    if (!id)
-        return 0;
-
-    // prepare event
-    ptelemetry_event_t ev = &(telemetry_event_t){
-        .id = 0,
-        .telemetry_type = 0,
-        .u.v = {
-            .value[0] = '\0',
-            .truncated = FALSE,
-        },
-    };
-
-    ev->id = *id;
-    bpf_map_delete_elem(&process_ids, &pid_tgid);
-
-    file_info_t fi = {
-        .inode = i_ino,
-        .devmajor = MAJOR(i_dev),
-        .devminor = MINOR(i_dev),
-    };
-
-    bpf_get_current_comm(&fi.comm, sizeof(fi.comm));
-
-    ev->telemetry_type = TE_FILE_INFO;
-    __builtin_memcpy(&ev->u.file_info, &fi, sizeof(fi));
-    push_telemetry_event(ctx, ev);
-
-    // send retcode
-    ev->id = *id;
-    bpf_map_delete_elem(&process_ids, &pid_tgid);
-    ev->telemetry_type = TE_RETCODE;
-    ev->u.r.retcode = (u32)PT_REGS_RC(ctx);
-    ev->u.r.pid_tgid = pid_tgid;
-    push_telemetry_event(ctx, ev);
-    return 0;
-}
 
 // This probe can generically read the pid from a task_struct at any point
 // where the first argument is a pointer to a task_struct, the event emit
@@ -1007,18 +840,6 @@ int kprobe__read_pid_task_struct(struct pt_regs *ctx)
     ev->u.r.pid_tgid = pid_tgid;
     push_telemetry_event(ctx, ev);
     return 0;
-}
-
-SEC("kprobe/sys_fork")
-int BPF_KPROBE_SYSCALL(kprobe__sys_fork)
-{
-    return enter_clone(SP_FORK, 0, NULL, NULL, NULL, 0, ctx, -1, -1);
-}
-
-SEC("kprobe/sys_vfork")
-int BPF_KPROBE_SYSCALL(kprobe__sys_vfork)
-{
-    return enter_clone(SP_VFORK, 0, NULL, NULL, NULL, 0, ctx, -1, -1);
 }
 
 SEC("kprobe/sys_fork_4_8")
@@ -1116,12 +937,6 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_unshare_4_8, int flags)
     return enter_unshare(SP_UNSHARE, flags, ctx, ppid, luid);
 }
 
-SEC("kprobe/sys_unshare")
-int BPF_KPROBE_SYSCALL(kprobe__sys_unshare, int flags)
-{
-    return enter_unshare(SP_UNSHARE, flags, ctx, -1, -1);
-}
-
 SEC("kretprobe/ret_sys_unshare")
 int kretprobe__ret_sys_unshare(struct pt_regs *ctx)
 {
@@ -1182,70 +997,6 @@ int BPF_KPROBE_SYSCALL(kprobe__do_exit_4_8, int status)
     GET_OFFSETS_4_8;
     if (enter_exit(SP_EXIT, status, ctx, ppid, luid) < 0)
         return 0;
-    return exit_exit(ctx);
-}
-
-// do_exit probes must call enter_exit() and exit_exit() since do_exit is __no_return
-SEC("kprobe/do_exit")
-int BPF_KPROBE_SYSCALL(kprobe__do_exit, int status)
-{
-    // if PID != TGID, then exit, we only care when the entire group exits
-    u64 pid_tgid = bpf_get_current_pid_tgid();
-    if ((pid_tgid >> 32) ^ (pid_tgid & 0xFFFFFFFF))
-        return 0;
-    if (enter_exit(SP_EXIT, status, ctx, -1, -1) < 0)
-        return 0;
-    return exit_exit(ctx);
-}
-
-SEC("kprobe/sys_exit_4_8")
-int BPF_KPROBE_SYSCALL(kprobe__sys_exit_4_8, int status)
-{
-    // if PID != TGID, then exit, we only care when the entire group exits
-    u64 pid_tgid = bpf_get_current_pid_tgid();
-    if ((pid_tgid >> 32) ^ (pid_tgid & 0xFFFFFFFF))
-        return 0;
-
-    u32 ppid = -1;
-    u32 luid = -1;
-    GET_OFFSETS_4_8;
-    return enter_exit(SP_EXIT, status, ctx, ppid, luid);
-}
-
-SEC("kprobe/sys_exit")
-int BPF_KPROBE_SYSCALL(kprobe__sys_exit, int status)
-{
-    // if PID != TGID, then exit, we only care when the entire group exits
-    u64 pid_tgid = bpf_get_current_pid_tgid();
-    if ((pid_tgid >> 32) ^ (pid_tgid & 0xFFFFFFFF))
-        return 0;
-    return enter_exit(SP_EXIT, status, ctx, -1, -1);
-}
-
-SEC("kprobe/sys_exit_group_4_8")
-int BPF_KPROBE_SYSCALL(kprobe__sys_exit_group_4_8, int status)
-{
-    u32 ppid = -1;
-    u32 luid = -1;
-    GET_OFFSETS_4_8;
-    return enter_exit(SP_EXITGROUP, status, ctx, ppid, luid);
-}
-
-SEC("kprobe/sys_exit_group")
-int BPF_KPROBE_SYSCALL(kprobe__sys_exit_group, int status)
-{
-    return enter_exit(SP_EXITGROUP, status, ctx, -1, -1);
-}
-
-SEC("kretprobe/ret_sys_exit")
-int kretprobe__ret_sys_exit(struct pt_regs *ctx)
-{
-    return exit_exit(ctx);
-}
-
-SEC("kretprobe/ret_sys_exit_group")
-int kretprobe__ret_sys_exit_group(struct pt_regs *ctx)
-{
     return exit_exit(ctx);
 }
 
