@@ -163,59 +163,6 @@ static __always_inline void push_telemetry_event_reuse(struct pt_regs *ctx, ptel
     bpf_perf_event_output(ctx, &process_events, BPF_F_CURRENT_CPU, ev, sizeof(*ev));
 }
 
-#define SKIP_PATH                                    \
-    if (skipped >= to_skip)                          \
-        goto Send;                                   \
-    /* Skip to the parent directory */               \
-    bpf_probe_read(&ptr, sizeof(ptr), ptr + parent); \
-    skipped += 1;                                    \
-    if (!ptr)                                        \
-        goto Send;
-
-#define SKIP_PATH_N(N) REPEAT_##N(SKIP_PATH;)
-
-#define SEND_PATH(T)                                                        \
-    if (br == 0)                                                            \
-    {                                                                       \
-        if (bpf_probe_read(&offset, sizeof(offset), ptr + name) < 0)        \
-            goto Skip;                                                      \
-        if (!offset)                                                        \
-            goto Skip;                                                      \
-    }                                                                       \
-    ev->telemetry_type = T;                                                 \
-    ev->id = id;                                                            \
-    __builtin_memset(&ev->u.v.value, 0, VALUE_SIZE);                        \
-    count = bpf_probe_read_str(&ev->u.v.value, VALUE_SIZE, offset);         \
-    if (count < 0)                                                          \
-    {                                                                       \
-        goto Skip;                                                          \
-    }                                                                       \
-    else if (count == VALUE_SIZE)                                           \
-    {                                                                       \
-        br = 1;                                                             \
-        ev->u.v.truncated = TRUE;                                           \
-        offset = offset + VALUE_SIZE;                                       \
-        push_telemetry_event(ctx, ev);                                      \
-    }                                                                       \
-    else                                                                    \
-    {                                                                       \
-        /* save it here since push_telemetry_event clears ev */             \
-        br = ev->u.v.value[0];                                              \
-        ev->u.v.truncated = FALSE;                                          \
-        push_telemetry_event(ctx, ev);                                      \
-        if (br == '/')                                                      \
-            goto Skip;                                                      \
-        /* we're done here, follow the pointer */                           \
-        void *old_ptr = ptr;                                                \
-        bpf_probe_read(&ptr, sizeof(ptr), ptr + parent);                    \
-        if (!ptr || old_ptr == ptr)                                         \
-            goto Skip;                                                      \
-        to_skip += 1;                                                       \
-        br = 0;                                                             \
-    }
-
-#define SEND_PATH_N(N, T) REPEAT_##N(SEND_PATH(T);)
-
 static __always_inline bool check_discard(struct pt_regs *ctx, ptelemetry_event_t ev, u64 *id)
 {
     u32 retcode = (u32)PT_REGS_RC(ctx);
@@ -328,21 +275,62 @@ static __always_inline void push_path(struct pt_regs *ctx, ptelemetry_event_t ev
 
     u32 to_skip = 0;
     u32 *to_skip_p = (u32 *)bpf_map_lookup_elem(&read_path_skip, &to_skip);
-    if (to_skip_p)
-    {
+    if (to_skip_p) {
         to_skip = *to_skip_p;
     }
 
+    // go up to 125 directories up
     u32 skipped = 0;
-    if (to_skip != 0)
-    {
-        SKIP_PATH_N(125);
+    if (to_skip != 0) {
+        // this number is large enough that we have to be explicit
+        // when telling clang
+        #pragma unroll 125
+        for (int i = 0; i < 125; i++) {
+            // Skip to the parent directory
+            bpf_probe_read(&ptr, sizeof(ptr), ptr + parent);
+            if (!ptr) break;
+
+            skipped += 1;
+            if (skipped >= to_skip) break;
+        }
     }
 
-Send:;
-    char br = 0;
-    int count = 0;
-    SEND_PATH_N(10, type);
+    char truncated = 0;
+
+    // get the event setup
+    ev -> id = id;
+    ev -> telemetry_type = type;
+
+    #pragma unroll
+    for (int i = 0; i < 10; i++) {
+        if (truncated == 0) {
+            if (bpf_probe_read(&offset, sizeof(offset), ptr + name) < 0) goto Skip;
+            if (!offset) goto Skip;
+        }
+
+        int count = bpf_probe_read_str(&ev->u.v.value, VALUE_SIZE, offset);
+        if (count < 0) goto Skip;
+
+        if (count == VALUE_SIZE) {
+            truncated = 1;
+            ev->u.v.truncated = TRUE;
+            offset = offset + VALUE_SIZE;
+            push_telemetry_event_reuse(ctx, ev);
+        } else {
+            ev->u.v.truncated = FALSE;
+            push_telemetry_event_reuse(ctx, ev);
+
+            // get the parent
+            void *old_ptr = ptr;
+            bpf_probe_read(&ptr, sizeof(ptr), ptr + parent);
+
+            // there is no parent or parent points to itself
+            if (!ptr || old_ptr == ptr) goto Skip;
+
+            to_skip += 1;
+            truncated = 0;
+        }
+    }
 
     // update to_skip, reuse skipped as index by resetting it
     skipped = 0;
