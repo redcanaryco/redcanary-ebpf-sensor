@@ -289,30 +289,11 @@ typedef struct
 typedef struct
 {
     u64 flags;
-    u64 stack;
-    u32 parent_tid;
-    u32 child_tid;
-    u64 tls;
-    u64 p_ptr;
-    u64 c_ptr;
 } clone_info_t, *pclone_info_t;
 
 typedef struct
 {
     u64 flags;
-    u64 pidfd;
-    u64 child_tid;
-    u64 parent_tid;
-    u64 exit_signal;
-    u64 stack;
-    u64 stack_size;
-    u64 tls;
-    u64 set_tid;
-    u64 set_tid_size;
-    u64 cgroup;
-    u64 c_ptr;
-    u64 p_ptr;
-    u64 size;
 } clone3_info_t, *pclone3_info_t;
 
 typedef struct
