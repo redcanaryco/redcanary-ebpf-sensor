@@ -111,6 +111,7 @@ typedef enum
     TE_SCRIPT,
     TE_CHAR_STR,
     TE_DISCARD,
+    TE_ENTER_DONE,
 } telemetry_event_type_t;
 
 #define COMMON_FIELDS \
@@ -239,7 +240,6 @@ typedef struct
     u32 luid;
     u32 euid;
     u32 egid;
-    char comm[16];
 } syscall_info_t, *psyscall_info_t;
 
 enum direction_t

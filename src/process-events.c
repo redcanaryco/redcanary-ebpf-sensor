@@ -150,6 +150,21 @@ int kprobe__do_mount(struct pt_regs *ctx)
     return 0;
 }
 
+// returns NULL if offsets hav enot yet been loaded
+static __always_inline void* offset_loaded()
+{
+    u64 offset = CRC_LOADED;
+    return bpf_map_lookup_elem(&offsets, &offset);
+}
+
+// returns NULL if the task_struct belongs to a kernel process
+static __always_inline void* is_user_process(void *ts)
+{
+    void *mmptr = NULL;
+    read_value(ts, CRC_TASK_STRUCT_MM, &mmptr, sizeof(mmptr));
+    return mmptr;
+}
+
 static __always_inline void push_telemetry_event(struct pt_regs *ctx, ptelemetry_event_t ev)
 {
     bpf_perf_event_output(ctx, &process_events, BPF_F_CURRENT_CPU, ev, sizeof(*ev));
@@ -163,14 +178,64 @@ static __always_inline void push_telemetry_event_reuse(struct pt_regs *ctx, ptel
     bpf_perf_event_output(ctx, &process_events, BPF_F_CURRENT_CPU, ev, sizeof(*ev));
 }
 
-static __always_inline bool check_discard(struct pt_regs *ctx, ptelemetry_event_t ev, u64 *id)
+// sends TE_ENTER_DONE to signal the end of an enter_* event (i.e, a
+// kprobe). Re-uses ev->id but sets the other fields.
+static __always_inline void push_enter_done(struct pt_regs *ctx, ptelemetry_event_t ev)
+{
+    ev->telemetry_type = TE_ENTER_DONE;
+
+    // not used for anything but it feels weird not to reset the union
+    // holding the event data so we putting a dummy value.
+    ev->u.r.retcode = 0;
+    push_telemetry_event_reuse(ctx, ev);
+}
+
+// Sends the syscall event, setting up ev with a new ev->id to be used
+// for any future events related to the same syscall. If an event was
+// not sent -1 is returned, 0 otherwise.
+static __always_inline int push_syscall(struct pt_regs *ctx, ptelemetry_event_t ev,
+                                        syscall_pattern_type_t sp, void *ts, u64 pid_tgid)
+{
+    if (!offset_loaded()) return -1;
+    if (!is_user_process(ts)) return -1;
+
+    void *ptr = NULL;
+    read_value(ts, CRC_TASK_STRUCT_REAL_PARENT, &ptr, sizeof(ptr));
+
+    u32 ppid = -1;
+    read_value(ptr, CRC_TASK_STRUCT_TGID, &ppid, sizeof(ppid));
+
+    u32 luid = -1;
+    read_value(ts, CRC_TASK_STRUCT_LOGINUID, &luid, sizeof(luid));
+
+    u64 uid_gid = bpf_get_current_uid_gid();
+
+    ev->id = bpf_get_prandom_u32();
+    ev->telemetry_type = TE_SYSCALL_INFO;
+    ev->u.syscall_info = (syscall_info_t) {
+        .pid = pid_tgid >> 32,
+        .tid = pid_tgid & 0xFFFFFFFF,
+        .ppid = ppid,
+        .luid = luid,
+        .euid = uid_gid >> 32,
+        .egid = uid_gid & 0xFFFFFFFF,
+        .mono_ns = bpf_ktime_get_ns(),
+        .syscall_pattern = sp,
+    };
+
+    push_telemetry_event_reuse(ctx, ev);
+    bpf_map_update_elem(&process_ids, &pid_tgid, &ev->id, BPF_ANY);
+
+    return 0;
+}
+
+static __always_inline bool check_discard(struct pt_regs *ctx, ptelemetry_event_t ev)
 {
     u32 retcode = (u32)PT_REGS_RC(ctx);
     if (retcode != 0) {
-        ev->id = *id;
         ev->telemetry_type = TE_DISCARD;
         ev->u.r.retcode = retcode;
-        push_telemetry_event(ctx, ev);
+        push_telemetry_event_reuse(ctx, ev);
 
         return true;
     }
@@ -180,14 +245,8 @@ static __always_inline bool check_discard(struct pt_regs *ctx, ptelemetry_event_
 
 static __always_inline void* get_current_exe()
 {
-    u64 offset_key = CRC_LOADED;
-    void *offset = bpf_map_lookup_elem(&offsets, &offset_key);
-    if (!offset)
-        return NULL;
-
     void *ts = (void *)bpf_get_current_task();
-    if (!ts)
-        return NULL;
+    if (!ts) return NULL;
 
     void *ptr = NULL;
     read_value(ts, CRC_TASK_STRUCT_MM, &ptr, sizeof(ptr));
@@ -207,29 +266,35 @@ static __always_inline file_info_t extract_file_info(void *ptr)
     read_value(sptr, CRC_SBLOCK_S_DEV, &i_dev, sizeof(i_dev));
     read_value(ptr, CRC_INODE_I_INO, &i_ino, sizeof(i_ino));
 
-    return (file_info_t) {
+    file_info_t file_info = {
         .inode = i_ino,
         .devmajor = MAJOR(i_dev),
         .devminor = MINOR(i_dev),
     };
+
+    bpf_get_current_comm(&file_info.comm, sizeof(file_info.comm));
+
+    return file_info;
 }
 
-static __always_inline void push_exit_exec(struct pt_regs *ctx, u64 id,
-                                           file_info_t file_info, ptelemetry_event_t ev)
+static __always_inline void push_exit_exec(struct pt_regs *ctx, ptelemetry_event_t ev,
+                                           void *exe)
 {
-    ev->id = id;
-    ev->telemetry_type = TE_FILE_INFO;
-    ev->u.file_info = file_info;
-    bpf_get_current_comm(&ev->u.file_info.comm, sizeof(ev->u.file_info.comm));
-    push_telemetry_event(ctx, ev);
+    // TODO: Someday we should be smarter about this code and combine
+    // them into a single message. There is no reason to send two
+    // messages.
 
-    ev->id = id;
+    ev->telemetry_type = TE_FILE_INFO;
+    ev->u.file_info = extract_file_info(exe);
+    push_telemetry_event_reuse(ctx, ev);
+
     ev->telemetry_type = TE_RETCODE;
     ev->u.r.retcode = (u32)PT_REGS_RC(ctx);
-    push_telemetry_event(ctx, ev);
+    push_telemetry_event_reuse(ctx, ev);
 }
 
-static __always_inline int push_string(struct pt_regs *ctx, ptelemetry_event_t ev, const char *ptr)
+static __always_inline int push_string(struct pt_regs *ctx, ptelemetry_event_t ev,
+                                       const char *ptr)
 {
     #pragma unroll
     for (int j = 0; j < 5; j++) {
@@ -256,8 +321,7 @@ static __always_inline int push_string(struct pt_regs *ctx, ptelemetry_event_t e
 }
 
 static __always_inline void push_path(struct pt_regs *ctx, ptelemetry_event_t ev,
-                                      void *ptr, tail_call_slot_t slot,
-                                      telemetry_event_type_t type, u64 id) {
+                                      void *ptr, tail_call_slot_t slot) {
     if (read_value(ptr, CRC_PATH_DENTRY, &ptr, sizeof(ptr)) < 0) // path->d_entry
         goto Skip;
 
@@ -296,10 +360,6 @@ static __always_inline void push_path(struct pt_regs *ctx, ptelemetry_event_t ev
     }
 
     char truncated = 0;
-
-    // get the event setup
-    ev -> id = id;
-    ev -> telemetry_type = type;
 
     #pragma unroll
     for (int i = 0; i < 10; i++) {
@@ -344,21 +404,14 @@ Skip:
     bpf_map_delete_elem(&read_path_skip, &skipped);
 }
 
-static __always_inline int process_argv(struct pt_regs *ctx,
-                                        const char __user *const __user *argv,
-                                        u32 tail_index) {
+static __always_inline int process_argv(struct pt_regs *ctx, ptelemetry_event_t ev,
+                                        const char __user *const __user *argv, u32 tail_index) {
     u64 pid_tgid = bpf_get_current_pid_tgid();
     u64 *idp = bpf_map_lookup_elem(&process_ids, &pid_tgid);
-    if (idp == NULL) return 0;
+    if (idp == NULL) return -1;
 
-    telemetry_event_t tev = {
-        .id = *idp,
-        .telemetry_type = TE_COMMAND_LINE,
-        .u.v = {
-            .value[0] = '\0',
-            .truncated = FALSE,
-        },
-    };
+    ev->id = *idp;
+    ev->telemetry_type = TE_COMMAND_LINE;
 
     u32 always_zero = 0;
     u32 arg_num = 0;
@@ -380,7 +433,7 @@ static __always_inline int process_argv(struct pt_regs *ctx,
         // we are ignoring the case of the string having been too
         // large. If this becomes a problem in practice we can tweak
         // the values somewhat.
-        if (push_string(ctx, &tev, ptr) < 0) goto Next;
+        if (push_string(ctx, ev, ptr) < 0) goto Next;
 
         arg_num++;
     }
@@ -394,45 +447,39 @@ Next:;
     return 0;
 }
 
-static __always_inline u64 enter_exec_4_11(syscall_pattern_type_t sp,
-                                           struct pt_regs *ctx,
-                                           u32 ppid, u32 luid,
-                                           ptelemetry_event_t ev)
+static __always_inline int enter_exec_4_11(struct pt_regs *ctx, ptelemetry_event_t ev,
+                                           syscall_pattern_type_t sp)
 {
     // if the ID already exists, we are tail-calling into ourselves, skip ahead to reading the path
-    u64 p_t = bpf_get_current_pid_tgid();
-    u64 *id_p = bpf_map_lookup_elem(&process_ids, &p_t);
-    u64 id = 0;
-    if (id_p)
-    {
-        id = *id_p;
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+    u64 *id_p = bpf_map_lookup_elem(&process_ids, &pid_tgid);
+
+    void *ts = (void *)bpf_get_current_task();
+    if (!ts) return -1;
+
+    if (id_p) {
+        ev->id = *id_p;
         goto Pwd;
     }
 
-    id = bpf_get_prandom_u32();
-
-    ev->id = id;
-    FILL_TELEMETRY_SYSCALL_EVENT(ev, sp, ppid, luid);
-    push_telemetry_event(ctx, ev);
-
-    bpf_map_update_elem(&process_ids, &pid_tgid, &id, BPF_ANY);
+    if (push_syscall(ctx, ev, sp, ts, pid_tgid) < 0) return -1;
 
     u32 to_skip = 0;
     bpf_map_update_elem(&read_path_skip, &to_skip, &to_skip, BPF_ANY);
 
 Pwd:;
-    // the verifier complains if these are instantiated before the Pwd:; label
-    void *ptr = (void *)bpf_get_current_task();
-    if (read_value(ptr, CRC_TASK_STRUCT_FS, &ptr, sizeof(ptr)) < 0) // task_struct->fs
-        return id;
+    void *pwd_ptr = NULL;
+    // task_struct->fs
+    if (read_value(ts, CRC_TASK_STRUCT_FS, &pwd_ptr, sizeof(pwd_ptr)) < 0) return 0;
 
-    ptr = offset_ptr(ptr, CRC_FS_STRUCT_PWD); // &(fs->pwd)
-    if (ptr == NULL)
-        return id;
+    // &(fs->pwd)
+    pwd_ptr = offset_ptr(pwd_ptr, CRC_FS_STRUCT_PWD);
+    if (pwd_ptr == NULL) return 0;
 
-    push_path(ctx, ev, ptr, SYS_EXECVE_4_11, TE_PWD, id);
+    ev->telemetry_type = TE_PWD;
+    push_path(ctx, ev, pwd_ptr, SYS_EXECVE_4_11);
 
-    return id;
+    return 0;
 }
 
 SEC("kprobe/sys_execve_tc_argv")
@@ -440,7 +487,17 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execve_tc_argv,
                        const char __user *filename,
                        const char __user *const __user *argv)
 {
-    return process_argv(ctx, argv, SYS_EXECVE_TC_ARGV);
+    telemetry_event_t sev = {0};
+
+    if (process_argv(ctx, &sev, argv, SYS_EXECVE_TC_ARGV) < 0) return 0;
+
+    // pushing arguments are the last thing our execve* kprobes do. If
+    // this code is changed such that we tail call into another
+    // program afterwards we need to change where we push the done
+    // event.
+    push_enter_done(ctx, &sev);
+
+    return 0;
 }
 
 SEC("kprobe/sys_execveat_tc_argv")
@@ -448,7 +505,17 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execveat_tc_argv,
                        int fd, const char __user *filename,
                        const char __user *const __user *argv)
 {
-    return process_argv(ctx, argv, SYS_EXECVEAT_TC_ARGV);
+    telemetry_event_t sev = {0};
+
+    if (process_argv(ctx, &sev, argv, SYS_EXECVEAT_TC_ARGV) < 0) return 0;
+
+    // pushing arguments are the last thing our execve* kprobes do. If
+    // this code is changed such that we tail call into another
+    // program afterwards we need to change where we push the done
+    // event.
+    push_enter_done(ctx, &sev);
+
+    return 0;
 }
 
 SEC("kprobe/sys_execveat_4_11")
@@ -458,16 +525,17 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execveat_4_11,
                        const char __user *const __user *envp,
                        int flags)
 {
-    u32 ppid = -1;
-    u32 luid = -1;
-    GET_OFFSETS_4_8;
-
     // create the event early so it can be re-used to save stack space
     telemetry_event_t sev = {0};
-    ptelemetry_event_t ev = &sev;
 
-    enter_exec_4_11(SP_EXECVEAT, ctx, ppid, luid, ev);
+    // OK to return early. No events are sent on a -1
+    if (enter_exec_4_11(ctx, &sev, SP_EXECVEAT) < 0) return 0;
 
+    // WARNING: sys_execveat_tc_argv relies on it sending the *last*
+    // telemetry originating from this kprobe. If you change this code
+    // such that this tail call is somehow no longer the last action
+    // (e.g., tail call to itself instead of separate program) you
+    // need to change where we send the TE_ENTER_DONE event
     bpf_tail_call(ctx, &tail_call_table, SYS_EXECVEAT_TC_ARGV);
 
     return 0;
@@ -479,28 +547,30 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execve_4_11,
                        const char __user *const __user *argv,
                        const char __user *const __user *envp)
 {
-    u32 ppid = -1;
-    u32 luid = -1;
-    GET_OFFSETS_4_8;
-
     // create the event early so it can be re-used to save stack space
     telemetry_event_t sev = {0};
 
-    u64 id = enter_exec_4_11(SP_EXECVE, ctx, ppid, luid, &sev);
+    // OK to return early. No events are sent on a -1
+    if (enter_exec_4_11(ctx, &sev, SP_EXECVE) < 0) return 0;
 
-    if (!filename)
-        goto Next;
+    // A filename should always be here but just in case do not return
+    // early in its absence because we still want to tail call for
+    // argv to trigger `TE_ENTER_DONE`
+    if (filename) {
+        sev.telemetry_type = TE_EXEC_FILENAME;
+        sev.u.v.value[0] = '\0';
+        sev.u.v.truncated = FALSE;
 
-    sev.id = id;
-    sev.telemetry_type = TE_EXEC_FILENAME;
-    sev.u.v.value[0] = '\0';
-    sev.u.v.truncated = FALSE;
+        push_string(ctx, &sev, filename);
+    }
 
-    push_string(ctx, &sev, filename);
-
+    // WARNING: sys_execve_tc_argv relies on it sending the *last*
+    // telemetry originating from this kprobe. If you change this code
+    // such that this tail call is somehow no longer the last action
+    // (e.g., tail call to itself instead of separate program) you
+    // need to change where we send the TE_ENTER_DONE event
     bpf_tail_call(ctx, &tail_call_table, SYS_EXECVE_TC_ARGV);
 
-Next:
     return 0;
 }
 
@@ -509,21 +579,18 @@ int kretprobe__ret_sys_execve_4_8(struct pt_regs *ctx)
 {
     u64 pid_tgid = bpf_get_current_pid_tgid();
     u64 *id = bpf_map_lookup_elem(&process_ids, &pid_tgid);
-    if (!id)
-        return 0;
+    if (!id) return 0;
 
     // re-use the same ev to save stack space
     telemetry_event_t sev = {0};
-    ptelemetry_event_t ev = &sev;
+    sev.id = *id;
 
-    if (check_discard(ctx, ev, id))
-        goto Done;
+    if (check_discard(ctx, &sev)) goto Done;
 
     void *ptr = get_current_exe();
-    if (!ptr)
-        goto Done;
+    if (!ptr) goto Done;
 
-    push_exit_exec(ctx, *id, extract_file_info(ptr), ev);
+    push_exit_exec(ctx, &sev, ptr);
 
 Done:
     bpf_map_delete_elem(&process_ids, &pid_tgid);
@@ -535,24 +602,22 @@ int kretprobe__ret_sys_execveat_4_8(struct pt_regs *ctx)
 {
     u64 pid_tgid = bpf_get_current_pid_tgid();
     u64 *id = bpf_map_lookup_elem(&process_ids, &pid_tgid);
-    if (!id)
-        return 0;
+    if (!id) return 0;
 
     // re-use the same ev to save stack space
     telemetry_event_t sev = {0};
-    ptelemetry_event_t ev = &sev;
+    sev.id = *id;
 
-    if (check_discard(ctx, ev, id))
-        goto Done;
+    if (check_discard(ctx, &sev)) goto Done;
 
     void *ptr = get_current_exe();
-    if (!ptr)
-        goto Done;
+    if (!ptr) goto Done;
 
+    sev.telemetry_type = TE_EXEC_FILENAME_REV;
     void *path = offset_ptr(ptr, CRC_FILE_F_PATH);
-    push_path(ctx, ev, path, RET_SYS_EXECVEAT_4_8, TE_EXEC_FILENAME_REV, *id);
+    push_path(ctx, &sev, path, RET_SYS_EXECVEAT_4_8);
 
-    push_exit_exec(ctx, *id, extract_file_info(ptr), ev);
+    push_exit_exec(ctx, &sev, ptr);
 
 Done:
     bpf_map_delete_elem(&process_ids, &pid_tgid);
