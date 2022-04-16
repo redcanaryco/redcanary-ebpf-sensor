@@ -635,7 +635,7 @@ static __always_inline int exit_clone(struct pt_regs *ctx, ptelemetry_event_t ev
     bpf_map_delete_elem(&process_ids, &pid_tgid);
     ev->telemetry_type = TE_RETCODE;
     ev->u.r.retcode = (u32)PT_REGS_RC(ctx);
-    push_telemetry_event(ctx, ev);
+    push_telemetry_event_reuse(ctx, ev);
 
     return 0;
 }
@@ -690,7 +690,7 @@ static __always_inline int exit_clone3(struct pt_regs *ctx, ptelemetry_event_t e
     bpf_map_delete_elem(&process_ids, &pid_tgid);
     ev->telemetry_type = TE_RETCODE;
     ev->u.r.retcode = (u32)PT_REGS_RC(ctx);
-    push_telemetry_event(ctx, ev);
+    push_telemetry_event_reuse(ctx, ev);
 
     return 0;
 }
@@ -746,9 +746,7 @@ int kprobe__read_pid_task_struct(struct pt_regs *ctx)
     // combine to find ID, get ID
     u64 ppid_tgid = (u64)ptgid << 32 | ppid;
     u64 *id = bpf_map_lookup_elem(&process_ids, &ppid_tgid);
-
-    if (!id)
-        return 0;
+    if (!id) return 0;
 
     // send event with ID
     telemetry_event_t sev = {0};
@@ -757,7 +755,8 @@ int kprobe__read_pid_task_struct(struct pt_regs *ctx)
     bpf_map_delete_elem(&process_ids, &ppid_tgid);
     sev.telemetry_type = TE_RETCODE;
     sev.u.r.pid_tgid = pid_tgid;
-    push_telemetry_event(ctx, &sev);
+    push_telemetry_event_reuse(ctx, &sev);
+
     return 0;
 }
 
@@ -809,69 +808,60 @@ int kretprobe__ret_sys_vfork(struct pt_regs *ctx)
     return 0;
 }
 
-static __always_inline int enter_unshare(syscall_pattern_type_t sp, int flags,
-                                         struct pt_regs *ctx, u32 ppid, u32 luid)
+static __always_inline int enter_unshare(struct pt_regs *ctx, ptelemetry_event_t ev,
+                                         syscall_pattern_type_t sp, int flags)
 {
-    telemetry_event_t sev = {0};
-    ptelemetry_event_t ev = &sev;
+    void *ts = (void *)bpf_get_current_task();
+    if (!ts) return -1;
 
-    u64 id = bpf_get_prandom_u32();
+    // TODO: It would be more efficient to combine these into a single
+    // message
 
-    ev->id = id;
-    FILL_TELEMETRY_SYSCALL_EVENT(ev, sp, ppid, luid);
-    push_telemetry_event(ctx, ev);
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+    if (push_syscall(ctx, ev, sp, ts, pid_tgid) < 0) return -1;
 
-    ev->id = id;
     ev->telemetry_type = TE_UNSHARE_FLAGS;
     ev->u.unshare_flags = flags;
-    push_telemetry_event(ctx, ev);
-
-    bpf_map_update_elem(&process_ids, &pid_tgid, &id, BPF_ANY);
+    push_telemetry_event_reuse(ctx, ev);
 
     return 0;
 }
 
-static __always_inline int exit_unshare(struct pt_regs *ctx)
+static __always_inline int exit_unshare(struct pt_regs *ctx, ptelemetry_event_t ev)
 {
 
     u64 pid_tgid = bpf_get_current_pid_tgid();
     u64 *id = bpf_map_lookup_elem(&process_ids, &pid_tgid);
+    if (!id) return -1;
 
-    if (!id)
-        goto Flush;
-
-    ptelemetry_event_t ev = &(telemetry_event_t){
-        .id = 0,
-        .telemetry_type = 0,
-        .u.v = {
-            .value[0] = '\0',
-            .truncated = FALSE,
-        },
-    };
     ev->id = *id;
     bpf_map_delete_elem(&process_ids, &pid_tgid);
 
     ev->telemetry_type = TE_RETCODE;
     ev->u.r.retcode = (u32)PT_REGS_RC(ctx);
-    push_telemetry_event(ctx, ev);
+    push_telemetry_event_reuse(ctx, ev);
 
-Flush:
     return 0;
 }
 
 SEC("kprobe/sys_unshare_4_8")
 int BPF_KPROBE_SYSCALL(kprobe__sys_unshare_4_8, int flags)
 {
-    u32 ppid = -1;
-    u32 luid = -1;
-    GET_OFFSETS_4_8;
-    return enter_unshare(SP_UNSHARE, flags, ctx, ppid, luid);
+    telemetry_event_t sev = {0};
+    if (enter_unshare(ctx, &sev, SP_UNSHARE, flags) < 0) return 0;
+
+    push_enter_done(ctx, &sev);
+
+    return 0;
 }
 
 SEC("kretprobe/ret_sys_unshare")
 int kretprobe__ret_sys_unshare(struct pt_regs *ctx)
 {
-    return exit_unshare(ctx);
+    telemetry_event_t sev = {0};
+    exit_unshare(ctx, &sev);
+
+    return 0;
 }
 
 static __always_inline int enter_exit(syscall_pattern_type_t sp, int status,
