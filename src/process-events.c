@@ -70,45 +70,6 @@ struct bpf_map_def SEC("maps/tail_call_table") tail_call_table = {
     .namespace = "",
 };
 
-#define FILL_TELEMETRY_SYSCALL_EVENT(E, SP, PPID, LUID) \
-    u64 pid_tgid = bpf_get_current_pid_tgid();          \
-    u64 uid_gid = bpf_get_current_uid_gid();            \
-    E->telemetry_type = TE_SYSCALL_INFO;                \
-    E->u.syscall_info.pid = pid_tgid >> 32;             \
-    E->u.syscall_info.tid = pid_tgid & 0xFFFFFFFF;      \
-    E->u.syscall_info.ppid = PPID;                      \
-    E->u.syscall_info.luid = LUID;                      \
-    E->u.syscall_info.euid = uid_gid >> 32;             \
-    E->u.syscall_info.egid = uid_gid & 0xFFFFFFFF;      \
-    E->u.syscall_info.mono_ns = bpf_ktime_get_ns();     \
-    E->u.syscall_info.syscall_pattern = SP;
-
-#define GET_OFFSETS_4_8                                                                                 \
-    /* if "loaded" doesn't exist in the map, we get NULL back and won't read from offsets               \
-     * when offsets are loaded into the offsets map, "loaded" should be given any value                 \
-     */                                                                                                 \
-    u64 offset = CRC_LOADED;                                                                            \
-    offset = (u64)bpf_map_lookup_elem(&offsets, &offset); /* squeezing out as much stack as possible */ \
-    /* if CRC_LOADED is not in the map it means we are too early in the ebpf program loading       */   \
-    if (!offset) return 0;                                                                              \
-    /* since we're using offsets to read from the structs, we don't need to bother with                 \
-     * understanding their structure                                                                    \
-     */                                                                                                 \
-    void *ts = (void *)bpf_get_current_task();                                                          \
-    void *ptr = NULL;                                                                                   \
-    void *mmptr = NULL;                                                                                 \
-    if (ts)                                                                                             \
-    {                                                                                                   \
-        /* check mm field of task_struct                                                                \
-         * skip kernel processes as they have an mm field of NULL                                       \
-         */                                                                                             \
-        read_value(ts, CRC_TASK_STRUCT_MM, &mmptr, sizeof(mmptr));                                      \
-        if (!mmptr) return 0;                                                                           \
-        read_value(ts, CRC_TASK_STRUCT_REAL_PARENT, &ptr, sizeof(ptr));                                 \
-        read_value(ptr, CRC_TASK_STRUCT_TGID, &ppid, sizeof(ppid));                                     \
-        read_value(ts, CRC_TASK_STRUCT_LOGINUID, &luid, sizeof(luid));                                  \
-    }
-
 SEC("kprobe/do_mount")
 int kprobe__do_mount(struct pt_regs *ctx)
 {
@@ -129,14 +90,15 @@ int kprobe__do_mount(struct pt_regs *ctx)
     return 0;
 }
 
-// returns NULL if offsets hav enot yet been loaded
+// returns NULL if offsets have not yet been loaded
 static __always_inline void* offset_loaded()
 {
     u64 offset = CRC_LOADED;
     return bpf_map_lookup_elem(&offsets, &offset);
 }
 
-// returns NULL if the task_struct belongs to a kernel process
+// accepts a pointer a `task_struct`. Returns NULL if the task_struct
+// belongs to a kernel process
 static __always_inline void* is_user_process(void *ts)
 {
     void *mmptr = NULL;
@@ -144,15 +106,11 @@ static __always_inline void* is_user_process(void *ts)
     return mmptr;
 }
 
+// pushes a telemetry event to the process_events perfmap for the
+// current CPU. The event is purposefully not cleared so its data (in
+// particular ev->id, and ev->telemetry_type) can be reused if
+// necessary.
 static __always_inline void push_telemetry_event(struct pt_regs *ctx, ptelemetry_event_t ev)
-{
-    bpf_perf_event_output(ctx, &process_events, BPF_F_CURRENT_CPU, ev, sizeof(*ev));
-    __builtin_memset(ev, 0, sizeof(telemetry_event_t));
-}
-
-// same as push_telemetry_event but does not clear the event so it can
-// be reused. Useful when writing loops
-static __always_inline void push_telemetry_event_reuse(struct pt_regs *ctx, ptelemetry_event_t ev)
 {
     bpf_perf_event_output(ctx, &process_events, BPF_F_CURRENT_CPU, ev, sizeof(*ev));
 }
@@ -166,7 +124,7 @@ static __always_inline void push_enter_done(struct pt_regs *ctx, ptelemetry_even
     // not used for anything but it feels weird not to reset the union
     // holding the event data so we putting a dummy value.
     ev->u.r.retcode = 0;
-    push_telemetry_event_reuse(ctx, ev);
+    push_telemetry_event(ctx, ev);
 }
 
 // Pushes the syscall event, setting up ev with a new event id
@@ -204,14 +162,14 @@ static __always_inline int push_syscall(struct pt_regs *ctx, ptelemetry_event_t 
         .syscall_pattern = sp,
     };
 
-    push_telemetry_event_reuse(ctx, ev);
+    push_telemetry_event(ctx, ev);
 
     return 0;
 }
 
-// A wrapper around push_syscall that additionally adds inserts a new
-// entry into the process_ids map with the pid_tgid as the key and the
-// event id as the value. This is useful if you need to retrieve the
+// A wrapper around push_syscall that additionally inserts a new entry
+// into the process_ids map with the pid_tgid as the key and the event
+// id as the value. This is useful if you need to retrieve the
 // event_id in a separate program (such as the kretprobe counterpart
 // to a kprobe).
 static __always_inline int start_syscall(struct pt_regs *ctx, ptelemetry_event_t ev,
@@ -230,7 +188,7 @@ static __always_inline bool check_discard(struct pt_regs *ctx, ptelemetry_event_
     if (retcode != 0) {
         ev->telemetry_type = TE_DISCARD;
         ev->u.r.retcode = retcode;
-        push_telemetry_event_reuse(ctx, ev);
+        push_telemetry_event(ctx, ev);
 
         return true;
     }
@@ -280,11 +238,11 @@ static __always_inline void push_exit_exec(struct pt_regs *ctx, ptelemetry_event
 
     ev->telemetry_type = TE_FILE_INFO;
     ev->u.file_info = extract_file_info(exe);
-    push_telemetry_event_reuse(ctx, ev);
+    push_telemetry_event(ctx, ev);
 
     ev->telemetry_type = TE_RETCODE;
     ev->u.r.retcode = (u32)PT_REGS_RC(ctx);
-    push_telemetry_event_reuse(ctx, ev);
+    push_telemetry_event(ctx, ev);
 }
 
 static __always_inline int push_string(struct pt_regs *ctx, ptelemetry_event_t ev,
@@ -298,7 +256,7 @@ static __always_inline int push_string(struct pt_regs *ctx, ptelemetry_event_t e
         // no more truncating; argument is done
         if (count < VALUE_SIZE) {
             ev->u.v.truncated = FALSE;
-            push_telemetry_event_reuse(ctx, ev);
+            push_telemetry_event(ctx, ev);
 
             return 0;
         }
@@ -306,7 +264,7 @@ static __always_inline int push_string(struct pt_regs *ctx, ptelemetry_event_t e
         // mark it as truncated; get next chunk of same arg
         ev->u.v.truncated = TRUE;
         ptr+=VALUE_SIZE;
-        push_telemetry_event_reuse(ctx, ev);
+        push_telemetry_event(ctx, ev);
     }
 
     // if we get here it means that the string was larger than 5 *
@@ -369,10 +327,10 @@ static __always_inline void push_path(struct pt_regs *ctx, ptelemetry_event_t ev
             truncated = 1;
             ev->u.v.truncated = TRUE;
             offset = offset + VALUE_SIZE;
-            push_telemetry_event_reuse(ctx, ev);
+            push_telemetry_event(ctx, ev);
         } else {
             ev->u.v.truncated = FALSE;
-            push_telemetry_event_reuse(ctx, ev);
+            push_telemetry_event(ctx, ev);
 
             // get the parent
             void *old_ptr = ptr;
@@ -635,7 +593,7 @@ static __always_inline int enter_clone(struct pt_regs *ctx, ptelemetry_event_t e
     ev->u.clone_info = (clone_info_t) {
         .flags = flags,
     };
-    push_telemetry_event_reuse(ctx, ev);
+    push_telemetry_event(ctx, ev);
 
     return 0;
 }
@@ -651,7 +609,7 @@ static __always_inline int exit_clone(struct pt_regs *ctx, ptelemetry_event_t ev
     bpf_map_delete_elem(&process_ids, &pid_tgid);
     ev->telemetry_type = TE_RETCODE;
     ev->u.r.retcode = (u32)PT_REGS_RC(ctx);
-    push_telemetry_event_reuse(ctx, ev);
+    push_telemetry_event(ctx, ev);
 
     return 0;
 }
@@ -690,7 +648,7 @@ static __always_inline int enter_clone3(struct pt_regs *ctx, ptelemetry_event_t 
 
     ev->telemetry_type = TE_CLONE3_INFO;
     ev->u.clone3_info = clone3_info;
-    push_telemetry_event_reuse(ctx, ev);
+    push_telemetry_event(ctx, ev);
 
     return 0;
 }
@@ -706,7 +664,7 @@ static __always_inline int exit_clone3(struct pt_regs *ctx, ptelemetry_event_t e
     bpf_map_delete_elem(&process_ids, &pid_tgid);
     ev->telemetry_type = TE_RETCODE;
     ev->u.r.retcode = (u32)PT_REGS_RC(ctx);
-    push_telemetry_event_reuse(ctx, ev);
+    push_telemetry_event(ctx, ev);
 
     return 0;
 }
@@ -771,7 +729,7 @@ int kprobe__read_pid_task_struct(struct pt_regs *ctx)
     bpf_map_delete_elem(&process_ids, &ppid_tgid);
     sev.telemetry_type = TE_RETCODE;
     sev.u.r.pid_tgid = pid_tgid;
-    push_telemetry_event_reuse(ctx, &sev);
+    push_telemetry_event(ctx, &sev);
 
     return 0;
 }
@@ -838,7 +796,7 @@ static __always_inline int enter_unshare(struct pt_regs *ctx, ptelemetry_event_t
 
     ev->telemetry_type = TE_UNSHARE_FLAGS;
     ev->u.unshare_flags = flags;
-    push_telemetry_event_reuse(ctx, ev);
+    push_telemetry_event(ctx, ev);
 
     return 0;
 }
@@ -855,7 +813,7 @@ static __always_inline int exit_unshare(struct pt_regs *ctx, ptelemetry_event_t 
 
     ev->telemetry_type = TE_RETCODE;
     ev->u.r.retcode = (u32)PT_REGS_RC(ctx);
-    push_telemetry_event_reuse(ctx, ev);
+    push_telemetry_event(ctx, ev);
 
     return 0;
 }
@@ -908,7 +866,7 @@ static __always_inline int exit_exit(struct pt_regs *ctx, ptelemetry_event_t ev)
     // from the process_ids map.
     ev->telemetry_type = TE_RETCODE;
     ev->u.r.retcode = (u32)PT_REGS_RC(ctx);
-    push_telemetry_event_reuse(ctx, ev);
+    push_telemetry_event(ctx, ev);
     return 0;
 }
 
