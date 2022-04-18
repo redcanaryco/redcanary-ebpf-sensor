@@ -30,3 +30,17 @@ check all the sections at the same time.
 
 eBPF programs can branch (but not jump back!) so make sure to check
 that none of the branches go over the 4096 instructions limit.
+
+## License
+
+Our eBPF programs have a section:
+
+```c
+char _license[] SEC("license") = "GPL";
+```
+
+We have, however, cleared with legal that this does not mean that its
+viral nature would propagate to users of these programs as they are
+packaged separately and live separately. This is noted here just as
+documentation to any future reader that while GPL looks scary in this
+case it is *okay*.
