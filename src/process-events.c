@@ -169,11 +169,13 @@ static __always_inline void push_enter_done(struct pt_regs *ctx, ptelemetry_even
     push_telemetry_event_reuse(ctx, ev);
 }
 
-// Sends the syscall event, setting up ev with a new ev->id to be used
-// for any future events related to the same syscall. If an event was
-// not sent -1 is returned, 0 otherwise.
+// Pushes the syscall event, setting up ev with a new event id
+// (ev->id) to be used for any future events related to the same
+// syscall. If an event was not sent -1 is returned, 0 otherwise. This
+// *DOES NOT* save the event id in the process_ids map. See
+// `start_syscall`
 static __always_inline int push_syscall(struct pt_regs *ctx, ptelemetry_event_t ev,
-                                        syscall_pattern_type_t sp, void *ts, u64 pid_tgid)
+                                                       syscall_pattern_type_t sp, void *ts, u64 pid_tgid)
 {
     if (!offset_loaded()) return -1;
     if (!is_user_process(ts)) return -1;
@@ -203,6 +205,20 @@ static __always_inline int push_syscall(struct pt_regs *ctx, ptelemetry_event_t 
     };
 
     push_telemetry_event_reuse(ctx, ev);
+
+    return 0;
+}
+
+// A wrapper around push_syscall that additionally adds inserts a new
+// entry into the process_ids map with the pid_tgid as the key and the
+// event id as the value. This is useful if you need to retrieve the
+// event_id in a separate program (such as the kretprobe counterpart
+// to a kprobe).
+static __always_inline int start_syscall(struct pt_regs *ctx, ptelemetry_event_t ev,
+                                        syscall_pattern_type_t sp, void *ts, u64 pid_tgid)
+{
+    if (push_syscall(ctx, ev, sp, ts, pid_tgid) < 0) return -1;
+
     bpf_map_update_elem(&process_ids, &pid_tgid, &ev->id, BPF_ANY);
 
     return 0;
@@ -441,7 +457,7 @@ static __always_inline int enter_exec_4_11(struct pt_regs *ctx, ptelemetry_event
         goto Pwd;
     }
 
-    if (push_syscall(ctx, ev, sp, ts, pid_tgid) < 0) return -1;
+    if (start_syscall(ctx, ev, sp, ts, pid_tgid) < 0) return -1;
 
     u32 to_skip = 0;
     bpf_map_update_elem(&read_path_skip, &to_skip, &to_skip, BPF_ANY);
@@ -613,7 +629,7 @@ static __always_inline int enter_clone(struct pt_regs *ctx, ptelemetry_event_t e
     // message
 
     u64 pid_tgid = bpf_get_current_pid_tgid();
-    if (push_syscall(ctx, ev, sp, ts, pid_tgid) < 0) return -1;
+    if (start_syscall(ctx, ev, sp, ts, pid_tgid) < 0) return -1;
 
     ev->telemetry_type = TE_CLONE_INFO;
     ev->u.clone_info = (clone_info_t) {
@@ -667,7 +683,7 @@ static __always_inline int enter_clone3(struct pt_regs *ctx, ptelemetry_event_t 
     // message
 
     u64 pid_tgid = bpf_get_current_pid_tgid();
-    if (push_syscall(ctx, ev, sp, ts, pid_tgid) < 0) return -1;
+    if (start_syscall(ctx, ev, sp, ts, pid_tgid) < 0) return -1;
 
     clone3_info_t clone3_info = {0};
     bpf_probe_read(&clone3_info.flags, sizeof(u64), &uargs->flags);
@@ -818,7 +834,7 @@ static __always_inline int enter_unshare(struct pt_regs *ctx, ptelemetry_event_t
     // message
 
     u64 pid_tgid = bpf_get_current_pid_tgid();
-    if (push_syscall(ctx, ev, sp, ts, pid_tgid) < 0) return -1;
+    if (start_syscall(ctx, ev, sp, ts, pid_tgid) < 0) return -1;
 
     ev->telemetry_type = TE_UNSHARE_FLAGS;
     ev->u.unshare_flags = flags;
@@ -864,43 +880,35 @@ int kretprobe__ret_sys_unshare(struct pt_regs *ctx)
     return 0;
 }
 
-static __always_inline int enter_exit(syscall_pattern_type_t sp, int status,
-                                      struct pt_regs *ctx, u32 ppid, u32 luid)
+static __always_inline int enter_exit(struct pt_regs *ctx, ptelemetry_event_t ev,
+                                      syscall_pattern_type_t sp)
 
 {
-    telemetry_event_t sev = {0};
-    ptelemetry_event_t ev = &sev;
+    // if PID != TGID, then exit, we only care when the entire group exits
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+    if ((pid_tgid >> 32) ^ (pid_tgid & 0xFFFFFFFF)) return -1;
 
-    u64 id = bpf_get_prandom_u32();
+    void *ts = (void *)bpf_get_current_task();
+    if (!ts) return -1;
 
-    ev->id = id;
-    FILL_TELEMETRY_SYSCALL_EVENT(ev, sp, ppid, luid);
-    push_telemetry_event(ctx, ev);
-
-    bpf_map_update_elem(&process_ids, &pid_tgid, &id, BPF_ANY);
+    // deliberately nto calling for `start_syscall` since there is no
+    // need to update `process_ids`. The exit probe handles both the
+    // enter_exit and exit_exit in the same program so we can simply
+    // share the event id through ev->id.
+    if (push_syscall(ctx, ev, sp, ts, pid_tgid) < 0) return -1;
 
     return 0;
 }
 
-static __always_inline int exit_exit(struct pt_regs *ctx)
+static __always_inline int exit_exit(struct pt_regs *ctx, ptelemetry_event_t ev)
 {
-    u64 pid_tgid = bpf_get_current_pid_tgid();
-    u64 *id = bpf_map_lookup_elem(&process_ids, &pid_tgid);
-
-    if (!id) {
-        return 0;
-    }
-
-    ptelemetry_event_t ev = &(telemetry_event_t){
-        .id = *id,
-        .telemetry_type = TE_RETCODE,
-        .u.r.retcode = (u32)PT_REGS_RC(ctx),
-    };
-
-    bpf_map_delete_elem(&process_ids, &pid_tgid);
-
-    push_telemetry_event(ctx, ev);
-
+    // Relies in that ev->id was already set and not cleared. This can
+    // be done because `exit_exit` is called in the same program as
+    // `enter_exit`. If this changes we'll need to store and retrieve
+    // from the process_ids map.
+    ev->telemetry_type = TE_RETCODE;
+    ev->u.r.retcode = (u32)PT_REGS_RC(ctx);
+    push_telemetry_event_reuse(ctx, ev);
     return 0;
 }
 
@@ -908,17 +916,15 @@ static __always_inline int exit_exit(struct pt_regs *ctx)
 SEC("kprobe/do_exit_4_8")
 int BPF_KPROBE_SYSCALL(kprobe__do_exit_4_8, int status)
 {
-    // if PID != TGID, then exit, we only care when the entire group exits
-    u64 pid_tgid = bpf_get_current_pid_tgid();
-    if ((pid_tgid >> 32) ^ (pid_tgid & 0xFFFFFFFF))
-        return 0;
+    telemetry_event_t sev = {0};
 
-    u32 ppid = -1;
-    u32 luid = -1;
-    GET_OFFSETS_4_8;
-    if (enter_exit(SP_EXIT, status, ctx, ppid, luid) < 0)
-        return 0;
-    return exit_exit(ctx);
+    if (enter_exit(ctx, &sev, SP_EXIT) < 0) return 0;
+
+    push_enter_done(ctx, &sev);
+
+    exit_exit(ctx, &sev);
+
+    return 0;
 }
 
 char _license[] SEC("license") = "GPL";
