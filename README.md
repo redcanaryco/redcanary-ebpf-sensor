@@ -80,16 +80,18 @@ check all the sections at the same time.
 eBPF programs can branch (but not jump back!) so make sure to check
 that none of the branches go over the 4096 instructions limit.
 
-## License
+# Licensing
 
-Our eBPF programs have a section:
+Please note, these programs are mostly licensed under GPL, which is
+required to leverage BPF features critical for gathering security
+telemetry.
 
 ```c
 char _license[] SEC("license") = "GPL";
 ```
 
-We have, however, cleared with legal that this does not mean that its
-viral nature would propagate to users of these programs as they are
-packaged separately and live separately. This is noted here just as
-documentation to any future reader that while GPL looks scary in this
-case it is *okay*.
+If you bundle these programs with your own code (for example, by using
+`include_bytes!()` in Rust), that extends GPL to your code base.  If
+you wish to use your own code with its own license alongside these
+programs, you'll need to build, manage, and distribute them
+separately.
