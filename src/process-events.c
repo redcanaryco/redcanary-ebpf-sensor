@@ -580,6 +580,10 @@ Done:
 static __always_inline int enter_clone(struct pt_regs *ctx, ptelemetry_event_t ev,
                                        syscall_pattern_type_t sp, unsigned long flags)
 {
+    // we do not care about threads spawning; ignore clones that would
+    // share the same thread group as the parent.
+    if (flags & CLONE_THREAD) return -1;
+
     void *ts = (void *)bpf_get_current_task();
     if (!ts) return -1;
 
@@ -634,6 +638,12 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_clone_4_8, unsigned long flags, void __user *
 static __always_inline int enter_clone3(struct pt_regs *ctx, ptelemetry_event_t ev,
                                         syscall_pattern_type_t sp, struct clone_args __user *uargs)
 {
+    // we do not care about threads spawning; ignore clones that would
+    // share the same thread group as the parent.
+    u64 flags = 0;
+    bpf_probe_read(&flags, sizeof(u64), &uargs->flags);
+    if (flags & CLONE_THREAD) return -1;
+
     void *ts = (void *)bpf_get_current_task();
     if (!ts) return -1;
 
@@ -644,8 +654,8 @@ static __always_inline int enter_clone3(struct pt_regs *ctx, ptelemetry_event_t 
     if (start_syscall(ctx, ev, sp, ts, pid_tgid) < 0) return -1;
 
     clone3_info_t clone3_info = {0};
-    bpf_probe_read(&clone3_info.flags, sizeof(u64), &uargs->flags);
 
+    clone3_info.flags = flags;
     ev->telemetry_type = TE_CLONE3_INFO;
     ev->u.clone3_info = clone3_info;
     push_telemetry_event(ctx, ev);
