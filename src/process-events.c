@@ -90,6 +90,19 @@ int kprobe__do_mount(struct pt_regs *ctx)
     return 0;
 }
 
+// returns the pid_tgid() as if it was called by the main thread in
+// the current thread group. This is essentially just the tgid (user
+// space pid) duplicated as the tid == pid in the main thread. This is
+// useful in exec* syscalls since they cause non-main threads to be
+// immediately terminated and the pid will be equal to the tid during
+// the kretprobe even if it wasn't during the kprobe.
+static __always_inline u64 main_thread_pid_tid()
+{
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+    u64 pid = pid_tgid >> 32;
+    return pid << 32 | pid;
+}
+
 // returns NULL if offsets have not yet been loaded
 static __always_inline void* offset_loaded()
 {
@@ -358,7 +371,7 @@ Skip:
 
 static __always_inline int process_argv(struct pt_regs *ctx, ptelemetry_event_t ev,
                                         const char __user *const __user *argv, u32 tail_index) {
-    u64 pid_tgid = bpf_get_current_pid_tgid();
+    u64 pid_tgid = main_thread_pid_tid();
     u64 *idp = bpf_map_lookup_elem(&process_ids, &pid_tgid);
     if (idp == NULL) return -1;
 
@@ -404,7 +417,7 @@ static __always_inline int enter_exec_4_11(struct pt_regs *ctx, ptelemetry_event
                                            syscall_pattern_type_t sp)
 {
     // if the ID already exists, we are tail-calling into ourselves, skip ahead to reading the path
-    u64 pid_tgid = bpf_get_current_pid_tgid();
+    u64 pid_tgid = main_thread_pid_tid();
     u64 *id_p = bpf_map_lookup_elem(&process_ids, &pid_tgid);
 
     void *ts = (void *)bpf_get_current_task();
@@ -530,7 +543,11 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execve_4_11,
 SEC("kretprobe/ret_sys_execve_4_8")
 int kretprobe__ret_sys_execve_4_8(struct pt_regs *ctx)
 {
-    u64 pid_tgid = bpf_get_current_pid_tgid();
+    // in non-succesful execs the tid and pid may stil be
+    // different. We still want to be able to find it in process_ids
+    // so we can send a discard message so let's get the main_thread's
+    // pid_tid
+    u64 pid_tgid = main_thread_pid_tid();
     u64 *id = bpf_map_lookup_elem(&process_ids, &pid_tgid);
     if (!id) return 0;
 
@@ -553,7 +570,11 @@ Done:
 SEC("kretprobe/ret_sys_execveat_4_8")
 int kretprobe__ret_sys_execveat_4_8(struct pt_regs *ctx)
 {
-    u64 pid_tgid = bpf_get_current_pid_tgid();
+    // in non-succesful execs the tid and pid may stil be
+    // different. We still want to be able to find it in process_ids
+    // so we can send a discard message so let's get the main_thread's
+    // pid_tid
+    u64 pid_tgid = main_thread_pid_tid();
     u64 *id = bpf_map_lookup_elem(&process_ids, &pid_tgid);
     if (!id) return 0;
 
