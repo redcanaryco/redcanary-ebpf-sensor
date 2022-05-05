@@ -195,10 +195,12 @@ static __always_inline int start_syscall(struct pt_regs *ctx, ptelemetry_event_t
     return 0;
 }
 
-// If the retcode < 0, returns true and sends a discard event. Else,
-// returns false.
+// Sends a discard event and returns true if the retcode in the ctx is
+// an error code.
 static __always_inline bool check_discard(struct pt_regs *ctx, ptelemetry_event_t ev)
 {
+    // check for < 0 rather than just non-zero because forks return a
+    // positive value on successes (the pid of the new process)
     int retcode = (int)PT_REGS_RC(ctx);
     if (retcode < 0) {
         ev->telemetry_type = TE_DISCARD;
