@@ -197,8 +197,8 @@ static __always_inline int start_syscall(struct pt_regs *ctx, ptelemetry_event_t
 
 static __always_inline bool check_discard(struct pt_regs *ctx, ptelemetry_event_t ev)
 {
-    u32 retcode = (u32)PT_REGS_RC(ctx);
-    if (retcode != 0) {
+    int retcode = (int)PT_REGS_RC(ctx);
+    if (retcode < 0) {
         ev->telemetry_type = TE_DISCARD;
         ev->u.r.retcode = retcode;
         push_telemetry_event(ctx, ev);
@@ -834,13 +834,14 @@ static __always_inline int enter_unshare(struct pt_regs *ctx, ptelemetry_event_t
 
 static __always_inline int exit_unshare(struct pt_regs *ctx, ptelemetry_event_t ev)
 {
-
     u64 pid_tgid = bpf_get_current_pid_tgid();
     u64 *id = bpf_map_lookup_elem(&process_ids, &pid_tgid);
     if (!id) return -1;
 
     ev->id = *id;
     bpf_map_delete_elem(&process_ids, &pid_tgid);
+
+    if (check_discard(ctx, ev)) return -1;
 
     ev->telemetry_type = TE_RETCODE;
     ev->u.r.retcode = (u32)PT_REGS_RC(ctx);
