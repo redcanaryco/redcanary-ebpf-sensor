@@ -90,6 +90,19 @@ int kprobe__do_mount(struct pt_regs *ctx)
     return 0;
 }
 
+// returns the pid_tgid() as if it was called by the main thread in
+// the current thread group. This is essentially just the tgid (user
+// space pid) duplicated as the tid == pid in the main thread. This is
+// useful in exec* syscalls since they cause non-main threads to be
+// immediately terminated and the pid will be equal to the tid during
+// the kretprobe even if it wasn't during the kprobe.
+static __always_inline u64 main_thread_pid_tid()
+{
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+    u64 pid = pid_tgid >> 32;
+    return pid << 32 | pid;
+}
+
 // returns NULL if offsets have not yet been loaded
 static __always_inline void* offset_loaded()
 {
@@ -182,10 +195,14 @@ static __always_inline int start_syscall(struct pt_regs *ctx, ptelemetry_event_t
     return 0;
 }
 
+// Sends a discard event and returns true if the retcode in the ctx is
+// an error code.
 static __always_inline bool check_discard(struct pt_regs *ctx, ptelemetry_event_t ev)
 {
-    u32 retcode = (u32)PT_REGS_RC(ctx);
-    if (retcode != 0) {
+    // check for < 0 rather than just non-zero because forks return a
+    // positive value on successes (the pid of the new process)
+    int retcode = (int)PT_REGS_RC(ctx);
+    if (retcode < 0) {
         ev->telemetry_type = TE_DISCARD;
         ev->u.r.retcode = retcode;
         push_telemetry_event(ctx, ev);
@@ -358,7 +375,7 @@ Skip:
 
 static __always_inline int process_argv(struct pt_regs *ctx, ptelemetry_event_t ev,
                                         const char __user *const __user *argv, u32 tail_index) {
-    u64 pid_tgid = bpf_get_current_pid_tgid();
+    u64 pid_tgid = main_thread_pid_tid();
     u64 *idp = bpf_map_lookup_elem(&process_ids, &pid_tgid);
     if (idp == NULL) return -1;
 
@@ -404,7 +421,7 @@ static __always_inline int enter_exec_4_11(struct pt_regs *ctx, ptelemetry_event
                                            syscall_pattern_type_t sp)
 {
     // if the ID already exists, we are tail-calling into ourselves, skip ahead to reading the path
-    u64 pid_tgid = bpf_get_current_pid_tgid();
+    u64 pid_tgid = main_thread_pid_tid();
     u64 *id_p = bpf_map_lookup_elem(&process_ids, &pid_tgid);
 
     void *ts = (void *)bpf_get_current_task();
@@ -530,7 +547,11 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execve_4_11,
 SEC("kretprobe/ret_sys_execve_4_8")
 int kretprobe__ret_sys_execve_4_8(struct pt_regs *ctx)
 {
-    u64 pid_tgid = bpf_get_current_pid_tgid();
+    // in non-succesful execs the tid and pid may stil be
+    // different. We still want to be able to find it in process_ids
+    // so we can send a discard message so let's get the main_thread's
+    // pid_tid
+    u64 pid_tgid = main_thread_pid_tid();
     u64 *id = bpf_map_lookup_elem(&process_ids, &pid_tgid);
     if (!id) return 0;
 
@@ -553,7 +574,11 @@ Done:
 SEC("kretprobe/ret_sys_execveat_4_8")
 int kretprobe__ret_sys_execveat_4_8(struct pt_regs *ctx)
 {
-    u64 pid_tgid = bpf_get_current_pid_tgid();
+    // in non-succesful execs the tid and pid may stil be
+    // different. We still want to be able to find it in process_ids
+    // so we can send a discard message so let's get the main_thread's
+    // pid_tid
+    u64 pid_tgid = main_thread_pid_tid();
     u64 *id = bpf_map_lookup_elem(&process_ids, &pid_tgid);
     if (!id) return 0;
 
@@ -580,6 +605,10 @@ Done:
 static __always_inline int enter_clone(struct pt_regs *ctx, ptelemetry_event_t ev,
                                        syscall_pattern_type_t sp, unsigned long flags)
 {
+    // we do not care about threads spawning; ignore clones that would
+    // share the same thread group as the parent.
+    if (flags & CLONE_THREAD) return -1;
+
     void *ts = (void *)bpf_get_current_task();
     if (!ts) return -1;
 
@@ -598,7 +627,8 @@ static __always_inline int enter_clone(struct pt_regs *ctx, ptelemetry_event_t e
     return 0;
 }
 
-static __always_inline int exit_clone(struct pt_regs *ctx, ptelemetry_event_t ev)
+// handles the kretprobe of clone-like syscalls (fork, vfork, clone, clone3)
+static __always_inline int exit_clonex(struct pt_regs *ctx, ptelemetry_event_t ev)
 {
 
     u64 pid_tgid = bpf_get_current_pid_tgid();
@@ -607,6 +637,9 @@ static __always_inline int exit_clone(struct pt_regs *ctx, ptelemetry_event_t ev
 
     ev->id = *id;
     bpf_map_delete_elem(&process_ids, &pid_tgid);
+
+    if (check_discard(ctx, ev)) return -1;
+
     ev->telemetry_type = TE_RETCODE;
     ev->u.r.retcode = (u32)PT_REGS_RC(ctx);
     push_telemetry_event(ctx, ev);
@@ -634,6 +667,12 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_clone_4_8, unsigned long flags, void __user *
 static __always_inline int enter_clone3(struct pt_regs *ctx, ptelemetry_event_t ev,
                                         syscall_pattern_type_t sp, struct clone_args __user *uargs)
 {
+    // we do not care about threads spawning; ignore clones that would
+    // share the same thread group as the parent.
+    u64 flags = 0;
+    bpf_probe_read(&flags, sizeof(u64), &uargs->flags);
+    if (flags & CLONE_THREAD) return -1;
+
     void *ts = (void *)bpf_get_current_task();
     if (!ts) return -1;
 
@@ -644,26 +683,10 @@ static __always_inline int enter_clone3(struct pt_regs *ctx, ptelemetry_event_t 
     if (start_syscall(ctx, ev, sp, ts, pid_tgid) < 0) return -1;
 
     clone3_info_t clone3_info = {0};
-    bpf_probe_read(&clone3_info.flags, sizeof(u64), &uargs->flags);
 
+    clone3_info.flags = flags;
     ev->telemetry_type = TE_CLONE3_INFO;
     ev->u.clone3_info = clone3_info;
-    push_telemetry_event(ctx, ev);
-
-    return 0;
-}
-
-static __always_inline int exit_clone3(struct pt_regs *ctx, ptelemetry_event_t ev)
-{
-
-    u64 pid_tgid = bpf_get_current_pid_tgid();
-    u64 *id = bpf_map_lookup_elem(&process_ids, &pid_tgid);
-    if (!id) return -1;
-
-    ev->id = *id;
-    bpf_map_delete_elem(&process_ids, &pid_tgid);
-    ev->telemetry_type = TE_RETCODE;
-    ev->u.r.retcode = (u32)PT_REGS_RC(ctx);
     push_telemetry_event(ctx, ev);
 
     return 0;
@@ -684,7 +707,7 @@ SEC("kretprobe/ret_sys_clone3")
 int kretprobe__ret_sys_clone3(struct pt_regs *ctx)
 {
     telemetry_event_t sev = {0};
-    exit_clone3(ctx, &sev);
+    exit_clonex(ctx, &sev);
     return 0;
 }
 
@@ -762,7 +785,7 @@ SEC("kretprobe/ret_sys_clone")
 int kretprobe__ret_sys_clone(struct pt_regs *ctx)
 {
     telemetry_event_t sev = {0};
-    exit_clone(ctx, &sev);
+    exit_clonex(ctx, &sev);
     return 0;
 }
 
@@ -770,7 +793,7 @@ SEC("kretprobe/ret_sys_fork")
 int kretprobe__ret_sys_fork(struct pt_regs *ctx)
 {
     telemetry_event_t sev = {0};
-    exit_clone(ctx, &sev);
+    exit_clonex(ctx, &sev);
     return 0;
 }
 
@@ -778,7 +801,7 @@ SEC("kretprobe/ret_sys_vfork")
 int kretprobe__ret_sys_vfork(struct pt_regs *ctx)
 {
     telemetry_event_t sev = {0};
-    exit_clone(ctx, &sev);
+    exit_clonex(ctx, &sev);
     return 0;
 }
 
@@ -803,13 +826,14 @@ static __always_inline int enter_unshare(struct pt_regs *ctx, ptelemetry_event_t
 
 static __always_inline int exit_unshare(struct pt_regs *ctx, ptelemetry_event_t ev)
 {
-
     u64 pid_tgid = bpf_get_current_pid_tgid();
     u64 *id = bpf_map_lookup_elem(&process_ids, &pid_tgid);
     if (!id) return -1;
 
     ev->id = *id;
     bpf_map_delete_elem(&process_ids, &pid_tgid);
+
+    if (check_discard(ctx, ev)) return -1;
 
     ev->telemetry_type = TE_RETCODE;
     ev->u.r.retcode = (u32)PT_REGS_RC(ctx);
