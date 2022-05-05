@@ -195,6 +195,8 @@ static __always_inline int start_syscall(struct pt_regs *ctx, ptelemetry_event_t
     return 0;
 }
 
+// If the retcode < 0, returns true and sends a discard event. Else,
+// returns false.
 static __always_inline bool check_discard(struct pt_regs *ctx, ptelemetry_event_t ev)
 {
     int retcode = (int)PT_REGS_RC(ctx);
@@ -623,7 +625,8 @@ static __always_inline int enter_clone(struct pt_regs *ctx, ptelemetry_event_t e
     return 0;
 }
 
-static __always_inline int exit_clone(struct pt_regs *ctx, ptelemetry_event_t ev)
+// handles the kretprobe of clone-like syscalls (fork, vfork, clone, clone3)
+static __always_inline int exit_clonex(struct pt_regs *ctx, ptelemetry_event_t ev)
 {
 
     u64 pid_tgid = bpf_get_current_pid_tgid();
@@ -632,6 +635,9 @@ static __always_inline int exit_clone(struct pt_regs *ctx, ptelemetry_event_t ev
 
     ev->id = *id;
     bpf_map_delete_elem(&process_ids, &pid_tgid);
+
+    if (check_discard(ctx, ev)) return -1;
+
     ev->telemetry_type = TE_RETCODE;
     ev->u.r.retcode = (u32)PT_REGS_RC(ctx);
     push_telemetry_event(ctx, ev);
@@ -684,22 +690,6 @@ static __always_inline int enter_clone3(struct pt_regs *ctx, ptelemetry_event_t 
     return 0;
 }
 
-static __always_inline int exit_clone3(struct pt_regs *ctx, ptelemetry_event_t ev)
-{
-
-    u64 pid_tgid = bpf_get_current_pid_tgid();
-    u64 *id = bpf_map_lookup_elem(&process_ids, &pid_tgid);
-    if (!id) return -1;
-
-    ev->id = *id;
-    bpf_map_delete_elem(&process_ids, &pid_tgid);
-    ev->telemetry_type = TE_RETCODE;
-    ev->u.r.retcode = (u32)PT_REGS_RC(ctx);
-    push_telemetry_event(ctx, ev);
-
-    return 0;
-}
-
 SEC("kprobe/sys_clone3")
 int BPF_KPROBE_SYSCALL(kprobe__sys_clone3, struct clone_args __user *uargs, size_t size)
 {
@@ -715,7 +705,7 @@ SEC("kretprobe/ret_sys_clone3")
 int kretprobe__ret_sys_clone3(struct pt_regs *ctx)
 {
     telemetry_event_t sev = {0};
-    exit_clone3(ctx, &sev);
+    exit_clonex(ctx, &sev);
     return 0;
 }
 
@@ -793,7 +783,7 @@ SEC("kretprobe/ret_sys_clone")
 int kretprobe__ret_sys_clone(struct pt_regs *ctx)
 {
     telemetry_event_t sev = {0};
-    exit_clone(ctx, &sev);
+    exit_clonex(ctx, &sev);
     return 0;
 }
 
@@ -801,7 +791,7 @@ SEC("kretprobe/ret_sys_fork")
 int kretprobe__ret_sys_fork(struct pt_regs *ctx)
 {
     telemetry_event_t sev = {0};
-    exit_clone(ctx, &sev);
+    exit_clonex(ctx, &sev);
     return 0;
 }
 
@@ -809,7 +799,7 @@ SEC("kretprobe/ret_sys_vfork")
 int kretprobe__ret_sys_vfork(struct pt_regs *ctx)
 {
     telemetry_event_t sev = {0};
-    exit_clone(ctx, &sev);
+    exit_clonex(ctx, &sev);
     return 0;
 }
 
