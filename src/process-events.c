@@ -712,10 +712,11 @@ int kretprobe__ret_sys_clone3(struct pt_regs *ctx)
 }
 
 
-// This probe can generically read the pid from a task_struct at any point
-// where the first argument is a pointer to a task_struct, the event emit
-// is a RETCODE with the correct PID, intended for use with tracing fork,
-// clone, etc.
+// This probe can generically read the pid from a task_struct at any
+// point where the first argument is a pointer to a task_struct, the
+// event emit is a RETCODE with the correct PID, intended for use with
+// tracing fork, clone, etc. It returns early if the task is not a
+// main thread (pid != tid).
 SEC("kprobe/read_pid_task_struct")
 int kprobe__read_pid_task_struct(struct pt_regs *ctx)
 {
@@ -727,6 +728,13 @@ int kprobe__read_pid_task_struct(struct pt_regs *ctx)
     u32 tgid = 0;
     read_value(ts, CRC_TASK_STRUCT_PID, &pid, sizeof(pid));
     read_value(ts, CRC_TASK_STRUCT_TGID, &tgid, sizeof(tgid));
+
+    // this means that this task_struct belongs to a non-main
+    // thread. Exit early to avoid race conditions with this task's
+    // parent doing a process clone at the same time causing conflicts
+    // when looking at process_ids below.
+    if (pid != tgid) return 0;
+
     u64 pid_tgid = (u64)tgid << 32 | pid;
 
     // get the real parent
@@ -742,14 +750,21 @@ int kprobe__read_pid_task_struct(struct pt_regs *ctx)
 
     // combine to find ID, get ID
     u64 ppid_tgid = (u64)ptgid << 32 | ppid;
+
+    // there is unfortunately no atomic "pop" from the map so we need
+    // to be careful about race conditions here. We have checked above
+    // that this current task is the main thread for the process which
+    // makes this safe (no other threads for the same process will
+    // reach here). Note that the parent doesn't have be a main thread
+    // as threads can fork.
     u64 *id = bpf_map_lookup_elem(&process_ids, &ppid_tgid);
     if (!id) return 0;
+    bpf_map_delete_elem(&process_ids, &ppid_tgid);
 
     // send event with ID
     telemetry_event_t sev = {0};
 
     sev.id = *id;
-    bpf_map_delete_elem(&process_ids, &ppid_tgid);
     sev.telemetry_type = TE_RETCODE;
     sev.u.r.pid_tgid = pid_tgid;
     push_telemetry_event(ctx, &sev);
