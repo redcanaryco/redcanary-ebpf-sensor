@@ -435,7 +435,7 @@ static __always_inline int enter_exec_4_11(struct pt_regs *ctx, pprocess_message
     u32 pid = pid_tgid >> 32;
     u32 tid = pid_tgid & 0xFFFFFFFF;
     // deliberately not using BPF_ANY because we do not want to
-    // override it if another thread has already called for exec
+    // overwrite it if another thread has already called for exec
     if (bpf_map_update_elem(&exec_tids, &pid, &tid, BPF_NOEXIST) < 0) {
         bpf_map_delete_elem(&process_ids, &pid_tgid);
         return -1;
@@ -901,7 +901,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_exit, int status)
 {
     u64 pid_tgid = bpf_get_current_pid_tgid();
 
-    // exit of a non-main thead
+    // exit of a non-main thread
     if ((pid_tgid >> 32) ^ (pid_tgid & 0xFFFFFFFF)) return 0;
 
     process_message_t sev = {0};
