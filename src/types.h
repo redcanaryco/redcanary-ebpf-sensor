@@ -285,6 +285,11 @@ typedef struct
     u64 flags;
 } clone3_info_t, *pclone3_info_t;
 
+typedef struct {
+    char value[VALUE_SIZE];
+    char truncated;
+} telemetry_value_t;
+
 typedef struct
 {
     u64 id;
@@ -296,11 +301,7 @@ typedef struct
         clone_info_t clone_info;
         clone3_info_t clone3_info;
         int unshare_flags;
-        struct
-        {
-            char value[VALUE_SIZE];
-            char truncated;
-        } v;
+        telemetry_value_t v;
         union
         {
             u64 pid_tgid;
@@ -347,9 +348,6 @@ typedef struct {
     script_message_type_t type;
     union {
         script_info_t script_info;
-        struct {
-            char value[VALUE_SIZE];
-            char truncated;
-        } v;
+        telemetry_value_t v;
     } u;
 } script_message_t, *pscript_message_t;
