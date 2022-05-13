@@ -5,8 +5,6 @@
 #include <linux/types.h>
 #include <linux/limits.h>
 
-#define MAX_TELEMETRY_STACK_ENTRIES 1024
-
 #define MAX_ADDRESSES 16
 #define TRUE 1
 #define FALSE 0
@@ -94,20 +92,20 @@ typedef enum
 
 typedef enum
 {
-    TE_UNSPEC,
-    TE_SYSCALL_INFO,
-    TE_COMMAND_LINE,
-    TE_FILE_INFO,
-    TE_RETCODE,
-    TE_CLONE_INFO,
-    TE_CLONE3_INFO,
-    TE_UNSHARE_FLAGS,
-    TE_EXEC_FILENAME,
-    TE_EXEC_FILENAME_REV,
-    TE_PWD,
-    TE_DISCARD,
-    TE_ENTER_DONE,
-} telemetry_event_type_t;
+    PM_UNSPEC,
+    PM_SYSCALL_INFO,
+    PM_COMMAND_LINE,
+    PM_FILE_INFO,
+    PM_RETCODE,
+    PM_CLONE_INFO,
+    PM_CLONE3_INFO,
+    PM_UNSHARE_FLAGS,
+    PM_EXEC_FILENAME,
+    PM_EXEC_FILENAME_REV,
+    PM_PWD,
+    PM_DISCARD,
+    PM_ENTER_DONE,
+} process_message_type_t;
 
 #define COMMON_FIELDS \
     u32 pid;          \
@@ -292,8 +290,8 @@ typedef struct {
 
 typedef struct
 {
-    u64 id;
-    telemetry_event_type_t telemetry_type;
+    u64 event_id;
+    process_message_type_t type;
     union
     {
         syscall_info_t syscall_info;
@@ -308,7 +306,7 @@ typedef struct
             u64 retcode;
         } r;
     } u;
-} telemetry_event_t, *ptelemetry_event_t;
+} process_message_t, *pprocess_message_t;
 
 // clone3 args are not available in sched.h until 5.3, and we build against 4.4
 struct clone_args

@@ -119,33 +119,33 @@ static __always_inline void* is_user_process(void *ts)
     return mmptr;
 }
 
-// pushes a telemetry event to the process_events perfmap for the
-// current CPU. The event is purposefully not cleared so its data (in
-// particular ev->id, and ev->telemetry_type) can be reused if
+// pushes a message to the process_events perfmap for the current
+// CPU. The message is purposefully not cleared so its data (in
+// particular ev->event_id, and ev->type) can be reused if
 // necessary.
-static __always_inline void push_telemetry_event(struct pt_regs *ctx, ptelemetry_event_t ev)
+static __always_inline void push_message(struct pt_regs *ctx, pprocess_message_t ev)
 {
     bpf_perf_event_output(ctx, &process_events, BPF_F_CURRENT_CPU, ev, sizeof(*ev));
 }
 
-// sends TE_ENTER_DONE to signal the end of an enter_* event (i.e, a
-// kprobe). Re-uses ev->id but sets the other fields.
-static __always_inline void push_enter_done(struct pt_regs *ctx, ptelemetry_event_t ev)
+// sends PM_ENTER_DONE to signal the end of an enter_* event (i.e, a
+// kprobe). Re-uses ev->event_id but sets the other fields.
+static __always_inline void push_enter_done(struct pt_regs *ctx, pprocess_message_t ev)
 {
-    ev->telemetry_type = TE_ENTER_DONE;
+    ev->type = PM_ENTER_DONE;
 
     // not used for anything but it feels weird not to reset the union
     // holding the event data so we putting a dummy value.
     ev->u.r.retcode = 0;
-    push_telemetry_event(ctx, ev);
+    push_message(ctx, ev);
 }
 
 // Pushes the syscall event, setting up ev with a new event id
-// (ev->id) to be used for any future events related to the same
+// (ev->event_id) to be used for any future events related to the same
 // syscall. If an event was not sent -1 is returned, 0 otherwise. This
 // *DOES NOT* save the event id in the process_ids map. See
 // `start_syscall`
-static __always_inline int push_syscall(struct pt_regs *ctx, ptelemetry_event_t ev,
+static __always_inline int push_syscall(struct pt_regs *ctx, pprocess_message_t ev,
                                                        syscall_pattern_type_t sp, void *ts, u64 pid_tgid)
 {
     if (!offset_loaded()) return -1;
@@ -162,8 +162,8 @@ static __always_inline int push_syscall(struct pt_regs *ctx, ptelemetry_event_t 
 
     u64 uid_gid = bpf_get_current_uid_gid();
 
-    ev->id = bpf_get_prandom_u32();
-    ev->telemetry_type = TE_SYSCALL_INFO;
+    ev->event_id = bpf_get_prandom_u32();
+    ev->type = PM_SYSCALL_INFO;
     ev->u.syscall_info = (syscall_info_t) {
         .pid = pid_tgid >> 32,
         .tid = pid_tgid & 0xFFFFFFFF,
@@ -175,7 +175,7 @@ static __always_inline int push_syscall(struct pt_regs *ctx, ptelemetry_event_t 
         .syscall_pattern = sp,
     };
 
-    push_telemetry_event(ctx, ev);
+    push_message(ctx, ev);
 
     return 0;
 }
@@ -185,27 +185,27 @@ static __always_inline int push_syscall(struct pt_regs *ctx, ptelemetry_event_t 
 // id as the value. This is useful if you need to retrieve the
 // event_id in a separate program (such as the kretprobe counterpart
 // to a kprobe).
-static __always_inline int start_syscall(struct pt_regs *ctx, ptelemetry_event_t ev,
+static __always_inline int start_syscall(struct pt_regs *ctx, pprocess_message_t ev,
                                         syscall_pattern_type_t sp, void *ts, u64 pid_tgid)
 {
     if (push_syscall(ctx, ev, sp, ts, pid_tgid) < 0) return -1;
 
-    bpf_map_update_elem(&process_ids, &pid_tgid, &ev->id, BPF_ANY);
+    bpf_map_update_elem(&process_ids, &pid_tgid, &ev->event_id, BPF_ANY);
 
     return 0;
 }
 
 // Sends a discard event and returns true if the retcode in the ctx is
 // an error code.
-static __always_inline bool check_discard(struct pt_regs *ctx, ptelemetry_event_t ev)
+static __always_inline bool check_discard(struct pt_regs *ctx, pprocess_message_t ev)
 {
     // check for < 0 rather than just non-zero because forks return a
     // positive value on successes (the pid of the new process)
     int retcode = (int)PT_REGS_RC(ctx);
     if (retcode < 0) {
-        ev->telemetry_type = TE_DISCARD;
+        ev->type = PM_DISCARD;
         ev->u.r.retcode = retcode;
-        push_telemetry_event(ctx, ev);
+        push_message(ctx, ev);
 
         return true;
     }
@@ -247,22 +247,22 @@ static __always_inline file_info_t extract_file_info(void *ptr)
     return file_info;
 }
 
-static __always_inline void push_exit_exec(struct pt_regs *ctx, ptelemetry_event_t ev,
+static __always_inline void push_exit_exec(struct pt_regs *ctx, pprocess_message_t ev,
                                            void *exe)
 {
     // TODO: It would be more efficient to combine these into a single
     // message
 
-    ev->telemetry_type = TE_FILE_INFO;
+    ev->type = PM_FILE_INFO;
     ev->u.file_info = extract_file_info(exe);
-    push_telemetry_event(ctx, ev);
+    push_message(ctx, ev);
 
-    ev->telemetry_type = TE_RETCODE;
+    ev->type = PM_RETCODE;
     ev->u.r.retcode = (u32)PT_REGS_RC(ctx);
-    push_telemetry_event(ctx, ev);
+    push_message(ctx, ev);
 }
 
-static __always_inline int push_string(struct pt_regs *ctx, ptelemetry_event_t ev,
+static __always_inline int push_string(struct pt_regs *ctx, pprocess_message_t ev,
                                        const char *ptr)
 {
     #pragma unroll
@@ -273,7 +273,7 @@ static __always_inline int push_string(struct pt_regs *ctx, ptelemetry_event_t e
         // no more truncating; argument is done
         if (count < VALUE_SIZE) {
             ev->u.v.truncated = FALSE;
-            push_telemetry_event(ctx, ev);
+            push_message(ctx, ev);
 
             return 0;
         }
@@ -281,7 +281,7 @@ static __always_inline int push_string(struct pt_regs *ctx, ptelemetry_event_t e
         // mark it as truncated; get next chunk of same arg
         ev->u.v.truncated = TRUE;
         ptr+=VALUE_SIZE;
-        push_telemetry_event(ctx, ev);
+        push_message(ctx, ev);
     }
 
     // if we get here it means that the string was larger than 5 *
@@ -289,7 +289,7 @@ static __always_inline int push_string(struct pt_regs *ctx, ptelemetry_event_t e
     return 1;
 }
 
-static __always_inline void push_path(struct pt_regs *ctx, ptelemetry_event_t ev,
+static __always_inline void push_path(struct pt_regs *ctx, pprocess_message_t ev,
                                       void *ptr, tail_call_slot_t slot) {
     if (read_value(ptr, CRC_PATH_DENTRY, &ptr, sizeof(ptr)) < 0) // path->d_entry
         goto Skip;
@@ -344,10 +344,10 @@ static __always_inline void push_path(struct pt_regs *ctx, ptelemetry_event_t ev
             truncated = 1;
             ev->u.v.truncated = TRUE;
             offset = offset + VALUE_SIZE;
-            push_telemetry_event(ctx, ev);
+            push_message(ctx, ev);
         } else {
             ev->u.v.truncated = FALSE;
-            push_telemetry_event(ctx, ev);
+            push_message(ctx, ev);
 
             // get the parent
             void *old_ptr = ptr;
@@ -373,14 +373,14 @@ Skip:
     bpf_map_delete_elem(&read_path_skip, &skipped);
 }
 
-static __always_inline int process_argv(struct pt_regs *ctx, ptelemetry_event_t ev,
+static __always_inline int process_argv(struct pt_regs *ctx, pprocess_message_t ev,
                                         const char __user *const __user *argv, u32 tail_index) {
     u64 pid_tgid = main_thread_pid_tid();
     u64 *idp = bpf_map_lookup_elem(&process_ids, &pid_tgid);
     if (idp == NULL) return -1;
 
-    ev->id = *idp;
-    ev->telemetry_type = TE_COMMAND_LINE;
+    ev->event_id = *idp;
+    ev->type = PM_COMMAND_LINE;
 
     u32 always_zero = 0;
     u32 arg_num = 0;
@@ -417,7 +417,7 @@ Next:;
     return 0;
 }
 
-static __always_inline int enter_exec_4_11(struct pt_regs *ctx, ptelemetry_event_t ev,
+static __always_inline int enter_exec_4_11(struct pt_regs *ctx, pprocess_message_t ev,
                                            syscall_pattern_type_t sp)
 {
     // if the ID already exists, we are tail-calling into ourselves, skip ahead to reading the path
@@ -428,7 +428,7 @@ static __always_inline int enter_exec_4_11(struct pt_regs *ctx, ptelemetry_event
     if (!ts) return -1;
 
     if (id_p) {
-        ev->id = *id_p;
+        ev->event_id = *id_p;
         goto Pwd;
     }
 
@@ -446,7 +446,7 @@ Pwd:;
     pwd_ptr = offset_ptr(pwd_ptr, CRC_FS_STRUCT_PWD);
     if (pwd_ptr == NULL) return 0;
 
-    ev->telemetry_type = TE_PWD;
+    ev->type = PM_PWD;
     push_path(ctx, ev, pwd_ptr, SYS_EXECVE_4_11);
 
     return 0;
@@ -457,7 +457,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execve_tc_argv,
                        const char __user *filename,
                        const char __user *const __user *argv)
 {
-    telemetry_event_t sev = {0};
+    process_message_t sev = {0};
 
     if (process_argv(ctx, &sev, argv, SYS_EXECVE_TC_ARGV) < 0) return 0;
 
@@ -475,7 +475,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execveat_tc_argv,
                        int fd, const char __user *filename,
                        const char __user *const __user *argv)
 {
-    telemetry_event_t sev = {0};
+    process_message_t sev = {0};
 
     if (process_argv(ctx, &sev, argv, SYS_EXECVEAT_TC_ARGV) < 0) return 0;
 
@@ -496,16 +496,16 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execveat_4_11,
                        int flags)
 {
     // create the event early so it can be re-used to save stack space
-    telemetry_event_t sev = {0};
+    process_message_t sev = {0};
 
     // OK to return early. No events are sent on a -1
     if (enter_exec_4_11(ctx, &sev, SP_EXECVEAT) < 0) return 0;
 
     // WARNING: sys_execveat_tc_argv relies on it sending the *last*
-    // telemetry originating from this kprobe. If you change this code
+    // message originating from this kprobe. If you change this code
     // such that this tail call is somehow no longer the last action
     // (e.g., tail call to itself instead of separate program) you
-    // need to change where we send the TE_ENTER_DONE event
+    // need to change where we send the PM_ENTER_DONE event
     bpf_tail_call(ctx, &tail_call_table, SYS_EXECVEAT_TC_ARGV);
 
     return 0;
@@ -518,16 +518,16 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execve_4_11,
                        const char __user *const __user *envp)
 {
     // create the event early so it can be re-used to save stack space
-    telemetry_event_t sev = {0};
+    process_message_t sev = {0};
 
     // OK to return early. No events are sent on a -1
     if (enter_exec_4_11(ctx, &sev, SP_EXECVE) < 0) return 0;
 
     // A filename should always be here but just in case do not return
     // early in its absence because we still want to tail call for
-    // argv to trigger `TE_ENTER_DONE`
+    // argv to trigger `PM_ENTER_DONE`
     if (filename) {
-        sev.telemetry_type = TE_EXEC_FILENAME;
+        sev.type = PM_EXEC_FILENAME;
         sev.u.v.value[0] = '\0';
         sev.u.v.truncated = FALSE;
 
@@ -535,10 +535,10 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execve_4_11,
     }
 
     // WARNING: sys_execve_tc_argv relies on it sending the *last*
-    // telemetry originating from this kprobe. If you change this code
+    // message originating from this kprobe. If you change this code
     // such that this tail call is somehow no longer the last action
     // (e.g., tail call to itself instead of separate program) you
-    // need to change where we send the TE_ENTER_DONE event
+    // need to change where we send the PM_ENTER_DONE event
     bpf_tail_call(ctx, &tail_call_table, SYS_EXECVE_TC_ARGV);
 
     return 0;
@@ -556,8 +556,8 @@ int kretprobe__ret_sys_execve_4_8(struct pt_regs *ctx)
     if (!id) return 0;
 
     // re-use the same ev to save stack space
-    telemetry_event_t sev = {0};
-    sev.id = *id;
+    process_message_t sev = {0};
+    sev.event_id = *id;
 
     if (check_discard(ctx, &sev)) goto Done;
 
@@ -583,15 +583,15 @@ int kretprobe__ret_sys_execveat_4_8(struct pt_regs *ctx)
     if (!id) return 0;
 
     // re-use the same ev to save stack space
-    telemetry_event_t sev = {0};
-    sev.id = *id;
+    process_message_t sev = {0};
+    sev.event_id = *id;
 
     if (check_discard(ctx, &sev)) goto Done;
 
     void *ptr = get_current_exe();
     if (!ptr) goto Done;
 
-    sev.telemetry_type = TE_EXEC_FILENAME_REV;
+    sev.type = PM_EXEC_FILENAME_REV;
     void *path = offset_ptr(ptr, CRC_FILE_F_PATH);
     push_path(ctx, &sev, path, RET_SYS_EXECVEAT_4_8);
 
@@ -602,7 +602,7 @@ Done:
     return 0;
 }
 
-static __always_inline int enter_clone(struct pt_regs *ctx, ptelemetry_event_t ev,
+static __always_inline int enter_clone(struct pt_regs *ctx, pprocess_message_t ev,
                                        syscall_pattern_type_t sp, unsigned long flags)
 {
     // we do not care about threads spawning; ignore clones that would
@@ -618,31 +618,31 @@ static __always_inline int enter_clone(struct pt_regs *ctx, ptelemetry_event_t e
     u64 pid_tgid = bpf_get_current_pid_tgid();
     if (start_syscall(ctx, ev, sp, ts, pid_tgid) < 0) return -1;
 
-    ev->telemetry_type = TE_CLONE_INFO;
+    ev->type = PM_CLONE_INFO;
     ev->u.clone_info = (clone_info_t) {
         .flags = flags,
     };
-    push_telemetry_event(ctx, ev);
+    push_message(ctx, ev);
 
     return 0;
 }
 
 // handles the kretprobe of clone-like syscalls (fork, vfork, clone, clone3)
-static __always_inline int exit_clonex(struct pt_regs *ctx, ptelemetry_event_t ev)
+static __always_inline int exit_clonex(struct pt_regs *ctx, pprocess_message_t ev)
 {
 
     u64 pid_tgid = bpf_get_current_pid_tgid();
     u64 *id = bpf_map_lookup_elem(&process_ids, &pid_tgid);
     if (!id) return -1;
 
-    ev->id = *id;
+    ev->event_id = *id;
     bpf_map_delete_elem(&process_ids, &pid_tgid);
 
     if (check_discard(ctx, ev)) return -1;
 
-    ev->telemetry_type = TE_RETCODE;
+    ev->type = PM_RETCODE;
     ev->u.r.retcode = (u32)PT_REGS_RC(ctx);
-    push_telemetry_event(ctx, ev);
+    push_message(ctx, ev);
 
     return 0;
 }
@@ -656,7 +656,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_clone_4_8, unsigned long flags, void __user *
                        int __user *parent_tid, unsigned long tls, int __user *child_tid)
 #endif
 {
-    telemetry_event_t sev = {0};
+    process_message_t sev = {0};
     if (enter_clone(ctx, &sev, SP_CLONE, flags) < 0) return 0;
 
     push_enter_done(ctx, &sev);
@@ -664,7 +664,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_clone_4_8, unsigned long flags, void __user *
     return 0;
 }
 
-static __always_inline int enter_clone3(struct pt_regs *ctx, ptelemetry_event_t ev,
+static __always_inline int enter_clone3(struct pt_regs *ctx, pprocess_message_t ev,
                                         syscall_pattern_type_t sp, struct clone_args __user *uargs)
 {
     // we do not care about threads spawning; ignore clones that would
@@ -685,9 +685,9 @@ static __always_inline int enter_clone3(struct pt_regs *ctx, ptelemetry_event_t 
     clone3_info_t clone3_info = {0};
 
     clone3_info.flags = flags;
-    ev->telemetry_type = TE_CLONE3_INFO;
+    ev->type = PM_CLONE3_INFO;
     ev->u.clone3_info = clone3_info;
-    push_telemetry_event(ctx, ev);
+    push_message(ctx, ev);
 
     return 0;
 }
@@ -695,7 +695,7 @@ static __always_inline int enter_clone3(struct pt_regs *ctx, ptelemetry_event_t 
 SEC("kprobe/sys_clone3")
 int BPF_KPROBE_SYSCALL(kprobe__sys_clone3, struct clone_args __user *uargs, size_t size)
 {
-    telemetry_event_t sev = {0};
+    process_message_t sev = {0};
     if (enter_clone3(ctx, &sev, SP_CLONE3, uargs) < 0) return 0;
 
     push_enter_done(ctx, &sev);
@@ -706,7 +706,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_clone3, struct clone_args __user *uargs, size
 SEC("kretprobe/ret_sys_clone3")
 int kretprobe__ret_sys_clone3(struct pt_regs *ctx)
 {
-    telemetry_event_t sev = {0};
+    process_message_t sev = {0};
     exit_clonex(ctx, &sev);
     return 0;
 }
@@ -762,12 +762,12 @@ int kprobe__read_pid_task_struct(struct pt_regs *ctx)
     bpf_map_delete_elem(&process_ids, &ppid_tgid);
 
     // send event with ID
-    telemetry_event_t sev = {0};
+    process_message_t sev = {0};
 
-    sev.id = *id;
-    sev.telemetry_type = TE_RETCODE;
+    sev.event_id = *id;
+    sev.type = PM_RETCODE;
     sev.u.r.pid_tgid = pid_tgid;
-    push_telemetry_event(ctx, &sev);
+    push_message(ctx, &sev);
 
     return 0;
 }
@@ -775,7 +775,7 @@ int kprobe__read_pid_task_struct(struct pt_regs *ctx)
 SEC("kprobe/sys_fork_4_8")
 int BPF_KPROBE_SYSCALL(kprobe__sys_fork_4_8)
 {
-    telemetry_event_t sev = {0};
+    process_message_t sev = {0};
 
     if (enter_clone(ctx, &sev, SP_FORK, 0) < 0) return 0;
 
@@ -787,7 +787,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_fork_4_8)
 SEC("kprobe/sys_vfork_4_8")
 int BPF_KPROBE_SYSCALL(kprobe__sys_vfork_4_8)
 {
-    telemetry_event_t sev = {0};
+    process_message_t sev = {0};
 
     if (enter_clone(ctx, &sev, SP_VFORK, 0) < 0) return 0;
 
@@ -799,7 +799,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_vfork_4_8)
 SEC("kretprobe/ret_sys_clone")
 int kretprobe__ret_sys_clone(struct pt_regs *ctx)
 {
-    telemetry_event_t sev = {0};
+    process_message_t sev = {0};
     exit_clonex(ctx, &sev);
     return 0;
 }
@@ -807,7 +807,7 @@ int kretprobe__ret_sys_clone(struct pt_regs *ctx)
 SEC("kretprobe/ret_sys_fork")
 int kretprobe__ret_sys_fork(struct pt_regs *ctx)
 {
-    telemetry_event_t sev = {0};
+    process_message_t sev = {0};
     exit_clonex(ctx, &sev);
     return 0;
 }
@@ -815,12 +815,12 @@ int kretprobe__ret_sys_fork(struct pt_regs *ctx)
 SEC("kretprobe/ret_sys_vfork")
 int kretprobe__ret_sys_vfork(struct pt_regs *ctx)
 {
-    telemetry_event_t sev = {0};
+    process_message_t sev = {0};
     exit_clonex(ctx, &sev);
     return 0;
 }
 
-static __always_inline int enter_unshare(struct pt_regs *ctx, ptelemetry_event_t ev,
+static __always_inline int enter_unshare(struct pt_regs *ctx, pprocess_message_t ev,
                                          syscall_pattern_type_t sp, int flags)
 {
     void *ts = (void *)bpf_get_current_task();
@@ -832,27 +832,27 @@ static __always_inline int enter_unshare(struct pt_regs *ctx, ptelemetry_event_t
     u64 pid_tgid = bpf_get_current_pid_tgid();
     if (start_syscall(ctx, ev, sp, ts, pid_tgid) < 0) return -1;
 
-    ev->telemetry_type = TE_UNSHARE_FLAGS;
+    ev->type = PM_UNSHARE_FLAGS;
     ev->u.unshare_flags = flags;
-    push_telemetry_event(ctx, ev);
+    push_message(ctx, ev);
 
     return 0;
 }
 
-static __always_inline int exit_unshare(struct pt_regs *ctx, ptelemetry_event_t ev)
+static __always_inline int exit_unshare(struct pt_regs *ctx, pprocess_message_t ev)
 {
     u64 pid_tgid = bpf_get_current_pid_tgid();
     u64 *id = bpf_map_lookup_elem(&process_ids, &pid_tgid);
     if (!id) return -1;
 
-    ev->id = *id;
+    ev->event_id = *id;
     bpf_map_delete_elem(&process_ids, &pid_tgid);
 
     if (check_discard(ctx, ev)) return -1;
 
-    ev->telemetry_type = TE_RETCODE;
+    ev->type = PM_RETCODE;
     ev->u.r.retcode = (u32)PT_REGS_RC(ctx);
-    push_telemetry_event(ctx, ev);
+    push_message(ctx, ev);
 
     return 0;
 }
@@ -860,7 +860,7 @@ static __always_inline int exit_unshare(struct pt_regs *ctx, ptelemetry_event_t 
 SEC("kprobe/sys_unshare_4_8")
 int BPF_KPROBE_SYSCALL(kprobe__sys_unshare_4_8, int flags)
 {
-    telemetry_event_t sev = {0};
+    process_message_t sev = {0};
     if (enter_unshare(ctx, &sev, SP_UNSHARE, flags) < 0) return 0;
 
     push_enter_done(ctx, &sev);
@@ -871,13 +871,13 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_unshare_4_8, int flags)
 SEC("kretprobe/ret_sys_unshare")
 int kretprobe__ret_sys_unshare(struct pt_regs *ctx)
 {
-    telemetry_event_t sev = {0};
+    process_message_t sev = {0};
     exit_unshare(ctx, &sev);
 
     return 0;
 }
 
-static __always_inline int enter_exit(struct pt_regs *ctx, ptelemetry_event_t ev,
+static __always_inline int enter_exit(struct pt_regs *ctx, pprocess_message_t ev,
                                       syscall_pattern_type_t sp)
 
 {
@@ -891,21 +891,21 @@ static __always_inline int enter_exit(struct pt_regs *ctx, ptelemetry_event_t ev
     // deliberately nto calling for `start_syscall` since there is no
     // need to update `process_ids`. The exit probe handles both the
     // enter_exit and exit_exit in the same program so we can simply
-    // share the event id through ev->id.
+    // share the event id through ev->event_id.
     if (push_syscall(ctx, ev, sp, ts, pid_tgid) < 0) return -1;
 
     return 0;
 }
 
-static __always_inline int exit_exit(struct pt_regs *ctx, ptelemetry_event_t ev)
+static __always_inline int exit_exit(struct pt_regs *ctx, pprocess_message_t ev)
 {
-    // Relies in that ev->id was already set and not cleared. This can
+    // Relies in that ev->event_id was already set and not cleared. This can
     // be done because `exit_exit` is called in the same program as
     // `enter_exit`. If this changes we'll need to store and retrieve
     // from the process_ids map.
-    ev->telemetry_type = TE_RETCODE;
+    ev->type = PM_RETCODE;
     ev->u.r.retcode = (u32)PT_REGS_RC(ctx);
-    push_telemetry_event(ctx, ev);
+    push_message(ctx, ev);
     return 0;
 }
 
@@ -913,7 +913,7 @@ static __always_inline int exit_exit(struct pt_regs *ctx, ptelemetry_event_t ev)
 SEC("kprobe/do_exit_4_8")
 int BPF_KPROBE_SYSCALL(kprobe__do_exit_4_8, int status)
 {
-    telemetry_event_t sev = {0};
+    process_message_t sev = {0};
 
     if (enter_exit(ctx, &sev, SP_EXIT) < 0) return 0;
 
