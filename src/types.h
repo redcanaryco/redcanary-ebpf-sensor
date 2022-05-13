@@ -100,7 +100,6 @@ typedef enum
     TE_CURRENT_WORKING_DIRECTORY,
     TE_FILE_INFO,
     TE_RETCODE,
-    TE_NETWORK,
     TE_CLONE_INFO,
     TE_CLONE3_INFO,
     TE_UNSHARE_FLAGS,
@@ -284,7 +283,7 @@ typedef struct
             struct in6_addr src_addr;
         } ipv6;
     } protos;
-} network_info_t, *pnetwork_info_t;
+} network_event_t, *pnetwork_event_t;
 
 typedef struct
 {
@@ -306,7 +305,6 @@ typedef struct
         file_info_t file_info;
         clone_info_t clone_info;
         clone3_info_t clone3_info;
-        network_info_t network_info;
         script_info_t script_info;
         int unshare_flags;
         int exit_status;
