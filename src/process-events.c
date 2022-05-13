@@ -61,6 +61,15 @@ struct bpf_map_def SEC("maps/process_ids") process_ids = {
     .namespace = "",
 };
 
+struct bpf_map_def SEC("maps/exec_tids") exec_tids = {
+    .type = BPF_MAP_TYPE_HASH,
+    .key_size = sizeof(u32),   // pid
+    .value_size = sizeof(u32), //tid
+    .max_entries = 1024,
+    .pinning = 0,
+    .namespace = "",
+};
+
 struct bpf_map_def SEC("maps/tail_call_table") tail_call_table = {
     .type = BPF_MAP_TYPE_PROG_ARRAY,
     .key_size = sizeof(u32),
@@ -88,19 +97,6 @@ int kprobe__do_mount(struct pt_regs *ctx)
                           sizeof(ev));
 
     return 0;
-}
-
-// returns the pid_tgid() as if it was called by the main thread in
-// the current thread group. This is essentially just the tgid (user
-// space pid) duplicated as the tid == pid in the main thread. This is
-// useful in exec* syscalls since they cause non-main threads to be
-// immediately terminated and the pid will be equal to the tid during
-// the kretprobe even if it wasn't during the kprobe.
-static __always_inline u64 main_thread_pid_tid()
-{
-    u64 pid_tgid = bpf_get_current_pid_tgid();
-    u64 pid = pid_tgid >> 32;
-    return pid << 32 | pid;
 }
 
 // returns NULL if offsets have not yet been loaded
@@ -161,12 +157,15 @@ static __always_inline int push_syscall(struct pt_regs *ctx, pprocess_message_t 
     read_value(ts, CRC_TASK_STRUCT_LOGINUID, &luid, sizeof(luid));
 
     u64 uid_gid = bpf_get_current_uid_gid();
+    u32 random_num = bpf_get_prandom_u32();
+    u32 tid = pid_tgid & 0xFFFFFFFF;
 
-    ev->event_id = bpf_get_prandom_u32();
+    ev->event_id = (u64)tid << 32 | random_num;
+
     ev->type = PM_SYSCALL_INFO;
     ev->u.syscall_info = (syscall_info_t) {
         .pid = pid_tgid >> 32,
-        .tid = pid_tgid & 0xFFFFFFFF,
+        .tid = tid,
         .ppid = ppid,
         .luid = luid,
         .euid = uid_gid >> 32,
@@ -375,7 +374,7 @@ Skip:
 
 static __always_inline int process_argv(struct pt_regs *ctx, pprocess_message_t ev,
                                         const char __user *const __user *argv, u32 tail_index) {
-    u64 pid_tgid = main_thread_pid_tid();
+    u64 pid_tgid = bpf_get_current_pid_tgid();
     u64 *idp = bpf_map_lookup_elem(&process_ids, &pid_tgid);
     if (idp == NULL) return -1;
 
@@ -421,7 +420,7 @@ static __always_inline int enter_exec_4_11(struct pt_regs *ctx, pprocess_message
                                            syscall_pattern_type_t sp)
 {
     // if the ID already exists, we are tail-calling into ourselves, skip ahead to reading the path
-    u64 pid_tgid = main_thread_pid_tid();
+    u64 pid_tgid = bpf_get_current_pid_tgid();
     u64 *id_p = bpf_map_lookup_elem(&process_ids, &pid_tgid);
 
     void *ts = (void *)bpf_get_current_task();
@@ -433,6 +432,14 @@ static __always_inline int enter_exec_4_11(struct pt_regs *ctx, pprocess_message
     }
 
     if (start_syscall(ctx, ev, sp, ts, pid_tgid) < 0) return -1;
+    u32 pid = pid_tgid >> 32;
+    u32 tid = pid_tgid & 0xFFFFFFFF;
+    // deliberately not using BPF_ANY because we do not want to
+    // overwrite it if another thread has already called for exec
+    if (bpf_map_update_elem(&exec_tids, &pid, &tid, BPF_NOEXIST) < 0) {
+        bpf_map_delete_elem(&process_ids, &pid_tgid);
+        return -1;
+    }
 
     u32 to_skip = 0;
     bpf_map_update_elem(&read_path_skip, &to_skip, &to_skip, BPF_ANY);
@@ -547,13 +554,18 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execve_4_11,
 SEC("kretprobe/ret_sys_execve_4_8")
 int kretprobe__ret_sys_execve_4_8(struct pt_regs *ctx)
 {
-    // in non-succesful execs the tid and pid may stil be
-    // different. We still want to be able to find it in process_ids
-    // so we can send a discard message so let's get the main_thread's
-    // pid_tid
-    u64 pid_tgid = main_thread_pid_tid();
+    // the exec may have started in a different thread so find it
+    // using exec_tids
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+    u32 pid = pid_tgid >> 32;
+
+    u32 *tid = bpf_map_lookup_elem(&exec_tids, &pid);
+    if (!tid) goto Done;
+
+     // use the tid that started the exec instead of our own tid
+    pid_tgid = (u64)pid << 32 | *tid;
     u64 *id = bpf_map_lookup_elem(&process_ids, &pid_tgid);
-    if (!id) return 0;
+    if (!id) goto Done;
 
     // re-use the same ev to save stack space
     process_message_t sev = {0};
@@ -567,6 +579,7 @@ int kretprobe__ret_sys_execve_4_8(struct pt_regs *ctx)
     push_exit_exec(ctx, &sev, ptr);
 
 Done:
+    bpf_map_delete_elem(&exec_tids, &pid);
     bpf_map_delete_elem(&process_ids, &pid_tgid);
     return 0;
 }
@@ -574,13 +587,17 @@ Done:
 SEC("kretprobe/ret_sys_execveat_4_8")
 int kretprobe__ret_sys_execveat_4_8(struct pt_regs *ctx)
 {
-    // in non-succesful execs the tid and pid may stil be
-    // different. We still want to be able to find it in process_ids
-    // so we can send a discard message so let's get the main_thread's
-    // pid_tid
-    u64 pid_tgid = main_thread_pid_tid();
+    // the exec may have started in a different thread so find it
+    // using exec_tids
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+    u32 pid = pid_tgid >> 32;
+    u32 *tid = bpf_map_lookup_elem(&exec_tids, &pid);
+    if (!tid) goto Done;
+
+    // use the tid that started the exec instead of our own tid
+    pid_tgid = (u64)pid << 32 | *tid;
     u64 *id = bpf_map_lookup_elem(&process_ids, &pid_tgid);
-    if (!id) return 0;
+    if (!id) goto Done;
 
     // re-use the same ev to save stack space
     process_message_t sev = {0};
@@ -598,6 +615,7 @@ int kretprobe__ret_sys_execveat_4_8(struct pt_regs *ctx)
     push_exit_exec(ctx, &sev, ptr);
 
 Done:
+    bpf_map_delete_elem(&exec_tids, &pid);
     bpf_map_delete_elem(&process_ids, &pid_tgid);
     return 0;
 }
@@ -720,53 +738,33 @@ int kretprobe__ret_sys_clone3(struct pt_regs *ctx)
 SEC("kprobe/read_pid_task_struct")
 int kprobe__read_pid_task_struct(struct pt_regs *ctx)
 {
-    // get new current
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+    u64 *id = bpf_map_lookup_elem(&process_ids, &pid_tgid);
+    if (!id) return 0;
+    bpf_map_delete_elem(&process_ids, &pid_tgid);
+
+    // get passed in task_struct
     void *ts = (void *)PT_REGS_PARM1(ctx);
 
     // get the true pid
-    u32 pid = 0;
-    u32 tgid = 0;
-    read_value(ts, CRC_TASK_STRUCT_PID, &pid, sizeof(pid));
-    read_value(ts, CRC_TASK_STRUCT_TGID, &tgid, sizeof(tgid));
+    u32 npid = 0;
+    u32 ntgid = 0;
+    read_value(ts, CRC_TASK_STRUCT_PID, &npid, sizeof(npid));
+    read_value(ts, CRC_TASK_STRUCT_TGID, &ntgid, sizeof(ntgid));
 
     // this means that this task_struct belongs to a non-main
-    // thread. Exit early to avoid race conditions with this task's
-    // parent doing a process clone at the same time causing conflicts
-    // when looking at process_ids below.
-    if (pid != tgid) return 0;
+    // thread. We do not care about new threads being spawned so exit
+    // early.
+    if (npid != ntgid) return 0;
 
-    u64 pid_tgid = (u64)tgid << 32 | pid;
-
-    // get the real parent
-    read_value(ts, CRC_TASK_STRUCT_REAL_PARENT, &ts, sizeof(ts));
-    u32 ppid = 0;
-    u32 ptgid = 0;
-
-    // find ppid and ptid (offsets)
-    // ts->real_parent->pid
-    read_value(ts, CRC_TASK_STRUCT_PID, &ppid, sizeof(ppid));
-    // ts->real_parent->tgid
-    read_value(ts, CRC_TASK_STRUCT_TGID, &ptgid, sizeof(ptgid));
-
-    // combine to find ID, get ID
-    u64 ppid_tgid = (u64)ptgid << 32 | ppid;
-
-    // there is unfortunately no atomic "pop" from the map so we need
-    // to be careful about race conditions here. We have checked above
-    // that this current task is the main thread for the process which
-    // makes this safe (no other threads for the same process will
-    // reach here). Note that the parent doesn't have be a main thread
-    // as threads can fork.
-    u64 *id = bpf_map_lookup_elem(&process_ids, &ppid_tgid);
-    if (!id) return 0;
-    bpf_map_delete_elem(&process_ids, &ppid_tgid);
+    u64 npid_tgid = (u64)ntgid << 32 | npid;
 
     // send event with ID
     process_message_t sev = {0};
 
     sev.event_id = *id;
     sev.type = PM_RETCODE;
-    sev.u.r.pid_tgid = pid_tgid;
+    sev.u.r.pid_tgid = npid_tgid;
     push_message(ctx, &sev);
 
     return 0;
@@ -877,49 +875,46 @@ int kretprobe__ret_sys_unshare(struct pt_regs *ctx)
     return 0;
 }
 
-static __always_inline int enter_exit(struct pt_regs *ctx, pprocess_message_t ev,
-                                      syscall_pattern_type_t sp)
-
+// sends both syscall and retcode because exit syscalls are __no_return
+static __always_inline int push_exit(struct pt_regs *ctx, pprocess_message_t ev,
+                                      syscall_pattern_type_t sp, u64 pid_tgid)
 {
-    // if PID != TGID, then exit, we only care when the entire group exits
-    u64 pid_tgid = bpf_get_current_pid_tgid();
-    if ((pid_tgid >> 32) ^ (pid_tgid & 0xFFFFFFFF)) return -1;
-
     void *ts = (void *)bpf_get_current_task();
     if (!ts) return -1;
 
-    // deliberately nto calling for `start_syscall` since there is no
+    // deliberately not calling for `start_syscall` since there is no
     // need to update `process_ids`. The exit probe handles both the
     // enter_exit and exit_exit in the same program so we can simply
     // share the event id through ev->event_id.
     if (push_syscall(ctx, ev, sp, ts, pid_tgid) < 0) return -1;
 
-    return 0;
-}
+    push_enter_done(ctx, ev);
 
-static __always_inline int exit_exit(struct pt_regs *ctx, pprocess_message_t ev)
-{
-    // Relies in that ev->event_id was already set and not cleared. This can
-    // be done because `exit_exit` is called in the same program as
-    // `enter_exit`. If this changes we'll need to store and retrieve
-    // from the process_ids map.
     ev->type = PM_RETCODE;
     ev->u.r.retcode = (u32)PT_REGS_RC(ctx);
     push_message(ctx, ev);
     return 0;
 }
 
-// do_exit probes must call enter_exit() and exit_exit() since do_exit is __no_return
-SEC("kprobe/do_exit_4_8")
-int BPF_KPROBE_SYSCALL(kprobe__do_exit_4_8, int status)
+SEC("kprobe/sys_exit")
+int BPF_KPROBE_SYSCALL(kprobe__sys_exit, int status)
+{
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+
+    // exit of a non-main thread
+    if ((pid_tgid >> 32) ^ (pid_tgid & 0xFFFFFFFF)) return 0;
+
+    process_message_t sev = {0};
+    push_exit(ctx, &sev, SP_EXIT, pid_tgid);
+
+    return 0;
+}
+
+SEC("kprobe/sys_exit_group")
+int BPF_KPROBE_SYSCALL(kprobe__sys_exit_group, int status)
 {
     process_message_t sev = {0};
-
-    if (enter_exit(ctx, &sev, SP_EXIT) < 0) return 0;
-
-    push_enter_done(ctx, &sev);
-
-    exit_exit(ctx, &sev);
+    push_exit(ctx, &sev, SP_EXITGROUP, bpf_get_current_pid_tgid());
 
     return 0;
 }
