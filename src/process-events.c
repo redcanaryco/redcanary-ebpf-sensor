@@ -875,49 +875,46 @@ int kretprobe__ret_sys_unshare(struct pt_regs *ctx)
     return 0;
 }
 
-static __always_inline int enter_exit(struct pt_regs *ctx, pprocess_message_t ev,
-                                      syscall_pattern_type_t sp)
-
+// sends both syscall and retcode because exit syscalls are __no_return
+static __always_inline int push_exit(struct pt_regs *ctx, pprocess_message_t ev,
+                                      syscall_pattern_type_t sp, u64 pid_tgid)
 {
-    // if PID != TGID, then exit, we only care when the entire group exits
-    u64 pid_tgid = bpf_get_current_pid_tgid();
-    if ((pid_tgid >> 32) ^ (pid_tgid & 0xFFFFFFFF)) return -1;
-
     void *ts = (void *)bpf_get_current_task();
     if (!ts) return -1;
 
-    // deliberately nto calling for `start_syscall` since there is no
+    // deliberately not calling for `start_syscall` since there is no
     // need to update `process_ids`. The exit probe handles both the
     // enter_exit and exit_exit in the same program so we can simply
     // share the event id through ev->event_id.
     if (push_syscall(ctx, ev, sp, ts, pid_tgid) < 0) return -1;
 
-    return 0;
-}
+    push_enter_done(ctx, ev);
 
-static __always_inline int exit_exit(struct pt_regs *ctx, pprocess_message_t ev)
-{
-    // Relies in that ev->event_id was already set and not cleared. This can
-    // be done because `exit_exit` is called in the same program as
-    // `enter_exit`. If this changes we'll need to store and retrieve
-    // from the process_ids map.
     ev->type = PM_RETCODE;
     ev->u.r.retcode = (u32)PT_REGS_RC(ctx);
     push_message(ctx, ev);
     return 0;
 }
 
-// do_exit probes must call enter_exit() and exit_exit() since do_exit is __no_return
-SEC("kprobe/do_exit_4_8")
-int BPF_KPROBE_SYSCALL(kprobe__do_exit_4_8, int status)
+SEC("kprobe/sys_exit")
+int BPF_KPROBE_SYSCALL(kprobe__sys_exit, int status)
+{
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+
+    // exit of a non-main thead
+    if ((pid_tgid >> 32) ^ (pid_tgid & 0xFFFFFFFF)) return 0;
+
+    process_message_t sev = {0};
+    push_exit(ctx, &sev, SP_EXIT, pid_tgid);
+
+    return 0;
+}
+
+SEC("kprobe/sys_exit_group")
+int BPF_KPROBE_SYSCALL(kprobe__sys_exit_group, int status)
 {
     process_message_t sev = {0};
-
-    if (enter_exit(ctx, &sev, SP_EXIT) < 0) return 0;
-
-    push_enter_done(ctx, &sev);
-
-    exit_exit(ctx, &sev);
+    push_exit(ctx, &sev, SP_EXITGROUP, bpf_get_current_pid_tgid());
 
     return 0;
 }
