@@ -97,18 +97,14 @@ typedef enum
     TE_UNSPEC,
     TE_SYSCALL_INFO,
     TE_COMMAND_LINE,
-    TE_CURRENT_WORKING_DIRECTORY,
     TE_FILE_INFO,
     TE_RETCODE,
     TE_CLONE_INFO,
     TE_CLONE3_INFO,
     TE_UNSHARE_FLAGS,
-    TE_EXIT_STATUS,
     TE_EXEC_FILENAME,
     TE_EXEC_FILENAME_REV,
     TE_PWD,
-    TE_SCRIPT,
-    TE_CHAR_STR,
     TE_DISCARD,
     TE_ENTER_DONE,
 } telemetry_event_type_t;
@@ -229,12 +225,6 @@ typedef struct
 
 typedef struct
 {
-    u32 new_pid;
-    u64 fork_flags;
-} process_fork_info_t;
-
-typedef struct
-{
     COMMON_FIELDS;
     u32 luid;
     u32 euid;
@@ -305,9 +295,7 @@ typedef struct
         file_info_t file_info;
         clone_info_t clone_info;
         clone3_info_t clone3_info;
-        script_info_t script_info;
         int unshare_flags;
-        int exit_status;
         struct
         {
             char value[VALUE_SIZE];
@@ -347,3 +335,21 @@ typedef enum
     SYS_EXECVEAT_TC_ARGV,
     HANDLE_PWD,
 } tail_call_slot_t;
+
+typedef enum {
+    SM_PWD,
+    SM_SCRIPT,
+    SM_CHAR_STR,
+} script_message_type_t;
+
+typedef struct {
+    u32 event_id;
+    script_message_type_t type;
+    union {
+        script_info_t script_info;
+        struct {
+            char value[VALUE_SIZE];
+            char truncated;
+        } v;
+    } u;
+} script_message_t, *pscript_message_t;

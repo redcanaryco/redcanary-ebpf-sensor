@@ -64,8 +64,8 @@ struct bpf_map_def SEC("maps/process_ids") process_ids = {
 #define SKIP_PATH_N(N) REPEAT_##N(SKIP_PATH;)
 
 #define SEND_PATH                                                           \
-    ev->id = id;                                                            \
-    ev->telemetry_type = TE_PWD;                                            \
+    ev->event_id = id;                                                      \
+    ev->type = SM_PWD;                                                      \
     if (br == 0)                                                            \
     {                                                                       \
         bpf_probe_read(&offset, sizeof(offset), ptr + name);                \
@@ -102,8 +102,8 @@ struct bpf_map_def SEC("maps/process_ids") process_ids = {
 #define SEND_PATH_N(N) REPEAT_##N(SEND_PATH;)
 
 #define READ_CHAR_STR                                                   \
-    ev.id = id;                                                         \
-    ev.telemetry_type = TE_CHAR_STR;                                    \
+    ev.event_id = id;                                                   \
+    ev.type = SM_CHAR_STR;                                              \
     __builtin_memset(&ev.u.v.value, 0, VALUE_SIZE);                     \
     count = bpf_probe_read_str(&ev.u.v.value, VALUE_SIZE, (void *)str); \
     if (count >= VALUE_SIZE)                                            \
@@ -124,10 +124,10 @@ struct bpf_map_def SEC("maps/process_ids") process_ids = {
 
 #define READ_CHAR_STR_N(N) REPEAT_##N(READ_CHAR_STR)
 
-static __always_inline void push_telemetry_event(struct pt_regs *ctx, ptelemetry_event_t ev)
+static __always_inline void push_telemetry_event(struct pt_regs *ctx, pscript_message_t ev)
 {
     bpf_perf_event_output(ctx, &script_events, BPF_F_CURRENT_CPU, ev, sizeof(*ev));
-    __builtin_memset(ev, 0, sizeof(telemetry_event_t));
+    __builtin_memset(ev, 0, sizeof(script_message_t));
 }
 
 SEC("kprobe/script_load")
@@ -148,8 +148,8 @@ int kprobe__handle_pwd(struct pt_regs *ctx)
     int count = 0;
     u32 to_skip = 0;
     u32 skipped = 0;
-    telemetry_event_t sev = {0};
-    ptelemetry_event_t ev = &sev;
+    script_message_t sev = {0};
+    pscript_message_t ev = &sev;
     unsigned long long ret = 0;
 
     // if the ID already exists, we are tail-calling into ourselves, skip ahead to reading the path
@@ -209,7 +209,7 @@ Skip:
     skipped = 0;
     bpf_map_delete_elem(&read_path_skip, &skipped);
     bpf_map_delete_elem(&process_ids, &p_t);
-    ev->id = id;
+    ev->event_id = id;
     return 0;
 }
 
@@ -233,13 +233,13 @@ int kretprobe__ret_script_load(struct pt_regs *ctx)
     }
 
     // Just to be safe 0 out the structs
-    telemetry_event_t ev;
+    script_message_t ev;
     __builtin_memset(&ev, 0, sizeof(ev));
 
     // Initialize some of the telemetry event
     id = bpf_get_prandom_u32();
-    ev.id = id;
-    ev.telemetry_type = TE_SCRIPT;
+    ev.event_id = id;
+    ev.type = SM_SCRIPT;
     ev.u.script_info.mono_ns = bpf_ktime_get_ns();
 
     // Get Process data and set pid and comm string
@@ -285,8 +285,8 @@ int kretprobe__ret_script_load(struct pt_regs *ctx)
     br = ev.u.v.value[0];
 
     // Output the path. It may only be the first part if the path/name is long
-    ev.id = id;
-    ev.telemetry_type = TE_CHAR_STR;
+    ev.event_id = id;
+    ev.type = SM_CHAR_STR;
     push_telemetry_event(ctx, &ev);
 
     // If we reached the max we could read and there is still more to read
