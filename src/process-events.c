@@ -161,12 +161,15 @@ static __always_inline int push_syscall(struct pt_regs *ctx, pprocess_message_t 
     read_value(ts, CRC_TASK_STRUCT_LOGINUID, &luid, sizeof(luid));
 
     u64 uid_gid = bpf_get_current_uid_gid();
+    u32 random_num = bpf_get_prandom_u32();
+    u32 tid = pid_tgid & 0xFFFFFFFF;
 
-    ev->event_id = bpf_get_prandom_u32();
+    ev->event_id = (u64)tid << 32 | random_num;
+
     ev->type = PM_SYSCALL_INFO;
     ev->u.syscall_info = (syscall_info_t) {
         .pid = pid_tgid >> 32,
-        .tid = pid_tgid & 0xFFFFFFFF,
+        .tid = tid,
         .ppid = ppid,
         .luid = luid,
         .euid = uid_gid >> 32,
@@ -720,53 +723,33 @@ int kretprobe__ret_sys_clone3(struct pt_regs *ctx)
 SEC("kprobe/read_pid_task_struct")
 int kprobe__read_pid_task_struct(struct pt_regs *ctx)
 {
-    // get new current
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+    u64 *id = bpf_map_lookup_elem(&process_ids, &pid_tgid);
+    if (!id) return 0;
+    bpf_map_delete_elem(&process_ids, &pid_tgid);
+
+    // get passed in task_struct
     void *ts = (void *)PT_REGS_PARM1(ctx);
 
     // get the true pid
-    u32 pid = 0;
-    u32 tgid = 0;
-    read_value(ts, CRC_TASK_STRUCT_PID, &pid, sizeof(pid));
-    read_value(ts, CRC_TASK_STRUCT_TGID, &tgid, sizeof(tgid));
+    u32 npid = 0;
+    u32 ntgid = 0;
+    read_value(ts, CRC_TASK_STRUCT_PID, &npid, sizeof(npid));
+    read_value(ts, CRC_TASK_STRUCT_TGID, &ntgid, sizeof(ntgid));
 
     // this means that this task_struct belongs to a non-main
-    // thread. Exit early to avoid race conditions with this task's
-    // parent doing a process clone at the same time causing conflicts
-    // when looking at process_ids below.
-    if (pid != tgid) return 0;
+    // thread. We do not care about new threads being spawned so exit
+    // early.
+    if (npid != ntgid) return 0;
 
-    u64 pid_tgid = (u64)tgid << 32 | pid;
-
-    // get the real parent
-    read_value(ts, CRC_TASK_STRUCT_REAL_PARENT, &ts, sizeof(ts));
-    u32 ppid = 0;
-    u32 ptgid = 0;
-
-    // find ppid and ptid (offsets)
-    // ts->real_parent->pid
-    read_value(ts, CRC_TASK_STRUCT_PID, &ppid, sizeof(ppid));
-    // ts->real_parent->tgid
-    read_value(ts, CRC_TASK_STRUCT_TGID, &ptgid, sizeof(ptgid));
-
-    // combine to find ID, get ID
-    u64 ppid_tgid = (u64)ptgid << 32 | ppid;
-
-    // there is unfortunately no atomic "pop" from the map so we need
-    // to be careful about race conditions here. We have checked above
-    // that this current task is the main thread for the process which
-    // makes this safe (no other threads for the same process will
-    // reach here). Note that the parent doesn't have be a main thread
-    // as threads can fork.
-    u64 *id = bpf_map_lookup_elem(&process_ids, &ppid_tgid);
-    if (!id) return 0;
-    bpf_map_delete_elem(&process_ids, &ppid_tgid);
+    u64 npid_tgid = (u64)ntgid << 32 | npid;
 
     // send event with ID
     process_message_t sev = {0};
 
     sev.event_id = *id;
     sev.type = PM_RETCODE;
-    sev.u.r.pid_tgid = pid_tgid;
+    sev.u.r.pid_tgid = npid_tgid;
     push_message(ctx, &sev);
 
     return 0;
