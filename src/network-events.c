@@ -125,6 +125,8 @@ int kretprobe__ret_inet_csk_accept(struct pt_regs *ctx)
         read_value(sk_base, CRC_SOCK_COMMON_SPORT, &ev.dest_port, sizeof(ev.dest_port));
         read_value(sk_base, CRC_SOCK_COMMON_DPORT, &ev.src_port, sizeof(ev.src_port));
         ev.src_port = SWAP_U16(ev.src_port);
+    } else {
+        return 0;
     }
 
     // Get Process data and set pid and comm string
@@ -436,15 +438,14 @@ int kretprobe__ret_tcp_connect(struct pt_regs *ctx)
 
     // Get the ip type and then
     read_value(skp_base, CRC_SOCK_COMMON_FAMILY, &ev.ip_type, sizeof(ev.ip_type));
-    if (ev.ip_type == AF_INET)
-    {
+    if (ev.ip_type == AF_INET) {
         read_value(skp_base, CRC_SOCK_COMMON_DADDR, &ev.protos.ipv4.dest_addr, sizeof(ev.protos.ipv4.dest_addr));
         read_value(skp_base, CRC_SOCK_COMMON_SADDR, &ev.protos.ipv4.src_addr, sizeof(ev.protos.ipv4.src_addr));
-    }
-    else
-    {
+    } else if (ev.ip_type == AF_INET6) {
         read_value(skp_base, CRC_SOCK_COMMON_DADDR6, &ev.protos.ipv6.dest_addr, sizeof(ev.protos.ipv6.dest_addr));
         read_value(skp_base, CRC_SOCK_COMMON_SADDR6, &ev.protos.ipv6.src_addr, sizeof(ev.protos.ipv6.src_addr));
+    } else {
+        return 0;
     }
 
     // Get port info
