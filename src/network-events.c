@@ -55,7 +55,6 @@ static __always_inline int save_sock_ptr(struct pt_regs *ctx, void *map)
 typedef struct
 {
     u16 protocol_type;           // Something like IPPROTO_TCP or IPPROTO_UDP
-    u16 ip_type;                 // AF_INET or AF_INET6
     u32 pid;
     u16 remote_port;
     ip_addr_t protos;
@@ -73,7 +72,6 @@ struct bpf_map_def SEC("maps/lru_hash") lru_hash = {
 static __always_inline int push_event(void *ctx, network_event_t *data) {
     network_event_key_t key = {0};
     key.protocol_type = data->protocol_type;
-    key.ip_type = data->ip_type;
     key.pid = data->process.pid;
     key.remote_port = (data->direction == inbound ? data->src_port : data->dest_port);
     key.protos = data->protos;
