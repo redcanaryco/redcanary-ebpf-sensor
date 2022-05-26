@@ -73,8 +73,14 @@ static __always_inline int push_event(void *ctx, network_event_t *data) {
     network_event_key_t key = {0};
     key.protocol_type = data->protocol_type;
     key.pid = data->process.pid;
-    key.remote_port = (data->direction == inbound ? data->src_port : data->dest_port);
     key.protos = data->protos;
+
+    if (data->protocol_type == IPPROTO_UDP) {
+        key.remote_port = 0;
+    } else {
+        key.remote_port = data->dest_port;
+    }
+
 
     if (bpf_map_lookup_elem(&lru_hash, &key) != NULL) {
         return 0;
