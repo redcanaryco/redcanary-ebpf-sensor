@@ -79,8 +79,6 @@ typedef enum
     SP_SETREGID,
     SP_SETRESUID,
     SP_SETRESGID,
-    SP_EXIT,
-    SP_EXITGROUP,
     SP_UNSHARE,
     SP_CLONE,
     SP_CLONE3,
@@ -105,6 +103,8 @@ typedef enum
     PM_PWD,
     PM_DISCARD,
     PM_ENTER_DONE,
+    PM_EXIT,
+    PM_EXITGROUP,
 } process_message_type_t;
 
 #define COMMON_FIELDS \

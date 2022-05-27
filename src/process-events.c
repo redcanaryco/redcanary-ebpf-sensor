@@ -119,9 +119,9 @@ static __always_inline void* is_user_process(void *ts)
 // CPU. The message is purposefully not cleared so its data (in
 // particular ev->event_id, and ev->type) can be reused if
 // necessary.
-static __always_inline void push_message(struct pt_regs *ctx, pprocess_message_t ev)
+static __always_inline int push_message(struct pt_regs *ctx, pprocess_message_t ev)
 {
-    bpf_perf_event_output(ctx, &process_events, BPF_F_CURRENT_CPU, ev, sizeof(*ev));
+    return bpf_perf_event_output(ctx, &process_events, BPF_F_CURRENT_CPU, ev, sizeof(*ev));
 }
 
 // sends PM_ENTER_DONE to signal the end of an enter_* event (i.e, a
@@ -177,6 +177,38 @@ static __always_inline int push_syscall(struct pt_regs *ctx, pprocess_message_t 
     push_message(ctx, ev);
 
     return 0;
+}
+
+static __always_inline int send_syscall(struct pt_regs *ctx, pprocess_message_t ev,
+                                        process_message_type_t pm, void *ts, u64 pid_tgid)
+{
+    if (!offset_loaded()) return -1;
+    if (!is_user_process(ts)) return -1;
+
+    void *ptr = NULL;
+    read_value(ts, CRC_TASK_STRUCT_REAL_PARENT, &ptr, sizeof(ptr));
+
+    u32 ppid = -1;
+    read_value(ptr, CRC_TASK_STRUCT_TGID, &ppid, sizeof(ppid));
+
+    u32 luid = -1;
+    read_value(ts, CRC_TASK_STRUCT_LOGINUID, &luid, sizeof(luid));
+
+    u64 uid_gid = bpf_get_current_uid_gid();
+    u32 tid = pid_tgid & 0xFFFFFFFF;
+
+    ev->type = pm;
+    ev->u.syscall_info = (syscall_info_t) {
+        .pid = pid_tgid >> 32,
+        .tid = tid,
+        .ppid = ppid,
+        .luid = luid,
+        .euid = uid_gid >> 32,
+        .egid = uid_gid & 0xFFFFFFFF,
+        .mono_ns = bpf_ktime_get_ns(),
+    };
+
+    return push_message(ctx, ev);
 }
 
 // A wrapper around push_syscall that additionally inserts a new entry
@@ -877,23 +909,12 @@ int kretprobe__ret_sys_unshare(struct pt_regs *ctx)
 
 // sends both syscall and retcode because exit syscalls are __no_return
 static __always_inline int push_exit(struct pt_regs *ctx, pprocess_message_t ev,
-                                      syscall_pattern_type_t sp, u64 pid_tgid)
+                                      process_message_type_t pm, u64 pid_tgid)
 {
     void *ts = (void *)bpf_get_current_task();
     if (!ts) return -1;
 
-    // deliberately not calling for `start_syscall` since there is no
-    // need to update `process_ids`. The exit probe handles both the
-    // enter_exit and exit_exit in the same program so we can simply
-    // share the event id through ev->event_id.
-    if (push_syscall(ctx, ev, sp, ts, pid_tgid) < 0) return -1;
-
-    push_enter_done(ctx, ev);
-
-    ev->type = PM_RETCODE;
-    ev->u.r.retcode = (u32)PT_REGS_RC(ctx);
-    push_message(ctx, ev);
-    return 0;
+    return send_syscall(ctx, ev, pm, ts, pid_tgid);
 }
 
 SEC("kprobe/sys_exit")
@@ -905,7 +926,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_exit, int status)
     if ((pid_tgid >> 32) ^ (pid_tgid & 0xFFFFFFFF)) return 0;
 
     process_message_t sev = {0};
-    push_exit(ctx, &sev, SP_EXIT, pid_tgid);
+    push_exit(ctx, &sev, PM_EXIT, pid_tgid);
 
     return 0;
 }
@@ -914,7 +935,7 @@ SEC("kprobe/sys_exit_group")
 int BPF_KPROBE_SYSCALL(kprobe__sys_exit_group, int status)
 {
     process_message_t sev = {0};
-    push_exit(ctx, &sev, SP_EXITGROUP, bpf_get_current_pid_tgid());
+    push_exit(ctx, &sev, PM_EXITGROUP, bpf_get_current_pid_tgid());
 
     return 0;
 }
