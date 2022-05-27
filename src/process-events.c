@@ -83,6 +83,7 @@ typedef struct {
     process_message_type_t type;
     union {
         int unshare_flags;
+        clone_info_t clone_info;
     };
 } incomplete_event_t;
 
@@ -179,16 +180,14 @@ static __always_inline int push_syscall(struct pt_regs *ctx, pprocess_message_t 
     ev->event_id = (u64)tid << 32 | random_num;
 
     ev->type = PM_SYSCALL_INFO;
-    ev->u.syscall_info = (syscall_info_t) {
-        .pid = pid_tgid >> 32,
-        .tid = tid,
-        .ppid = ppid,
-        .luid = luid,
-        .euid = uid_gid >> 32,
-        .egid = uid_gid & 0xFFFFFFFF,
-        .mono_ns = bpf_ktime_get_ns(),
-        .syscall_pattern = sp,
-    };
+    ev->u.syscall_info.pid = pid_tgid >> 32;
+    ev->u.syscall_info.tid = tid;
+    ev->u.syscall_info.ppid = ppid;
+    ev->u.syscall_info.luid = luid;
+    ev->u.syscall_info.euid = uid_gid >> 32;
+    ev->u.syscall_info.egid = uid_gid & 0xFFFFFFFF;
+    ev->u.syscall_info.mono_ns = bpf_ktime_get_ns();
+    ev->u.syscall_info.syscall_pattern = sp;
 
     push_message(ctx, ev);
 
@@ -197,7 +196,7 @@ static __always_inline int push_syscall(struct pt_regs *ctx, pprocess_message_t 
 
 static __always_inline int send_syscall(struct pt_regs *ctx, pprocess_message_t ev,
                                         process_message_type_t pm, void *ts, u64 pid_tgid,
-                                        process_data_union_t data)
+                                        process_data_union_t data, int retcode)
 {
     if (!offset_loaded()) return -1;
     if (!is_user_process(ts)) return -1;
@@ -215,16 +214,15 @@ static __always_inline int send_syscall(struct pt_regs *ctx, pprocess_message_t 
     u32 tid = pid_tgid & 0xFFFFFFFF;
 
     ev->type = pm;
-    ev->u.syscall_info = (syscall_info_t) {
-        .pid = pid_tgid >> 32,
-        .tid = tid,
-        .ppid = ppid,
-        .luid = luid,
-        .euid = uid_gid >> 32,
-        .egid = uid_gid & 0xFFFFFFFF,
-        .mono_ns = bpf_ktime_get_ns(),
-        .data = data,
-    };
+    ev->u.syscall_info.pid = pid_tgid >> 32;
+    ev->u.syscall_info.tid = tid;
+    ev->u.syscall_info.ppid = ppid;
+    ev->u.syscall_info.luid = luid;
+    ev->u.syscall_info.euid = uid_gid >> 32;
+    ev->u.syscall_info.egid = uid_gid & 0xFFFFFFFF;
+    ev->u.syscall_info.mono_ns = bpf_ktime_get_ns();
+    ev->u.syscall_info.data = data;
+    ev->u.syscall_info.retcode = retcode;
 
     return push_message(ctx, ev);
 }
@@ -670,47 +668,42 @@ Done:
     return 0;
 }
 
-static __always_inline int enter_clone(struct pt_regs *ctx, pprocess_message_t ev,
-                                       syscall_pattern_type_t sp, unsigned long flags)
+static __always_inline int enter_clone(process_message_type_t pm, unsigned long flags)
 {
     // we do not care about threads spawning; ignore clones that would
     // share the same thread group as the parent.
     if (flags & CLONE_THREAD) return -1;
 
-    void *ts = (void *)bpf_get_current_task();
-    if (!ts) return -1;
-
-    // TODO: It would be more efficient to combine these into a single
-    // message
-
     u64 pid_tgid = bpf_get_current_pid_tgid();
-    if (start_syscall(ctx, ev, sp, ts, pid_tgid) < 0) return -1;
+    incomplete_event_t event = {0};
+    event.type = pm;
+    event.clone_info.flags = flags;
 
-    ev->type = PM_CLONE_INFO;
-    ev->u.clone_info = (clone_info_t) {
-        .flags = flags,
-    };
-    push_message(ctx, ev);
+    bpf_map_update_elem(&incomplete_events, &pid_tgid, &event, BPF_ANY);
 
     return 0;
 }
 
 // handles the kretprobe of clone-like syscalls (fork, vfork, clone, clone3)
-static __always_inline int exit_clonex(struct pt_regs *ctx, pprocess_message_t ev)
+static __always_inline int exit_clonex(struct pt_regs *ctx, pprocess_message_t ev, process_message_type_t pm)
 {
-
     u64 pid_tgid = bpf_get_current_pid_tgid();
-    u64 *id = bpf_map_lookup_elem(&process_ids, &pid_tgid);
-    if (!id) return -1;
+    incomplete_event_t *event = (incomplete_event_t *) bpf_map_lookup_elem(&incomplete_events, &pid_tgid);
+    if (event == NULL) return -1;
 
-    ev->event_id = *id;
-    bpf_map_delete_elem(&process_ids, &pid_tgid);
+    bpf_map_delete_elem(&incomplete_events, &pid_tgid);
+    if (event->type != pm) return -1;
 
-    if (check_discard(ctx, ev)) return -1;
+    int retcode = PT_REGS_RC(ctx);
+    if (retcode < 0) return -1;
 
-    ev->type = PM_RETCODE;
-    ev->u.r.retcode = (u32)PT_REGS_RC(ctx);
-    push_message(ctx, ev);
+    void *ts = (void *)bpf_get_current_task();
+    if (!ts) return 0;
+
+    process_data_union_t data = {0};
+
+    data.clone_info = event->clone_info;
+    if (send_syscall(ctx, ev, pm, ts, pid_tgid, data, retcode) < 0) return -1;
 
     return 0;
 }
@@ -724,38 +717,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_clone_4_8, unsigned long flags, void __user *
                        int __user *parent_tid, unsigned long tls, int __user *child_tid)
 #endif
 {
-    process_message_t sev = {0};
-    if (enter_clone(ctx, &sev, SP_CLONE, flags) < 0) return 0;
-
-    push_enter_done(ctx, &sev);
-
-    return 0;
-}
-
-static __always_inline int enter_clone3(struct pt_regs *ctx, pprocess_message_t ev,
-                                        syscall_pattern_type_t sp, struct clone_args __user *uargs)
-{
-    // we do not care about threads spawning; ignore clones that would
-    // share the same thread group as the parent.
-    u64 flags = 0;
-    bpf_probe_read(&flags, sizeof(u64), &uargs->flags);
-    if (flags & CLONE_THREAD) return -1;
-
-    void *ts = (void *)bpf_get_current_task();
-    if (!ts) return -1;
-
-    // TODO: It would be more efficient to combine these into a single
-    // message
-
-    u64 pid_tgid = bpf_get_current_pid_tgid();
-    if (start_syscall(ctx, ev, sp, ts, pid_tgid) < 0) return -1;
-
-    clone3_info_t clone3_info = {0};
-
-    clone3_info.flags = flags;
-    ev->type = PM_CLONE3_INFO;
-    ev->u.clone3_info = clone3_info;
-    push_message(ctx, ev);
+    enter_clone(PM_CLONE, flags);
 
     return 0;
 }
@@ -763,10 +725,10 @@ static __always_inline int enter_clone3(struct pt_regs *ctx, pprocess_message_t 
 SEC("kprobe/sys_clone3")
 int BPF_KPROBE_SYSCALL(kprobe__sys_clone3, struct clone_args __user *uargs, size_t size)
 {
-    process_message_t sev = {0};
-    if (enter_clone3(ctx, &sev, SP_CLONE3, uargs) < 0) return 0;
+    u64 flags = 0;
+    bpf_probe_read(&flags, sizeof(u64), &uargs->flags);
 
-    push_enter_done(ctx, &sev);
+    enter_clone(PM_CLONE3, flags);
 
     return 0;
 }
@@ -775,7 +737,7 @@ SEC("kretprobe/ret_sys_clone3")
 int kretprobe__ret_sys_clone3(struct pt_regs *ctx)
 {
     process_message_t sev = {0};
-    exit_clonex(ctx, &sev);
+    exit_clonex(ctx, &sev, PM_CLONE3);
     return 0;
 }
 
@@ -789,9 +751,17 @@ SEC("kprobe/read_pid_task_struct")
 int kprobe__read_pid_task_struct(struct pt_regs *ctx)
 {
     u64 pid_tgid = bpf_get_current_pid_tgid();
-    u64 *id = bpf_map_lookup_elem(&process_ids, &pid_tgid);
-    if (!id) return 0;
-    bpf_map_delete_elem(&process_ids, &pid_tgid);
+    incomplete_event_t *event = (incomplete_event_t *) bpf_map_lookup_elem(&incomplete_events, &pid_tgid);
+    if (event == NULL) return 0;
+
+    if (event->type != PM_FORK &&
+        event->type != PM_VFORK &&
+        event->type != PM_CLONE &&
+        event->type != PM_CLONE3) {
+        // only deleting for the error case
+        bpf_map_delete_elem(&incomplete_events, &pid_tgid);
+        return 0;
+    }
 
     // get passed in task_struct
     void *ts = (void *)PT_REGS_PARM1(ctx);
@@ -807,15 +777,9 @@ int kprobe__read_pid_task_struct(struct pt_regs *ctx)
     // early.
     if (npid != ntgid) return 0;
 
-    u64 npid_tgid = (u64)ntgid << 32 | npid;
-
-    // send event with ID
-    process_message_t sev = {0};
-
-    sev.event_id = *id;
-    sev.type = PM_RETCODE;
-    sev.u.r.pid_tgid = npid_tgid;
-    push_message(ctx, &sev);
+    // deliberately not deleting from the map - we'll let the
+    // kretprobe do that and send the event
+    event->clone_info.child_pid = ntgid;
 
     return 0;
 }
@@ -823,11 +787,7 @@ int kprobe__read_pid_task_struct(struct pt_regs *ctx)
 SEC("kprobe/sys_fork_4_8")
 int BPF_KPROBE_SYSCALL(kprobe__sys_fork_4_8)
 {
-    process_message_t sev = {0};
-
-    if (enter_clone(ctx, &sev, SP_FORK, 0) < 0) return 0;
-
-    push_enter_done(ctx, &sev);
+    enter_clone(PM_FORK, 0);
 
     return 0;
 }
@@ -835,11 +795,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_fork_4_8)
 SEC("kprobe/sys_vfork_4_8")
 int BPF_KPROBE_SYSCALL(kprobe__sys_vfork_4_8)
 {
-    process_message_t sev = {0};
-
-    if (enter_clone(ctx, &sev, SP_VFORK, 0) < 0) return 0;
-
-    push_enter_done(ctx, &sev);
+    enter_clone(PM_VFORK, 0);
 
     return 0;
 }
@@ -848,7 +804,7 @@ SEC("kretprobe/ret_sys_clone")
 int kretprobe__ret_sys_clone(struct pt_regs *ctx)
 {
     process_message_t sev = {0};
-    exit_clonex(ctx, &sev);
+    exit_clonex(ctx, &sev, PM_CLONE);
     return 0;
 }
 
@@ -856,7 +812,7 @@ SEC("kretprobe/ret_sys_fork")
 int kretprobe__ret_sys_fork(struct pt_regs *ctx)
 {
     process_message_t sev = {0};
-    exit_clonex(ctx, &sev);
+    exit_clonex(ctx, &sev, PM_FORK);
     return 0;
 }
 
@@ -864,7 +820,7 @@ SEC("kretprobe/ret_sys_vfork")
 int kretprobe__ret_sys_vfork(struct pt_regs *ctx)
 {
     process_message_t sev = {0};
-    exit_clonex(ctx, &sev);
+    exit_clonex(ctx, &sev, PM_VFORK);
     return 0;
 }
 
@@ -891,13 +847,16 @@ int kretprobe__ret_sys_unshare(struct pt_regs *ctx)
     bpf_map_delete_elem(&incomplete_events, &pid_tgid);
     if (event->type != PM_UNSHARE) return 0;
 
+    int retcode = (int)PT_REGS_RC(ctx);
+    if (retcode < 0) return 0;
+
     void *ts = (void *)bpf_get_current_task();
     if (!ts) return 0;
 
     process_message_t sev = {0};
     process_data_union_t data = {0};
     data.unshare_flags = event->unshare_flags;
-    if (send_syscall(ctx, &sev, PM_UNSHARE, ts, pid_tgid, data) < 0) return 0;
+    send_syscall(ctx, &sev, PM_UNSHARE, ts, pid_tgid, data, retcode);
 
     return 0;
 }
@@ -910,7 +869,7 @@ static __always_inline int push_exit(struct pt_regs *ctx, pprocess_message_t ev,
     if (!ts) return -1;
 
     process_data_union_t data = {0};
-    return send_syscall(ctx, ev, pm, ts, pid_tgid, data);
+    return send_syscall(ctx, ev, pm, ts, pid_tgid, data, 0);
 }
 
 SEC("kprobe/sys_exit")

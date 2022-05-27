@@ -79,10 +79,6 @@ typedef enum
     SP_SETREGID,
     SP_SETRESUID,
     SP_SETRESGID,
-    SP_CLONE,
-    SP_CLONE3,
-    SP_FORK,
-    SP_VFORK,
     SP_EXECVE,
     SP_EXECVEAT,
 } syscall_pattern_type_t;
@@ -94,8 +90,6 @@ typedef enum
     PM_COMMAND_LINE,
     PM_FILE_INFO,
     PM_RETCODE,
-    PM_CLONE_INFO,
-    PM_CLONE3_INFO,
     PM_EXEC_FILENAME,
     PM_EXEC_FILENAME_REV,
     PM_PWD,
@@ -104,6 +98,10 @@ typedef enum
     PM_EXIT,
     PM_EXITGROUP,
     PM_UNSHARE,
+    PM_CLONE,
+    PM_CLONE3,
+    PM_FORK,
+    PM_VFORK,
 } process_message_type_t;
 
 #define COMMON_FIELDS \
@@ -220,8 +218,14 @@ typedef struct
     char comm[TASK_COMM_LEN];
 } file_info_t, *pfile_info_t;
 
+typedef struct {
+    u32 child_pid;
+    u64 flags;
+} clone_info_t;
+
 typedef union {
     u32 unshare_flags;
+    clone_info_t clone_info;
 } process_data_union_t;
 
 typedef struct
@@ -231,6 +235,7 @@ typedef struct
     u32 euid;
     u32 egid;
     process_data_union_t data;
+    int retcode;
 } syscall_info_t, *psyscall_info_t;
 
 enum direction_t
@@ -279,16 +284,6 @@ typedef struct
     ip_addr_t protos;
 } network_event_t, *pnetwork_event_t;
 
-typedef struct
-{
-    u64 flags;
-} clone_info_t, *pclone_info_t;
-
-typedef struct
-{
-    u64 flags;
-} clone3_info_t, *pclone3_info_t;
-
 typedef struct {
     char value[VALUE_SIZE];
     char truncated;
@@ -302,8 +297,6 @@ typedef struct
     {
         syscall_info_t syscall_info;
         file_info_t file_info;
-        clone_info_t clone_info;
-        clone3_info_t clone3_info;
         telemetry_value_t v;
         union
         {
