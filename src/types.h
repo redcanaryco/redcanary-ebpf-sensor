@@ -79,7 +79,6 @@ typedef enum
     SP_SETREGID,
     SP_SETRESUID,
     SP_SETRESGID,
-    SP_UNSHARE,
     SP_CLONE,
     SP_CLONE3,
     SP_FORK,
@@ -97,7 +96,6 @@ typedef enum
     PM_RETCODE,
     PM_CLONE_INFO,
     PM_CLONE3_INFO,
-    PM_UNSHARE_FLAGS,
     PM_EXEC_FILENAME,
     PM_EXEC_FILENAME_REV,
     PM_PWD,
@@ -105,6 +103,7 @@ typedef enum
     PM_ENTER_DONE,
     PM_EXIT,
     PM_EXITGROUP,
+    PM_UNSHARE,
 } process_message_type_t;
 
 #define COMMON_FIELDS \
@@ -221,12 +220,17 @@ typedef struct
     char comm[TASK_COMM_LEN];
 } file_info_t, *pfile_info_t;
 
+typedef union {
+    u32 unshare_flags;
+} process_data_union_t;
+
 typedef struct
 {
     COMMON_FIELDS;
     u32 luid;
     u32 euid;
     u32 egid;
+    process_data_union_t data;
 } syscall_info_t, *psyscall_info_t;
 
 enum direction_t
@@ -300,7 +304,6 @@ typedef struct
         file_info_t file_info;
         clone_info_t clone_info;
         clone3_info_t clone3_info;
-        int unshare_flags;
         telemetry_value_t v;
         union
         {

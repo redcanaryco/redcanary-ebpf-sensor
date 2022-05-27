@@ -79,6 +79,22 @@ struct bpf_map_def SEC("maps/tail_call_table") tail_call_table = {
     .namespace = "",
 };
 
+typedef struct {
+    process_message_type_t type;
+    union {
+        int unshare_flags;
+    };
+} incomplete_event_t;
+
+struct bpf_map_def SEC("maps/incomplete_events") incomplete_events = {
+    .type = BPF_MAP_TYPE_HASH,
+    .key_size = sizeof(u64),
+    .value_size = sizeof(incomplete_event_t),
+    .max_entries = 1024,
+    .pinning = 0,
+    .namespace = "",
+};
+
 SEC("kprobe/do_mount")
 int kprobe__do_mount(struct pt_regs *ctx)
 {
@@ -180,7 +196,8 @@ static __always_inline int push_syscall(struct pt_regs *ctx, pprocess_message_t 
 }
 
 static __always_inline int send_syscall(struct pt_regs *ctx, pprocess_message_t ev,
-                                        process_message_type_t pm, void *ts, u64 pid_tgid)
+                                        process_message_type_t pm, void *ts, u64 pid_tgid,
+                                        process_data_union_t data)
 {
     if (!offset_loaded()) return -1;
     if (!is_user_process(ts)) return -1;
@@ -206,6 +223,7 @@ static __always_inline int send_syscall(struct pt_regs *ctx, pprocess_message_t 
         .euid = uid_gid >> 32,
         .egid = uid_gid & 0xFFFFFFFF,
         .mono_ns = bpf_ktime_get_ns(),
+        .data = data,
     };
 
     return push_message(ctx, ev);
@@ -850,50 +868,15 @@ int kretprobe__ret_sys_vfork(struct pt_regs *ctx)
     return 0;
 }
 
-static __always_inline int enter_unshare(struct pt_regs *ctx, pprocess_message_t ev,
-                                         syscall_pattern_type_t sp, int flags)
-{
-    void *ts = (void *)bpf_get_current_task();
-    if (!ts) return -1;
-
-    // TODO: It would be more efficient to combine these into a single
-    // message
-
-    u64 pid_tgid = bpf_get_current_pid_tgid();
-    if (start_syscall(ctx, ev, sp, ts, pid_tgid) < 0) return -1;
-
-    ev->type = PM_UNSHARE_FLAGS;
-    ev->u.unshare_flags = flags;
-    push_message(ctx, ev);
-
-    return 0;
-}
-
-static __always_inline int exit_unshare(struct pt_regs *ctx, pprocess_message_t ev)
-{
-    u64 pid_tgid = bpf_get_current_pid_tgid();
-    u64 *id = bpf_map_lookup_elem(&process_ids, &pid_tgid);
-    if (!id) return -1;
-
-    ev->event_id = *id;
-    bpf_map_delete_elem(&process_ids, &pid_tgid);
-
-    if (check_discard(ctx, ev)) return -1;
-
-    ev->type = PM_RETCODE;
-    ev->u.r.retcode = (u32)PT_REGS_RC(ctx);
-    push_message(ctx, ev);
-
-    return 0;
-}
-
 SEC("kprobe/sys_unshare_4_8")
 int BPF_KPROBE_SYSCALL(kprobe__sys_unshare_4_8, int flags)
 {
-    process_message_t sev = {0};
-    if (enter_unshare(ctx, &sev, SP_UNSHARE, flags) < 0) return 0;
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+    incomplete_event_t event = {0};
+    event.type = PM_UNSHARE;
+    event.unshare_flags = flags;
 
-    push_enter_done(ctx, &sev);
+    bpf_map_update_elem(&incomplete_events, &pid_tgid, &event, BPF_ANY);
 
     return 0;
 }
@@ -901,8 +884,20 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_unshare_4_8, int flags)
 SEC("kretprobe/ret_sys_unshare")
 int kretprobe__ret_sys_unshare(struct pt_regs *ctx)
 {
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+    incomplete_event_t *event = (incomplete_event_t *) bpf_map_lookup_elem(&incomplete_events, &pid_tgid);
+    if (event == NULL) return 0;
+
+    bpf_map_delete_elem(&incomplete_events, &pid_tgid);
+    if (event->type != PM_UNSHARE) return 0;
+
+    void *ts = (void *)bpf_get_current_task();
+    if (!ts) return 0;
+
     process_message_t sev = {0};
-    exit_unshare(ctx, &sev);
+    process_data_union_t data = {0};
+    data.unshare_flags = event->unshare_flags;
+    if (send_syscall(ctx, &sev, PM_UNSHARE, ts, pid_tgid, data) < 0) return 0;
 
     return 0;
 }
@@ -914,7 +909,8 @@ static __always_inline int push_exit(struct pt_regs *ctx, pprocess_message_t ev,
     void *ts = (void *)bpf_get_current_task();
     if (!ts) return -1;
 
-    return send_syscall(ctx, ev, pm, ts, pid_tgid);
+    process_data_union_t data = {0};
+    return send_syscall(ctx, ev, pm, ts, pid_tgid, data);
 }
 
 SEC("kprobe/sys_exit")
