@@ -52,11 +52,17 @@ static __always_inline int save_sock_ptr(struct pt_regs *ctx, void *map)
     return 0;
 }
 
-typedef struct
-{
-    u16 protocol_type;           // Something like IPPROTO_TCP or IPPROTO_UDP
-    u32 pid;
+// Network connections will only emit once per "shape", the shape
+// being the `network_event_key_t`. This is done to prevent
+// overloading userspace with repetitive network connections by the
+// same process (e.g., a chatty UDP connection). Not including UDP vs
+// TCP because it's embedded in remote_port (always 0 for UDP; never 0
+// for TCP). Not including ipv4 vs ipv6 because it is embedded in
+// ip_addr_t
+typedef struct {
+
     u16 remote_port;
+    u32 pid;
     ip_addr_t protos;
 } network_event_key_t;
 
@@ -71,21 +77,19 @@ struct bpf_map_def SEC("maps/lru_hash") lru_hash = {
 
 static __always_inline int push_event(void *ctx, network_event_t *data) {
     network_event_key_t key = {0};
-    key.protocol_type = data->protocol_type;
     key.pid = data->process.pid;
     key.protos = data->protos;
-
-    if (data->protocol_type == IPPROTO_UDP) {
-        key.remote_port = 0;
-    } else {
-        key.remote_port = data->dest_port;
-    }
-
+    key.remote_port = data->protocol_type == IPPROTO_UDP ? 0 : data->dest_port;
 
     if (bpf_map_lookup_elem(&lru_hash, &key) != NULL) {
         return 0;
     }
+
     int result = bpf_perf_event_output(ctx, &network_events, BPF_F_CURRENT_CPU, data, sizeof(network_event_t));
+    // only add to cache if the event is successfully added to the
+    // output. This is done so in the case of the buffer being full we
+    // may still be able to submit a future event of the same shape
+    // later.
     if (result == 0) {
         u8 exists = 1;
         bpf_map_update_elem(&lru_hash, &key, &exists, BPF_ANY);
