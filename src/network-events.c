@@ -52,6 +52,51 @@ static __always_inline int save_sock_ptr(struct pt_regs *ctx, void *map)
     return 0;
 }
 
+// Network connections will only emit once per "shape", the shape
+// being the `network_event_key_t`. This is done to prevent
+// overloading userspace with repetitive network connections by the
+// same process (e.g., a chatty UDP connection). Not including UDP vs
+// TCP because it's embedded in remote_port (always 0 for UDP; never 0
+// for TCP). Not including ipv4 vs ipv6 because it is embedded in
+// ip_addr_t
+typedef struct {
+
+    u16 remote_port;
+    u32 pid;
+    ip_addr_t protos;
+} network_event_key_t;
+
+struct bpf_map_def SEC("maps/lru_hash") lru_hash = {
+    .type = BPF_MAP_TYPE_LRU_HASH,
+    .key_size = sizeof(network_event_key_t),
+    .value_size = sizeof(u8),
+    .max_entries = 8*1024,
+    .pinning = 0,
+    .namespace = "",
+};
+
+static __always_inline int push_event(void *ctx, network_event_t *data) {
+    network_event_key_t key = {0};
+    key.pid = data->process.pid;
+    key.protos = data->protos;
+    key.remote_port = data->protocol_type == IPPROTO_UDP ? 0 : data->dest_port;
+
+    if (bpf_map_lookup_elem(&lru_hash, &key) != NULL) {
+        return 0;
+    }
+
+    int result = bpf_perf_event_output(ctx, &network_events, BPF_F_CURRENT_CPU, data, sizeof(network_event_t));
+    // only add to cache if the event is successfully added to the
+    // output. This is done so in the case of the buffer being full we
+    // may still be able to submit a future event of the same shape
+    // later.
+    if (result == 0) {
+        u8 exists = 1;
+        bpf_map_update_elem(&lru_hash, &key, &exists, BPF_ANY);
+    }
+    return result;
+}
+
 SEC("kprobe/tcp_connect")
 int kprobe__tcp_connect(struct pt_regs *ctx)
 {
@@ -134,7 +179,7 @@ int kretprobe__ret_inet_csk_accept(struct pt_regs *ctx)
     bpf_get_current_comm(ev.process.comm, sizeof(ev.process.comm));
 
     // Output data to generator
-    bpf_perf_event_output(ctx, &network_events, BPF_F_CURRENT_CPU, &ev, sizeof(ev));
+    push_event(ctx, &ev);
 
     return 0;
 }
@@ -260,7 +305,7 @@ int kretprobe__ret___skb_recv_udp(struct pt_regs *ctx)
     bpf_get_current_comm(ev.process.comm, sizeof(ev.process.comm));
 
     // Output data to generator
-    bpf_perf_event_output(ctx, &network_events, BPF_F_CURRENT_CPU, &ev, sizeof(ev));
+    push_event(ctx, &ev);
     return 0;
 }
 
@@ -384,7 +429,7 @@ int kretprobe__ret_udp_outgoing(struct pt_regs *ctx)
     bpf_get_current_comm(ev.process.comm, sizeof(ev.process.comm));
 
     // Output data to generator
-    bpf_perf_event_output(ctx, &network_events, BPF_F_CURRENT_CPU, &ev, sizeof(ev));
+    push_event(ctx, &ev);
     return 0;
 }
 
@@ -458,7 +503,7 @@ int kretprobe__ret_tcp_connect(struct pt_regs *ctx)
     bpf_get_current_comm(ev.process.comm, sizeof(ev.process.comm));
 
     // Output data to generator
-    bpf_perf_event_output(ctx, &network_events, BPF_F_CURRENT_CPU, &ev, sizeof(ev));
+    push_event(ctx, &ev);
     return 0;
 }
 

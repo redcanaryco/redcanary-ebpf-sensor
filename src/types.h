@@ -249,6 +249,20 @@ typedef struct
     char path[128];
 } script_info_t;
 
+typedef union
+{
+    struct
+    {
+        __be32 dest_addr;
+        __be32 src_addr;
+    } ipv4;
+    struct
+    {
+        struct in6_addr dest_addr;
+        struct in6_addr src_addr;
+    } ipv6;
+} ip_addr_t;
+
 typedef struct
 {
     u16 protocol_type;           // Something like IPPROTO_TCP or IPPROTO_UDP
@@ -258,19 +272,7 @@ typedef struct
     u64 mono_ns;                 // Timestamp
     u16 dest_port;
     u16 src_port;
-    union
-    {
-        struct
-        {
-            __be32 dest_addr;
-            __be32 src_addr;
-        } ipv4;
-        struct
-        {
-            struct in6_addr dest_addr;
-            struct in6_addr src_addr;
-        } ipv6;
-    } protos;
+    ip_addr_t protos;
 } network_event_t, *pnetwork_event_t;
 
 typedef struct
