@@ -194,10 +194,7 @@ static __always_inline int push_syscall(struct pt_regs *ctx, pprocess_message_t 
     return 0;
 }
 
-static __always_inline int send_syscall(struct pt_regs *ctx, pprocess_message_t ev,
-                                        process_message_type_t pm, void *ts, u64 pid_tgid,
-                                        process_data_union_t data, int retcode)
-{
+static __always_inline int fill_syscall(syscall_info_t* syscall_info, void *ts, u64 pid_tgid) {
     if (!offset_loaded()) return -1;
     if (!is_user_process(ts)) return -1;
 
@@ -211,20 +208,17 @@ static __always_inline int send_syscall(struct pt_regs *ctx, pprocess_message_t 
     read_value(ts, CRC_TASK_STRUCT_LOGINUID, &luid, sizeof(luid));
 
     u64 uid_gid = bpf_get_current_uid_gid();
-    u32 tid = pid_tgid & 0xFFFFFFFF;
 
-    ev->type = pm;
-    ev->u.syscall_info.pid = pid_tgid >> 32;
-    ev->u.syscall_info.tid = tid;
-    ev->u.syscall_info.ppid = ppid;
-    ev->u.syscall_info.luid = luid;
-    ev->u.syscall_info.euid = uid_gid >> 32;
-    ev->u.syscall_info.egid = uid_gid & 0xFFFFFFFF;
-    ev->u.syscall_info.mono_ns = bpf_ktime_get_ns();
-    ev->u.syscall_info.data = data;
-    ev->u.syscall_info.retcode = retcode;
+    syscall_info->pid = pid_tgid >> 32;
+    syscall_info->tid = pid_tgid & 0xFFFFFFFF;
+    syscall_info->ppid = ppid;
+    syscall_info->luid = luid;
+    syscall_info->euid = uid_gid >> 32;
+    syscall_info->egid = uid_gid & 0xFFFFFFFF;
+    syscall_info->mono_ns = bpf_ktime_get_ns();
+    syscall_info->pid = pid_tgid >> 32;
 
-    return push_message(ctx, ev);
+    return 0;
 }
 
 // A wrapper around push_syscall that additionally inserts a new entry
@@ -698,14 +692,15 @@ static __always_inline int exit_clonex(struct pt_regs *ctx, pprocess_message_t e
     if (retcode < 0) return -1;
 
     void *ts = (void *)bpf_get_current_task();
-    if (!ts) return 0;
+    if (!ts) return -1;
 
-    process_data_union_t data = {0};
+    if (fill_syscall(&ev->u.syscall_info, ts, pid_tgid) < 0) return -1;
 
-    data.clone_info = event->clone_info;
-    if (send_syscall(ctx, ev, pm, ts, pid_tgid, data, retcode) < 0) return -1;
+    ev->type = pm;
+    ev->u.syscall_info.data.clone_info = event->clone_info;
+    ev->u.syscall_info.retcode = retcode;
 
-    return 0;
+    return push_message(ctx, ev);
 }
 
 SEC("kprobe/sys_clone_4_8")
@@ -854,22 +849,24 @@ int kretprobe__ret_sys_unshare(struct pt_regs *ctx)
     if (!ts) return 0;
 
     process_message_t sev = {0};
-    process_data_union_t data = {0};
-    data.unshare_flags = event->unshare_flags;
-    send_syscall(ctx, &sev, PM_UNSHARE, ts, pid_tgid, data, retcode);
+    if (fill_syscall(&sev.u.syscall_info, ts, pid_tgid) < 0) return 0;
 
-    return 0;
+    sev.type = PM_UNSHARE;
+    sev.u.syscall_info.data.unshare_flags = event->unshare_flags;
+    sev.u.syscall_info.retcode = retcode;
+
+    return push_message(ctx, &sev);
 }
 
-// sends both syscall and retcode because exit syscalls are __no_return
 static __always_inline int push_exit(struct pt_regs *ctx, pprocess_message_t ev,
-                                      process_message_type_t pm, u64 pid_tgid)
-{
+                                      process_message_type_t pm, u64 pid_tgid) {
     void *ts = (void *)bpf_get_current_task();
     if (!ts) return -1;
 
-    process_data_union_t data = {0};
-    return send_syscall(ctx, ev, pm, ts, pid_tgid, data, 0);
+    if (fill_syscall(&ev->u.syscall_info, ts, pid_tgid) < 0) return -1;
+    ev->type = pm;
+
+    return push_message(ctx, ev);
 }
 
 SEC("kprobe/sys_exit")
