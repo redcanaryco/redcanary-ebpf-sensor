@@ -79,22 +79,12 @@ typedef enum
     SP_SETREGID,
     SP_SETRESUID,
     SP_SETRESGID,
-    SP_EXECVE,
     SP_EXECVEAT,
 } syscall_pattern_type_t;
 
 typedef enum
 {
     PM_UNSPEC,
-    PM_SYSCALL_INFO,
-    PM_COMMAND_LINE,
-    PM_FILE_INFO,
-    PM_RETCODE,
-    PM_EXEC_FILENAME,
-    PM_EXEC_FILENAME_REV,
-    PM_PWD,
-    PM_DISCARD,
-    PM_ENTER_DONE,
     PM_EXIT,
     PM_EXITGROUP,
     PM_UNSHARE,
@@ -102,6 +92,10 @@ typedef enum
     PM_CLONE3,
     PM_FORK,
     PM_VFORK,
+    PM_EXECVE,
+    PM_EXECVEAT,
+    PM_STRINGS,
+    PM_DISCARD,
 } process_message_type_t;
 
 #define COMMON_FIELDS \
@@ -212,9 +206,9 @@ typedef struct
 
 typedef struct
 {
-    u64 inode;
     u32 devmajor;
     u32 devminor;
+    u64 inode;
     char comm[TASK_COMM_LEN];
 } file_info_t, *pfile_info_t;
 
@@ -223,19 +217,24 @@ typedef struct {
     u64 flags;
 } clone_info_t;
 
-typedef union {
-    u32 unshare_flags;
-    clone_info_t clone_info;
-} process_data_union_t;
-
 typedef struct
 {
-    COMMON_FIELDS;
+    u32 pid;
+    u32 ppid;
     u32 luid;
     u32 euid;
     u32 egid;
-    process_data_union_t data;
     int retcode;
+    u64 mono_ns;
+    union {
+        u32 unshare_flags;
+        clone_info_t clone_info;
+        struct {
+            u64 event_id;
+            u32 buffer_length;
+            file_info_t file_info;
+        } exec_info;
+    } data;
 } syscall_info_t, *psyscall_info_t;
 
 enum direction_t
@@ -291,19 +290,19 @@ typedef struct {
 
 typedef struct
 {
-    u64 event_id;
     process_message_type_t type;
-    union
-    {
+    union {
         syscall_info_t syscall_info;
-        file_info_t file_info;
-        telemetry_value_t v;
-        union
-        {
-            u64 pid_tgid;
-            u64 retcode;
-        } r;
+        struct {
+            u64 event_id;
+            u32 buffer_length;
+        } string_info;
+        struct {
+            u64 event_id;
+        } discard_info;
     } u;
+    // not allowed inside union
+    char strings[];
 } process_message_t, *pprocess_message_t;
 
 // clone3 args are not available in sched.h until 5.3, and we build against 4.4
@@ -327,6 +326,7 @@ struct clone_args
 typedef enum
 {
     SYS_EXECVE_4_11,
+    SYS_EXECVEAT_4_11,
     RET_SYS_EXECVEAT_4_8,
     SYS_EXECVE_TC_ARGV,
     SYS_EXECVEAT_TC_ARGV,
