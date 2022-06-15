@@ -608,22 +608,7 @@ static __always_inline int exit_exec(struct pt_regs *ctx, process_message_t *pm,
     pm->type = pm_type;
     pm->u.syscall_info.data.exec_info.event_id = event->exec_id;;
     pm->u.syscall_info.retcode = retcode;
-
-    u32 i_dev = 0;
-    u64 i_ino = 0;
-    void *sptr = NULL;
-    void *ptr = NULL;
-
-    read_value(exe, CRC_FILE_F_INODE, &ptr, sizeof(ptr));
-    read_value(ptr, CRC_INODE_I_SB, &sptr, sizeof(sptr));
-    read_value(sptr, CRC_SBLOCK_S_DEV, &i_dev, sizeof(i_dev));
-    read_value(ptr, CRC_INODE_I_INO, &i_ino, sizeof(i_ino));
-
-    pm->u.syscall_info.data.exec_info.file_info.inode = i_ino;
-    pm->u.syscall_info.data.exec_info.file_info.devmajor = MAJOR(i_dev);
-    pm->u.syscall_info.data.exec_info.file_info.devminor = MINOR(i_dev);
-    bpf_get_current_comm(&pm->u.syscall_info.data.exec_info.file_info.comm,
-                         sizeof(pm->u.syscall_info.data.exec_info.file_info.comm));
+    pm->u.syscall_info.data.exec_info.file_info = extract_file_info(exe);
 
     return 0;
 
