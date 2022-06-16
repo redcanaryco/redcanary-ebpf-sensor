@@ -82,6 +82,16 @@ typedef enum
     SP_EXECVEAT,
 } syscall_pattern_type_t;
 
+typedef enum {
+    PMW_BUFFER_FULL = 1,
+    PMW_TAIL_CALL_MAX,
+    PMW_MAX_PATH,
+    PMW_DOUBLE_EXEC,
+    PMW_FILLED_EVENTS,
+    PMW_WRONG_TYPE,
+    PMW_UNEXPECTED,
+} process_message_warning_t;
+
 typedef enum
 {
     PM_UNSPEC,
@@ -96,6 +106,7 @@ typedef enum
     PM_EXECVEAT,
     PM_STRINGS,
     PM_DISCARD,
+    PM_WARNING,
 } process_message_type_t;
 
 #define COMMON_FIELDS \
