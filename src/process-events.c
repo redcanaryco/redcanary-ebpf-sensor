@@ -399,7 +399,11 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execve_tc_argv,
 
     int ret = write_argv(ctx, argv, buffer, &pm->u.string_info.buffer_length, SYS_EXECVE_TC_ARGV);
     if (ret < 0) {
-        // TODO: emit error.
+        pm->type = PM_WARNING;
+        pm->u.warning_info.message_type = PM_EXECVE;
+        pm->u.warning_info.code = -ret;
+
+        push_message(ctx, pm);
 
         // deliberately not returning early so we can still push the
         // message for the bit we have
@@ -538,7 +542,11 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execveat_tc_argv,
 
     int ret = write_argv(ctx, argv, buffer, &pm->u.string_info.buffer_length, SYS_EXECVEAT_TC_ARGV);
     if (ret < 0) {
-        // TODO: emit error.
+        pm->type = PM_WARNING;
+        pm->u.warning_info.message_type = PM_EXECVEAT;
+        pm->u.warning_info.code = -ret;
+
+        push_message(ctx, pm);
 
         // deliberately not returning early so we can still push the
         // message for the bit we have
@@ -644,7 +652,11 @@ int kretprobe__ret_sys_execve_4_8(struct pt_regs *ctx)
     int ret = exit_exec(ctx, &pm, ts, exe, PM_EXECVE);
     if (ret != 0) {
         if (ret < 0) {
-            // TODO: emit error
+            pm.type = PM_WARNING;
+            pm.u.warning_info.message_type = PM_EXECVE;
+            pm.u.warning_info.code = -ret;
+
+            push_message(ctx, &pm);
         }
 
         return 0;
@@ -666,7 +678,11 @@ int kretprobe__ret_sys_execveat_4_8(struct pt_regs *ctx) {
 
     void *ts = (void *)bpf_get_current_task();
     void *exe = get_current_exe(ts);
-    if (!exe) return 0;
+    int ret = 0;
+    if (!exe) {
+        ret = -PM_WARNING;
+        goto Done;
+    }
 
     process_message_t *pm = (process_message_t *) buffer;
 
@@ -675,50 +691,55 @@ int kretprobe__ret_sys_execveat_4_8(struct pt_regs *ctx) {
     }
 
     pm->u.syscall_info.data.exec_info.buffer_length = sizeof(process_message_t);
-    int ret = exit_exec(ctx, pm, ts, exe, PM_EXECVEAT);
-    if (ret != 0) {
-        if (ret < 0) {
-            // TODO: emit error
-        }
-
-        return 0;
-    }
+    ret = exit_exec(ctx, pm, ts, exe, PM_EXECVEAT);
+    if (ret != 0) goto Done;
 
  Pwd:;
     void *path = offset_ptr(exe, CRC_FILE_F_PATH);
-    int write_error = write_path(ctx, path, buffer, skips,
-                                 &pm->u.syscall_info.data.exec_info.buffer_length, RET_SYS_EXECVEAT_4_8);
-
-    if (write_error < 0) {
-        // TODO: emit error
-        *skips = 0;
-        return 0;
-    }
+    ret = write_path(ctx, path, buffer, skips,
+                     &pm->u.syscall_info.data.exec_info.buffer_length, RET_SYS_EXECVEAT_4_8);
 
     // reset skips back to 0. This will automatically update it in the
     // map so no need to do a bpf_map_update_elem.
     *skips = 0;
+
+    if (ret < 0) goto Done;
 
     // add an extra null byte to signify string section end
     write_null_char(buffer, &pm->u.syscall_info.data.exec_info.buffer_length);
 
     push_flexible_message(ctx, pm, pm->u.syscall_info.data.exec_info.buffer_length);
 
+ Done:;
+    if (ret < 0) {
+        pm->type = PM_WARNING;
+        pm->u.warning_info.message_type = PM_EXECVEAT;
+        pm->u.warning_info.code = -ret;
+
+        push_message(ctx, pm);
+    }
+
     return 0;
 }
 
-static __always_inline void enter_clone(process_message_type_t pm, unsigned long flags) {
+static __always_inline void enter_clone(struct pt_regs *ctx, process_message_type_t pm_type, unsigned long flags) {
     // we do not care about threads spawning; ignore clones that would
     // share the same thread group as the parent.
     if (flags & CLONE_THREAD) return;
 
     u64 pid_tgid = bpf_get_current_pid_tgid();
     incomplete_event_t event = {0};
-    event.type = pm;
+    event.type = pm_type;
     event.clone_info.flags = flags;
 
     if (bpf_map_update_elem(&incomplete_events, &pid_tgid, &event, BPF_ANY) < 0) {
-        // TODO emit error
+        process_message_t pm = {0};
+        pm.type = PM_WARNING;
+        pm.u.warning_info.message_type = pm_type;
+        pm.u.warning_info.code = PMW_FILLED_EVENTS;
+
+        push_message(ctx, &pm);
+
         return;
     }
 
@@ -726,14 +747,20 @@ static __always_inline void enter_clone(process_message_type_t pm, unsigned long
 }
 
 // handles the kretprobe of clone-like syscalls (fork, vfork, clone, clone3)
-static __always_inline void exit_clonex(struct pt_regs *ctx, pprocess_message_t ev, process_message_type_t pm) {
+static __always_inline void exit_clonex(struct pt_regs *ctx, pprocess_message_t ev, process_message_type_t pm_type) {
     u64 pid_tgid = bpf_get_current_pid_tgid();
     incomplete_event_t *event = (incomplete_event_t *) bpf_map_lookup_elem(&incomplete_events, &pid_tgid);
     if (event == NULL) return;
 
     bpf_map_delete_elem(&incomplete_events, &pid_tgid);
-    if (event->type != pm) {
-        // TODO: emit error
+    if (event->type != pm_type) {
+        process_message_t pm = {0};
+        pm.type = PM_WARNING;
+        pm.u.warning_info.message_type = pm_type;
+        pm.u.warning_info.code = PMW_WRONG_TYPE;
+
+        push_message(ctx, &pm);
+
         return;
     }
 
@@ -743,7 +770,7 @@ static __always_inline void exit_clonex(struct pt_regs *ctx, pprocess_message_t 
     void *ts = (void *)bpf_get_current_task();
     if (fill_syscall(&ev->u.syscall_info, ts, pid_tgid >> 32) != 0) return;
 
-    ev->type = pm;
+    ev->type = pm_type;
     ev->u.syscall_info.data.clone_info = event->clone_info;
     ev->u.syscall_info.retcode = retcode;
 
@@ -759,7 +786,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_clone_4_8, unsigned long flags, void __user *
                        int __user *parent_tid, unsigned long tls, int __user *child_tid)
 #endif
 {
-    enter_clone(PM_CLONE, flags);
+    enter_clone(ctx, PM_CLONE, flags);
 
     return 0;
 }
@@ -770,7 +797,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_clone3, struct clone_args __user *uargs, size
     u64 flags = 0;
     bpf_probe_read(&flags, sizeof(u64), &uargs->flags);
 
-    enter_clone(PM_CLONE3, flags);
+    enter_clone(ctx, PM_CLONE3, flags);
 
     return 0;
 }
@@ -800,8 +827,13 @@ int kprobe__read_pid_task_struct(struct pt_regs *ctx)
         event->type != PM_VFORK &&
         event->type != PM_CLONE &&
         event->type != PM_CLONE3) {
-        // TODO: emit error
-        bpf_map_delete_elem(&incomplete_events, &pid_tgid);
+        process_message_t pm = {0};
+        pm.type = PM_WARNING;
+        pm.u.warning_info.message_type = PM_CLONE;
+        pm.u.warning_info.code = PMW_WRONG_TYPE;
+
+        push_message(ctx, &pm);
+
         return 0;
     }
 
@@ -829,7 +861,7 @@ int kprobe__read_pid_task_struct(struct pt_regs *ctx)
 SEC("kprobe/sys_fork_4_8")
 int BPF_KPROBE_SYSCALL(kprobe__sys_fork_4_8)
 {
-    enter_clone(PM_FORK, SIGCHLD);
+    enter_clone(ctx, PM_FORK, SIGCHLD);
 
     return 0;
 }
@@ -837,7 +869,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_fork_4_8)
 SEC("kprobe/sys_vfork_4_8")
 int BPF_KPROBE_SYSCALL(kprobe__sys_vfork_4_8)
 {
-    enter_clone(PM_VFORK, CLONE_VFORK | CLONE_VM | SIGCHLD);
+    enter_clone(ctx, PM_VFORK, CLONE_VFORK | CLONE_VM | SIGCHLD);
 
     return 0;
 }
@@ -875,7 +907,13 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_unshare_4_8, int flags)
     event.unshare_flags = flags;
 
     if (bpf_map_update_elem(&incomplete_events, &pid_tgid, &event, BPF_ANY) < 0) {
-        // TODO: emit error
+        process_message_t pm = {0};
+        pm.type = PM_WARNING;
+        pm.u.warning_info.message_type = PM_UNSHARE;
+        pm.u.warning_info.code = PMW_FILLED_EVENTS;
+
+        push_message(ctx, &pm);
+
         return 0;
     }
 
@@ -890,8 +928,15 @@ int kretprobe__ret_sys_unshare(struct pt_regs *ctx)
     if (event == NULL) return 0;
 
     bpf_map_delete_elem(&incomplete_events, &pid_tgid);
+    process_message_t pm = {0};
+
     if (event->type != PM_UNSHARE) {
-        // TODO: emit error
+        pm.type = PM_WARNING;
+        pm.u.warning_info.message_type = PM_UNSHARE;
+        pm.u.warning_info.code = PMW_WRONG_TYPE;
+
+        push_message(ctx, &pm);
+
         return 0;
     }
 
@@ -899,23 +944,23 @@ int kretprobe__ret_sys_unshare(struct pt_regs *ctx)
     if (retcode < 0) return 0;
 
     void *ts = (void *)bpf_get_current_task();
-    process_message_t sev = {0};
-    if (fill_syscall(&sev.u.syscall_info, ts, pid_tgid >> 32) != 0) return 0;
 
-    sev.type = PM_UNSHARE;
-    sev.u.syscall_info.data.unshare_flags = event->unshare_flags;
-    sev.u.syscall_info.retcode = retcode;
+    if (fill_syscall(&pm.u.syscall_info, ts, pid_tgid >> 32) != 0) return 0;
 
-    push_message(ctx, &sev);
+    pm.type = PM_UNSHARE;
+    pm.u.syscall_info.data.unshare_flags = event->unshare_flags;
+    pm.u.syscall_info.retcode = retcode;
+
+    push_message(ctx, &pm);
 
     return 0;
 }
 
 static __always_inline void push_exit(struct pt_regs *ctx, pprocess_message_t ev,
-                                      process_message_type_t pm, u32 pid) {
+                                      process_message_type_t pm_type, u32 pid) {
     void *ts = (void *)bpf_get_current_task();
     if (fill_syscall(&ev->u.syscall_info, ts, pid) != 0) return;
-    ev->type = pm;
+    ev->type = pm_type;
 
     push_message(ctx, ev);
 }

@@ -311,6 +311,10 @@ typedef struct
         struct {
             u64 event_id;
         } discard_info;
+        struct {
+            process_message_warning_t code;
+            process_message_type_t message_type;
+        } warning_info;
     } u;
     // not allowed inside union
     char strings[];
