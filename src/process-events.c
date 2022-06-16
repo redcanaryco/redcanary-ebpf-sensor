@@ -369,7 +369,7 @@ static __always_inline int write_argv(struct pt_regs *ctx, const char __user *co
         // we are ignoring the case of the string having been too
         // large. If this becomes a problem in practice we can tweak
         // the values somewhat.
-        int sz = write_string(ptr, buffer, buffer_offset, 256);
+        int sz = write_string(ptr, buffer, buffer_offset, 1024);
         if (sz < 0) {
             ret = sz;
             goto Done;
