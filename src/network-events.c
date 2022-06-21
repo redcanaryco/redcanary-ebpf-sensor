@@ -342,13 +342,12 @@ int kretprobe__ret_udp_outgoing(struct pt_regs *ctx)
 
     // Lookup the corresponding sk_buff* that we saved when udp_outgoing
     skpp = bpf_map_lookup_elem(&udp_outgoing_map, &index);
-    if (skpp == NULL)
-    {
-        return 0;
-    }
+    if (skpp == NULL) return 0;
+    unsigned char *skbuff_base = (unsigned char *)*skpp;
+
+    // only delete after we have gotten the value behind skpp
     bpf_map_delete_elem(&udp_outgoing_map, &index);
 
-    unsigned char *skbuff_base = (unsigned char *)*skpp;
     if (skbuff_base == NULL)
     {
         return 0;
@@ -463,15 +462,16 @@ int kretprobe__ret_tcp_connect(struct pt_regs *ctx)
     // if ipv4 do one thing else do the other
 
     skpp = bpf_map_lookup_elem(&tcp_connect, &index);
-    if (skpp == 0)
-    {
-        return 0;
-    }
-    bpf_map_delete_elem(&tcp_connect, &index);
+    if (skpp == 0) return 0;
+
 
     // Deref
     _sock skp = *skpp;
     unsigned char *skp_base = (unsigned char *)skp;
+
+    // only delete after we have gotten the value behind skpp
+    bpf_map_delete_elem(&tcp_connect, &index);
+
     if (skp_base == NULL)
     {
         return 0;
