@@ -90,6 +90,7 @@ typedef enum {
     PMW_FILLED_EVENTS,
     PMW_WRONG_TYPE,
     PMW_UNEXPECTED,
+    PMW_MISSING_EVENT,
 } process_message_warning_t;
 
 typedef enum
