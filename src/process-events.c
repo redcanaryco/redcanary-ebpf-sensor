@@ -451,19 +451,19 @@ static __always_inline int write_pwd(struct pt_regs *ctx, buf_t *buffer, u32 *of
     return ret;
 }
 
-static __always_inline int enter_exec(struct pt_regs *ctx, const char __user *filename,
+static __always_inline void enter_exec(struct pt_regs *ctx, const char __user *filename,
                                        process_message_type_t pm_type, tail_call_slot_t pwd_slot,
                                        tail_call_slot_t argv_slot) {
     u32 key = 0;
     buf_t *buffer = (buf_t *) bpf_map_lookup_elem(&buffers, &key);
-    if (buffer == NULL) return 1;
+    if (buffer == NULL) return;
 
     u32 *skips = (u32 *) bpf_map_lookup_elem(&percpu_counter, &key);
-    if (skips == NULL) return 1;
+    if (skips == NULL) return;
 
     process_message_t *pm = (process_message_t *) buffer;
 
-    int ret = 0;
+    int ret = -PMW_UNEXPECTED;
     u64 pid_tgid = bpf_get_current_pid_tgid();
     u32 pid = pid_tgid >> 32;
 
@@ -517,15 +517,18 @@ Pwd:;
     // tail call to the argv handling program
     bpf_tail_call(ctx, &tail_call_table, argv_slot);
 
+    // tail call shouldn't fail since we don't let pwd use up all the
+    // tail calls but just in case it happens let's emit an error
     ret = -PMW_TAIL_CALL_MAX;
 
  Error:;
-    // tail call shouldn't fail since we don't let pwd use up all the
-    // tail calls but just in case it happens let's emit an error
+    pm->type = PM_WARNING;
+    pm->u.warning_info.message_type = pm_type;
+    pm->u.warning_info.code = -ret;
+    push_message(ctx, pm);
+
     bpf_map_delete_elem(&exec_tids, &pid);
     bpf_map_delete_elem(&incomplete_events, &pid_tgid);
-
-    return ret;
 }
 
 SEC("kprobe/sys_execveat_tc_argv")
@@ -571,11 +574,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execveat_4_11,
                        const char __user *const __user *argv,
                        const char __user *const __user *envp,
                        int flags) {
-    int ret = enter_exec(ctx, NULL, PM_EXECVEAT, SYS_EXECVEAT_4_11, SYS_EXECVEAT_TC_ARGV);
-    if (ret < 0) {
-        // emit error
-        return 0;
-    }
+    enter_exec(ctx, NULL, PM_EXECVEAT, SYS_EXECVEAT_4_11, SYS_EXECVEAT_TC_ARGV);
 
     return 0;
 }
@@ -590,11 +589,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execve_4_11,
     // that is an invalid exec argument anyway
     if (!filename) return 0;
 
-    int ret = enter_exec(ctx, filename, PM_EXECVE, SYS_EXECVE_4_11, SYS_EXECVE_TC_ARGV);
-    if (ret < 0) {
-        // emit error
-        return 0;
-    }
+    enter_exec(ctx, filename, PM_EXECVE, SYS_EXECVE_4_11, SYS_EXECVE_TC_ARGV);
 
     return 0;
 }
@@ -615,7 +610,16 @@ static __always_inline int exit_exec(struct pt_regs *ctx, process_message_t *pm,
 
     int ret = 1;
     incomplete_event_t *event = (incomplete_event_t *) bpf_map_lookup_elem(&incomplete_events, &pid_tgid);
-    if (event == NULL) goto Done;
+    if (event == NULL) {
+        // unlike other events where we might miss incomplete events
+        // due to the program starting halfway through a syscall;
+        // finding an exec_tid but not an incomplete_event means that
+        // something did not get deleted appropiately or that
+        // something got deleted too early - either way let's inform
+        // user space
+        ret = -PMW_MISSING_EVENT;
+        goto Done;
+    }
 
     if (event->type != pm_type) {
         ret = -PMW_WRONG_TYPE;
@@ -630,7 +634,14 @@ static __always_inline int exit_exec(struct pt_regs *ctx, process_message_t *pm,
         goto Done;
     }
 
-    if (fill_syscall(&pm->u.syscall_info, ts, pid) != 0) goto Done;
+    if (fill_syscall(&pm->u.syscall_info, ts, pid) != 0) {
+        // don't exit early without discarding
+        pm->type = PM_DISCARD;
+        pm->u.discard_info.event_id = event->exec_id;
+        push_message(ctx, pm);
+
+        goto Done;
+    }
 
     ret = 0;
     pm->type = pm_type;
@@ -650,25 +661,28 @@ static __always_inline int exit_exec(struct pt_regs *ctx, process_message_t *pm,
 SEC("kretprobe/ret_sys_execve_4_8")
 int kretprobe__ret_sys_execve_4_8(struct pt_regs *ctx)
 {
+    process_message_t pm = {0};
     void *ts = (void *)bpf_get_current_task();
     void *exe = get_current_exe(ts);
-    if (!exe) return 0;
-
-    process_message_t pm = {0};
-    int ret = exit_exec(ctx, &pm, ts, exe, PM_EXECVE);
-    if (ret != 0) {
-        if (ret < 0) {
-            pm.type = PM_WARNING;
-            pm.u.warning_info.message_type = PM_EXECVE;
-            pm.u.warning_info.code = -ret;
-
-            push_message(ctx, &pm);
-        }
-
-        return 0;
+    int ret = 0;
+    if (!exe) {
+        ret = -PMW_UNEXPECTED;
+        goto Done;
     }
 
+    ret = exit_exec(ctx, &pm, ts, exe, PM_EXECVE);
+    if (ret != 0) goto Done;
+
     push_message(ctx, &pm);
+
+ Done:;
+    if (ret < 0) {
+        pm.type = PM_WARNING;
+        pm.u.warning_info.message_type = PM_EXECVE;
+        pm.u.warning_info.code = -ret;
+
+        push_message(ctx, &pm);
+    }
 
     return 0;
 }
@@ -686,7 +700,7 @@ int kretprobe__ret_sys_execveat_4_8(struct pt_regs *ctx) {
     void *exe = get_current_exe(ts);
     int ret = 0;
     if (!exe) {
-        ret = -PM_WARNING;
+        ret = -PMW_UNEXPECTED;
         goto Done;
     }
 
@@ -837,16 +851,11 @@ int kprobe__read_pid_task_struct(struct pt_regs *ctx)
         event->type != PM_VFORK &&
         event->type != PM_CLONE &&
         event->type != PM_CLONE3) {
-        process_message_t pm = {0};
-        pm.type = PM_WARNING;
-        pm.u.warning_info.message_type = PM_CLONE;
-        pm.u.warning_info.code = PMW_WRONG_TYPE;
-
-        push_message(ctx, &pm);
-
-        // remove it to avoid needless work in the kretprobes if we
-        // already errored
-        bpf_map_delete_elem(&incomplete_events, &pid_tgid);
+        // maybe a different syscall triggered this hook - we only
+        // want to do the work in this kprobe for clone-like syscalls
+        // so just exit early and do not change anything. If the event
+        // type is actually wrong the kretprobe can handle the error
+        // handling.
 
         return 0;
     }
@@ -863,7 +872,11 @@ int kprobe__read_pid_task_struct(struct pt_regs *ctx)
     // this means that this task_struct belongs to a non-main
     // thread. We do not care about new threads being spawned so exit
     // early.
-    if (npid != ntgid) return 0;
+    if (npid != ntgid) {
+        // the kretprobe shouldn't care about it either
+        bpf_map_delete_elem(&incomplete_events, &pid_tgid);
+        return 0;
+    }
 
     // deliberately not deleting from the map - we'll let the
     // kretprobe do that and send the event
