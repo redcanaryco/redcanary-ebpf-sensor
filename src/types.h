@@ -300,6 +300,11 @@ typedef struct {
     char truncated;
 } telemetry_value_t;
 
+typedef union {
+    int err;
+    process_message_type_t actual_type;
+} error_info_t;
+
 typedef struct
 {
     process_message_type_t type;
@@ -315,6 +320,7 @@ typedef struct
         struct {
             process_message_warning_t code;
             process_message_type_t message_type;
+            error_info_t info;
         } warning_info;
     } u;
     // not allowed inside union

@@ -11,6 +11,7 @@
 #include "offsets.h"
 #include "repeat.h"
 #include "common.h"
+#include <errno.h>
 
 #define CLONE_ARGS_SIZE_VER0 64 /* sizeof first published struct */
 #define CLONE_ARGS_SIZE_VER1 80 /* sizeof second published struct */
@@ -88,7 +89,7 @@ struct bpf_map_def SEC("maps/incomplete_events") incomplete_events = {
     .type = BPF_MAP_TYPE_HASH,
     .key_size = sizeof(u64),
     .value_size = sizeof(incomplete_event_t),
-    .max_entries = 1024,
+    .max_entries = 8 * 1024,
     .pinning = 0,
     .namespace = "",
 };
@@ -464,6 +465,7 @@ static __always_inline void enter_exec(struct pt_regs *ctx, const char __user *f
     process_message_t *pm = (process_message_t *) buffer;
 
     int ret = -PMW_UNEXPECTED;
+    error_info_t einfo = {0};
     u64 pid_tgid = bpf_get_current_pid_tgid();
     u32 pid = pid_tgid >> 32;
 
@@ -476,6 +478,7 @@ static __always_inline void enter_exec(struct pt_regs *ctx, const char __user *f
     // deliberately not using BPF_ANY because we do not want to
     // overwrite it if another thread has already called for exec
     if (bpf_map_update_elem(&exec_tids, &pid, &tid, BPF_NOEXIST) < 0) {
+        einfo.err = errno;
         ret = -PMW_DOUBLE_EXEC;
         goto Error;
     }
@@ -490,6 +493,7 @@ static __always_inline void enter_exec(struct pt_regs *ctx, const char __user *f
 
     // should only happen if `incomplete_events` is filled
     if (bpf_map_update_elem(&incomplete_events, &pid_tgid, &event, BPF_ANY) < 0) {
+        einfo.err = errno;
         ret = -PMW_FILLED_EVENTS;
         goto Error;
     }
@@ -525,6 +529,7 @@ Pwd:;
     pm->type = PM_WARNING;
     pm->u.warning_info.message_type = pm_type;
     pm->u.warning_info.code = -ret;
+    pm->u.warning_info.info = einfo;
     push_message(ctx, pm);
 
     bpf_map_delete_elem(&exec_tids, &pid);
@@ -609,6 +614,7 @@ static __always_inline int exit_exec(struct pt_regs *ctx, process_message_t *pm,
     pid_tgid = (u64)pid << 32 | *tid;
 
     int ret = 1;
+    error_info_t einfo = {0};
     incomplete_event_t *event = (incomplete_event_t *) bpf_map_lookup_elem(&incomplete_events, &pid_tgid);
     if (event == NULL) {
         // unlike other events where we might miss incomplete events
@@ -623,6 +629,7 @@ static __always_inline int exit_exec(struct pt_regs *ctx, process_message_t *pm,
 
     if (event->type != pm_type) {
         ret = -PMW_WRONG_TYPE;
+        einfo.actual_type = event->type;
         goto Done;
     }
 
@@ -655,6 +662,19 @@ static __always_inline int exit_exec(struct pt_regs *ctx, process_message_t *pm,
     bpf_map_delete_elem(&exec_tids, &pid);
     bpf_map_delete_elem(&incomplete_events, &pid_tgid);
 
+    if (ret < 0) {
+        pm->type = PM_WARNING;
+        pm->u.warning_info.message_type = pm_type;
+        pm->u.warning_info.code = -ret;
+        pm->u.warning_info.info = einfo;
+
+        push_message(ctx, pm);
+
+        // do not return the ret so we do not accidentally send the
+        // warning again
+        return 1;
+    }
+
     return ret;
 }
 
@@ -676,14 +696,6 @@ int kretprobe__ret_sys_execve_4_8(struct pt_regs *ctx)
     push_message(ctx, &pm);
 
  Done:;
-    if (ret < 0) {
-        pm.type = PM_WARNING;
-        pm.u.warning_info.message_type = PM_EXECVE;
-        pm.u.warning_info.code = -ret;
-
-        push_message(ctx, &pm);
-    }
-
     return 0;
 }
 
@@ -757,6 +769,7 @@ static __always_inline void enter_clone(struct pt_regs *ctx, process_message_typ
         pm.type = PM_WARNING;
         pm.u.warning_info.message_type = pm_type;
         pm.u.warning_info.code = PMW_FILLED_EVENTS;
+        pm.u.warning_info.info = (error_info_t) { .err = errno };
 
         push_message(ctx, &pm);
 
@@ -777,6 +790,7 @@ static __always_inline void exit_clonex(struct pt_regs *ctx, pprocess_message_t 
         pm.type = PM_WARNING;
         pm.u.warning_info.message_type = pm_type;
         pm.u.warning_info.code = PMW_WRONG_TYPE;
+        pm.u.warning_info.info = (error_info_t) { .actual_type = event->type };
 
         push_message(ctx, &pm);
 
@@ -938,6 +952,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_unshare_4_8, int flags)
         pm.type = PM_WARNING;
         pm.u.warning_info.message_type = PM_UNSHARE;
         pm.u.warning_info.code = PMW_FILLED_EVENTS;
+        pm.u.warning_info.info = (error_info_t) { .err = errno };
 
         push_message(ctx, &pm);
 
@@ -960,6 +975,7 @@ int kretprobe__ret_sys_unshare(struct pt_regs *ctx)
         pm.type = PM_WARNING;
         pm.u.warning_info.message_type = PM_UNSHARE;
         pm.u.warning_info.code = PMW_WRONG_TYPE;
+        pm.u.warning_info.info = (error_info_t) { .actual_type = event->type };
         push_message(ctx, &pm);
 
         goto Done;
