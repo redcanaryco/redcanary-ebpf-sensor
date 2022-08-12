@@ -11,7 +11,6 @@
 #include "offsets.h"
 #include "repeat.h"
 #include "common.h"
-#include <errno.h>
 
 #define CLONE_ARGS_SIZE_VER0 64 /* sizeof first published struct */
 #define CLONE_ARGS_SIZE_VER1 80 /* sizeof second published struct */
@@ -477,8 +476,9 @@ static __always_inline void enter_exec(struct pt_regs *ctx, const char __user *f
 
     // deliberately not using BPF_ANY because we do not want to
     // overwrite it if another thread has already called for exec
-    if (bpf_map_update_elem(&exec_tids, &pid, &tid, BPF_NOEXIST) < 0) {
-        einfo.err = errno;
+    ret = bpf_map_update_elem(&exec_tids, &pid, &tid, BPF_NOEXIST);
+    if (ret < 0) {
+        einfo.err = ret;
         ret = -PMW_DOUBLE_EXEC;
         goto Error;
     }
@@ -492,8 +492,9 @@ static __always_inline void enter_exec(struct pt_regs *ctx, const char __user *f
     pm->u.string_info.buffer_length = sizeof(process_message_t);
 
     // should only happen if `incomplete_events` is filled
-    if (bpf_map_update_elem(&incomplete_events, &pid_tgid, &event, BPF_ANY) < 0) {
-        einfo.err = errno;
+    ret = bpf_map_update_elem(&incomplete_events, &pid_tgid, &event, BPF_ANY);
+    if (ret) {
+        einfo.err = ret;
         ret = -PMW_FILLED_EVENTS;
         goto Error;
     }
@@ -764,12 +765,13 @@ static __always_inline void enter_clone(struct pt_regs *ctx, process_message_typ
     event.type = pm_type;
     event.clone_info.flags = flags;
 
-    if (bpf_map_update_elem(&incomplete_events, &pid_tgid, &event, BPF_ANY) < 0) {
+    int ret = bpf_map_update_elem(&incomplete_events, &pid_tgid, &event, BPF_ANY);
+    if (ret < 0) {
         process_message_t pm = {0};
         pm.type = PM_WARNING;
         pm.u.warning_info.message_type = pm_type;
         pm.u.warning_info.code = PMW_FILLED_EVENTS;
-        pm.u.warning_info.info = (error_info_t) { .err = errno };
+        pm.u.warning_info.info = (error_info_t) { .err = ret };
 
         push_message(ctx, &pm);
 
@@ -947,12 +949,13 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_unshare_4_8, int flags)
     event.type = PM_UNSHARE;
     event.unshare_flags = flags;
 
-    if (bpf_map_update_elem(&incomplete_events, &pid_tgid, &event, BPF_ANY) < 0) {
+    int ret = bpf_map_update_elem(&incomplete_events, &pid_tgid, &event, BPF_ANY);
+    if (ret < 0) {
         process_message_t pm = {0};
         pm.type = PM_WARNING;
         pm.u.warning_info.message_type = PM_UNSHARE;
         pm.u.warning_info.code = PMW_FILLED_EVENTS;
-        pm.u.warning_info.info = (error_info_t) { .err = errno };
+        pm.u.warning_info.info = (error_info_t) { .err = ret };
 
         push_message(ctx, &pm);
 

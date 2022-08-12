@@ -79,7 +79,7 @@ depends:
 	apt-get update
 	apt-get install -y llvm-$(CLANG_VER) clang-$(CLANG_VER) libclang-$(CLANG_VER)-dev \
 		linux-headers-$(KERNEL_HEADER_VERSION) \
-		make binutils curl coreutils gcc libc6-dev-i386
+		make binutils curl coreutils gcc
 
 no_wrapper:
 	$(MAKE) $(OBJS)
