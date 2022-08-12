@@ -493,7 +493,7 @@ static __always_inline void enter_exec(struct pt_regs *ctx, const char __user *f
 
     // should only happen if `incomplete_events` is filled
     ret = bpf_map_update_elem(&incomplete_events, &pid_tgid, &event, BPF_ANY);
-    if (ret) {
+    if (ret < 0) {
         einfo.err = ret;
         ret = -PMW_FILLED_EVENTS;
         goto Error;
@@ -684,6 +684,8 @@ int kretprobe__ret_sys_execve_4_8(struct pt_regs *ctx)
 {
     process_message_t pm = {0};
     void *ts = (void *)bpf_get_current_task();
+
+    if (!offset_loaded()) return 0;
     void *exe = get_current_exe(ts);
     int ret = 0;
     if (!exe) {
@@ -710,6 +712,8 @@ int kretprobe__ret_sys_execveat_4_8(struct pt_regs *ctx) {
     if (skips == NULL) return 0;
 
     void *ts = (void *)bpf_get_current_task();
+
+    if (!offset_loaded()) return 0;
     void *exe = get_current_exe(ts);
     int ret = 0;
     if (!exe) {
