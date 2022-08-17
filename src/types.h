@@ -82,7 +82,8 @@ typedef enum
     SP_EXECVEAT,
 } syscall_pattern_type_t;
 
-typedef enum {
+typedef enum
+{
     PMW_BUFFER_FULL = 1,
     PMW_TAIL_CALL_MAX,
     PMW_MAX_PATH,
@@ -224,7 +225,8 @@ typedef struct
     char comm[TASK_COMM_LEN];
 } file_info_t, *pfile_info_t;
 
-typedef struct {
+typedef struct
+{
     u32 child_pid;
     u64 flags;
 } clone_info_t;
@@ -238,10 +240,12 @@ typedef struct
     u32 egid;
     int retcode;
     u64 mono_ns;
-    union {
+    union
+    {
         u32 unshare_flags;
         clone_info_t clone_info;
-        struct {
+        struct
+        {
             u64 event_id;
             u32 buffer_length;
             file_info_t file_info;
@@ -295,12 +299,14 @@ typedef struct
     ip_addr_t protos;
 } network_event_t, *pnetwork_event_t;
 
-typedef struct {
+typedef struct
+{
     char value[VALUE_SIZE];
     char truncated;
 } telemetry_value_t;
 
-typedef union {
+typedef union
+{
     int err;
     process_message_type_t actual_type;
 } error_info_t;
@@ -308,16 +314,20 @@ typedef union {
 typedef struct
 {
     process_message_type_t type;
-    union {
+    union
+    {
         syscall_info_t syscall_info;
-        struct {
+        struct
+        {
             u64 event_id;
             u32 buffer_length;
         } string_info;
-        struct {
+        struct
+        {
             u64 event_id;
         } discard_info;
-        struct {
+        struct
+        {
             process_message_warning_t code;
             process_message_type_t message_type;
             error_info_t info;
@@ -355,16 +365,19 @@ typedef enum
     HANDLE_PWD,
 } tail_call_slot_t;
 
-typedef enum {
+typedef enum
+{
     SM_PWD,
     SM_SCRIPT,
     SM_CHAR_STR,
 } script_message_type_t;
 
-typedef struct {
+typedef struct
+{
     u32 event_id;
     script_message_type_t type;
-    union {
+    union
+    {
         script_info_t script_info;
         telemetry_value_t v;
     } u;

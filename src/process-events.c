@@ -99,10 +99,10 @@ struct bpf_map_def SEC("maps/incomplete_events") incomplete_events = {
 // A map of what pids have started an exec; with the value pointing to
 // what thread started it.
 struct bpf_map_def SEC("maps/exec_tids") exec_tids = {
-    .type = BPF_MAP_TYPE_HASH,
+    .type = BPF_MAP_TYPE_LRU_HASH,
     .key_size = sizeof(u32),   // pid
     .value_size = sizeof(u32), // tid
-    .max_entries = 1024,
+    .max_entries = 8 * 1024,
     .pinning = 0,
     .namespace = "",
 };
@@ -517,14 +517,25 @@ static __always_inline void enter_exec(struct pt_regs *ctx, const char __user *f
 
     u32 tid = pid_tgid & 0xFFFFFFFF;
 
-    // deliberately not using BPF_ANY because we do not want to
-    // overwrite it if another thread has already called for exec
-    ret = bpf_map_update_elem(&exec_tids, &pid, &tid, BPF_NOEXIST);
-    if (ret < 0)
+    // only incur the cost of using exec_tids if executing from the non-main thread
+    if (pid != tid)
     {
-        einfo.err = ret;
-        ret = -PMW_DOUBLE_EXEC;
-        goto Error;
+        // deliberately not using BPF_ANY because we do not want to
+        // overwrite it if another thread has already called for exec
+        ret = bpf_map_update_elem(&exec_tids, &pid, &tid, BPF_NOEXIST);
+        if (ret < 0)
+        {
+            // not going to Error tag because we don't
+            // want to delete the pid from exec_tids
+            einfo.err = ret;
+            pm->type = PM_WARNING;
+            pm->u.warning_info.message_type = pm_type;
+            pm->u.warning_info.code = PMW_DOUBLE_EXEC;
+            pm->u.warning_info.info = einfo;
+            push_message(ctx, pm);
+
+            return;
+        }
     }
 
     incomplete_event_t event = {0};
@@ -662,31 +673,24 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execve_4_11,
 static __always_inline int exit_exec(struct pt_regs *ctx, process_message_t *pm,
                                      void *ts, void *exe, process_message_type_t pm_type)
 {
-    // the exec may have started in a different thread so find it
-    // using exec_tids
+
     u64 pid_tgid = bpf_get_current_pid_tgid();
     u32 pid = pid_tgid >> 32;
+
+    // the exec may have started in a different thread so find it
+    // using exec_tids
     u32 *tid = bpf_map_lookup_elem(&exec_tids, &pid);
-
-    // not going to Done because there is nothing to delete at this point.
-    if (!tid)
-        return 1;
-
-    // use the tid that started the exec instead of our own tid
-    pid_tgid = (u64)pid << 32 | *tid;
+    if (tid)
+    {
+        // use the tid that started the exec instead of our own tid
+        pid_tgid = (u64)pid << 32 | *tid;
+    }
 
     int ret = 1;
     error_info_t einfo = {0};
     incomplete_event_t *event = (incomplete_event_t *)bpf_map_lookup_elem(&incomplete_events, &pid_tgid);
     if (event == NULL)
     {
-        // unlike other events where we might miss incomplete events
-        // due to the program starting halfway through a syscall;
-        // finding an exec_tid but not an incomplete_event means that
-        // something did not get deleted appropiately or that
-        // something got deleted too early - either way let's inform
-        // user space
-        ret = -PMW_MISSING_EVENT;
         goto Done;
     }
 
