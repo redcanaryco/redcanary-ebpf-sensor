@@ -92,6 +92,11 @@ typedef enum
     PMW_WRONG_TYPE,
     PMW_UNEXPECTED,
     PMW_MISSING_EVENT,
+    PMW_READ_PATH_STRING,
+    PMW_READ_ARGV_STRING,
+    PMW_READ_FILENAME_STRING,
+    PMW_MISSING_EXE,
+    PMW_READING_FIELD,
 } process_message_warning_t;
 
 typedef enum
@@ -309,6 +314,7 @@ typedef union
 {
     int err;
     process_message_type_t actual_type;
+    u64 offset_crc;
 } error_info_t;
 
 typedef struct
