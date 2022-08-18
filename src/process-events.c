@@ -212,7 +212,7 @@ static __always_inline int write_string(const char *string, buf_t *buffer, u32 *
     int sz = bpf_probe_read_str(&buffer->buf[*offset], max_string, string);
     if (sz < 0)
     {
-        return -PMW_WRITE_STRING;
+        return sz;
     }
     else
     {
@@ -352,7 +352,7 @@ static __always_inline int write_path(struct pt_regs *ctx, void *ptr, buf_t *buf
         int sz = write_string((char *)offset, buffer, buffer_offset, NAME_MAX + 1);
         if (sz < 0)
         {
-            ret = sz;
+            ret = -PMW_READ_PATH_STRING;
             goto Skip;
         }
 
@@ -410,7 +410,7 @@ static __always_inline int write_argv(struct pt_regs *ctx, const char __user *co
         int sz = write_string(ptr, buffer, buffer_offset, 1024);
         if (sz < 0)
         {
-            ret = sz;
+            ret = -PMW_READ_ARGV_STRING;
             goto Done;
         }
 
@@ -577,6 +577,7 @@ static __always_inline void enter_exec(struct pt_regs *ctx, const char __user *f
         ret = write_string(filename, buffer, &pm->u.string_info.buffer_length, PATH_MAX);
         if (ret < 0)
         {
+            ret = -PMW_READ_FILENAME_STRING;
             goto Error;
         }
 
