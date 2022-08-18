@@ -286,10 +286,11 @@ static __always_inline file_info_t extract_file_info(void *ptr)
 
 // writes a d_path into a buffer - tail calling if necessary
 static __always_inline int write_path(struct pt_regs *ctx, void *ptr, buf_t *buffer,
-                                      u32 *skips, u32 *buffer_offset, tail_call_slot_t tail_call)
+                                      u32 *skips, u32 *buffer_offset, tail_call_slot_t tail_call,
+                                      error_info_t *einfo)
 {
     // any early exit at the start is unexpected
-    int ret = -PMW_READING_PATH;
+    int ret = -PMW_READING_FIELD;
     // we cannot skip anymore - just call it done
     if (*skips > MAX_PATH_SEGMENTS_SKIP)
     {
@@ -298,21 +299,28 @@ static __always_inline int write_path(struct pt_regs *ctx, void *ptr, buf_t *buf
     }
 
     if (read_value(ptr, CRC_PATH_DENTRY, &ptr, sizeof(ptr)) < 0)
+    {
+        einfo->offset_crc = CRC_PATH_DENTRY;
         goto Skip;
+    }
 
     void *offset = NULL;
     u64 offset_key = 0;
 
+    einfo->offset_crc = CRC_DENTRY_D_NAME;
     SET_OFFSET(CRC_DENTRY_D_NAME);
     u32 name = *(u32 *)offset; // variable name doesn't match here, we're reusing it to preserve stack
 
+    einfo->offset_crc = CRC_QSTR_NAME;
     SET_OFFSET(CRC_QSTR_NAME);
     name = name + *(u32 *)offset; // offset to name char ptr within qstr of dentry
 
+    einfo->offset_crc = CRC_DENTRY_D_PARENT;
     SET_OFFSET(CRC_DENTRY_D_PARENT);
     u32 parent = *(u32 *)offset; // offset of d_parent
 
     // at this point let's assume success
+    einfo->offset_crc = 0;
     ret = 0;
 
 // skip segments we read before the current tail_call
@@ -459,22 +467,28 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execve_tc_argv,
 }
 
 static __always_inline int write_pwd(struct pt_regs *ctx, buf_t *buffer, u32 *offset,
-                                     u32 *skips, tail_call_slot_t tc_slot)
+                                     u32 *skips, tail_call_slot_t tc_slot, error_info_t *einfo)
 {
     void *ts = (void *)bpf_get_current_task();
-    int ret = -PMW_READING_PWD;
+    int ret = -PMW_READING_FIELD;
 
     void *pwd_ptr = NULL;
     // task_struct->fs
     if (read_value(ts, CRC_TASK_STRUCT_FS, &pwd_ptr, sizeof(pwd_ptr)) < 0)
+    {
+        einfo->offset_crc = CRC_TASK_STRUCT_FS;
         goto Done;
+    }
 
     // &(fs->pwd)
     pwd_ptr = offset_ptr(pwd_ptr, CRC_FS_STRUCT_PWD);
     if (pwd_ptr == NULL)
+    {
+        einfo->offset_crc = CRC_FS_STRUCT_PWD;
         goto Done;
+    }
 
-    ret = write_path(ctx, pwd_ptr, buffer, skips, offset, tc_slot);
+    ret = write_path(ctx, pwd_ptr, buffer, skips, offset, tc_slot, einfo);
     if (ret < 0)
         goto Done;
 
@@ -571,7 +585,7 @@ static __always_inline void enter_exec(struct pt_regs *ctx, const char __user *f
     }
 
 Pwd:;
-    ret = write_pwd(ctx, buffer, &pm->u.string_info.buffer_length, skips, pwd_slot);
+    ret = write_pwd(ctx, buffer, &pm->u.string_info.buffer_length, skips, pwd_slot, &einfo);
     if (ret < 0)
     {
         goto Error;
@@ -798,6 +812,7 @@ int kretprobe__ret_sys_execveat_4_8(struct pt_regs *ctx)
     if (skips == NULL)
         return 0;
 
+    error_info_t einfo = {0};
     void *ts = (void *)bpf_get_current_task();
     void *exe = get_current_exe(ts);
     int ret = 0;
@@ -822,7 +837,8 @@ int kretprobe__ret_sys_execveat_4_8(struct pt_regs *ctx)
 Pwd:;
     void *path = offset_ptr(exe, CRC_FILE_F_PATH);
     ret = write_path(ctx, path, buffer, skips,
-                     &pm->u.syscall_info.data.exec_info.buffer_length, RET_SYS_EXECVEAT_4_8);
+                     &pm->u.syscall_info.data.exec_info.buffer_length,
+                     RET_SYS_EXECVEAT_4_8, &einfo);
 
     // reset skips back to 0. This will automatically update it in the
     // map so no need to do a bpf_map_update_elem.
@@ -842,6 +858,7 @@ Done:;
         pm->type = PM_WARNING;
         pm->u.warning_info.message_type = PM_EXECVEAT;
         pm->u.warning_info.code = -ret;
+        pm->u.warning_info.info = einfo;
 
         push_message(ctx, pm);
     }
