@@ -92,6 +92,10 @@ typedef enum
     PMW_WRONG_TYPE,
     PMW_UNEXPECTED,
     PMW_MISSING_EVENT,
+    PMW_WRITE_STRING,
+    PMW_MISSING_EXE,
+    PMW_READING_PATH,
+    PMW_READING_PWD,
 } process_message_warning_t;
 
 typedef enum

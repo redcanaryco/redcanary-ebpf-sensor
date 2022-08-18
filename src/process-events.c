@@ -212,7 +212,7 @@ static __always_inline int write_string(const char *string, buf_t *buffer, u32 *
     int sz = bpf_probe_read_str(&buffer->buf[*offset], max_string, string);
     if (sz < 0)
     {
-        return -PMW_UNEXPECTED;
+        return -PMW_WRITE_STRING;
     }
     else
     {
@@ -289,7 +289,14 @@ static __always_inline int write_path(struct pt_regs *ctx, void *ptr, buf_t *buf
                                       u32 *skips, u32 *buffer_offset, tail_call_slot_t tail_call)
 {
     // any early exit at the start is unexpected
-    int ret = -PMW_UNEXPECTED;
+    int ret = -PMW_READING_PATH;
+    // we cannot skip anymore - just call it done
+    if (*skips > MAX_PATH_SEGMENTS_SKIP)
+    {
+        ret = -PMW_MAX_PATH;
+        goto Skip;
+    }
+
     if (read_value(ptr, CRC_PATH_DENTRY, &ptr, sizeof(ptr)) < 0)
         goto Skip;
 
@@ -304,13 +311,6 @@ static __always_inline int write_path(struct pt_regs *ctx, void *ptr, buf_t *buf
 
     SET_OFFSET(CRC_DENTRY_D_PARENT);
     u32 parent = *(u32 *)offset; // offset of d_parent
-
-    // we cannot skip anymore - just call it done
-    if (*skips > MAX_PATH_SEGMENTS_SKIP)
-    {
-        ret = -PMW_MAX_PATH;
-        goto Skip;
-    }
 
     // at this point let's assume success
     ret = 0;
@@ -462,7 +462,7 @@ static __always_inline int write_pwd(struct pt_regs *ctx, buf_t *buffer, u32 *of
                                      u32 *skips, tail_call_slot_t tc_slot)
 {
     void *ts = (void *)bpf_get_current_task();
-    int ret = -PMW_UNEXPECTED;
+    int ret = -PMW_READING_PWD;
 
     void *pwd_ptr = NULL;
     // task_struct->fs
@@ -505,7 +505,6 @@ static __always_inline void enter_exec(struct pt_regs *ctx, const char __user *f
 
     process_message_t *pm = (process_message_t *)buffer;
 
-    int ret = -PMW_UNEXPECTED;
     error_info_t einfo = {0};
     u64 pid_tgid = bpf_get_current_pid_tgid();
     u32 pid = pid_tgid >> 32;
@@ -522,7 +521,7 @@ static __always_inline void enter_exec(struct pt_regs *ctx, const char __user *f
     {
         // deliberately not using BPF_ANY because we do not want to
         // overwrite it if another thread has already called for exec
-        ret = bpf_map_update_elem(&exec_tids, &pid, &tid, BPF_NOEXIST);
+        int ret = bpf_map_update_elem(&exec_tids, &pid, &tid, BPF_NOEXIST);
         if (ret < 0)
         {
             // not going to Error tag because we don't
@@ -547,7 +546,7 @@ static __always_inline void enter_exec(struct pt_regs *ctx, const char __user *f
     pm->u.string_info.buffer_length = sizeof(process_message_t);
 
     // should only happen if `incomplete_events` is filled
-    ret = bpf_map_update_elem(&incomplete_events, &pid_tgid, &event, BPF_ANY);
+    int ret = bpf_map_update_elem(&incomplete_events, &pid_tgid, &event, BPF_ANY);
     if (ret)
     {
         einfo.err = ret;
@@ -761,7 +760,7 @@ int kretprobe__ret_sys_execve_4_8(struct pt_regs *ctx)
     int ret = 0;
     if (!exe)
     {
-        ret = -PMW_UNEXPECTED;
+        ret = -PMW_MISSING_EXE;
         goto Done;
     }
 
@@ -772,6 +771,15 @@ int kretprobe__ret_sys_execve_4_8(struct pt_regs *ctx)
     push_message(ctx, &pm);
 
 Done:;
+    if (ret < 0)
+    {
+        pm.type = PM_WARNING;
+        pm.u.warning_info.message_type = PM_EXECVE;
+        pm.u.warning_info.code = -ret;
+
+        push_message(ctx, &pm);
+    }
+
     return 0;
 }
 
@@ -795,7 +803,7 @@ int kretprobe__ret_sys_execveat_4_8(struct pt_regs *ctx)
     int ret = 0;
     if (!exe)
     {
-        ret = -PMW_UNEXPECTED;
+        ret = -PMW_MISSING_EXE;
         goto Done;
     }
 
