@@ -212,7 +212,7 @@ static __always_inline int write_string(const char *string, buf_t *buffer, u32 *
     int sz = bpf_probe_read_str(&buffer->buf[*offset], max_string, string);
     if (sz < 0)
     {
-        return sz;
+        return -PMW_UNEXPECTED;
     }
     else
     {
@@ -352,7 +352,14 @@ static __always_inline int write_path(struct pt_regs *ctx, void *ptr, buf_t *buf
         int sz = write_string((char *)offset, buffer, buffer_offset, NAME_MAX + 1);
         if (sz < 0)
         {
-            ret = -PMW_READ_PATH_STRING;
+            if (sz == -PMW_UNEXPECTED)
+            {
+                ret = -PMW_READ_PATH_STRING;
+            }
+            else
+            {
+                ret = sz;
+            }
             goto Skip;
         }
 
@@ -410,7 +417,14 @@ static __always_inline int write_argv(struct pt_regs *ctx, const char __user *co
         int sz = write_string(ptr, buffer, buffer_offset, 1024);
         if (sz < 0)
         {
-            ret = -PMW_READ_ARGV_STRING;
+            if (sz == -PMW_UNEXPECTED)
+            {
+                ret = -PMW_READ_ARGV_STRING;
+            }
+            else
+            {
+                ret = sz;
+            }
             goto Done;
         }
 
@@ -540,19 +554,29 @@ static __always_inline void enter_exec(struct pt_regs *ctx, const char __user *f
     pm->u.string_info.event_id = event.exec_id;
     pm->u.string_info.buffer_length = sizeof(process_message_t);
 
+    int ret = 0;
     if (filename)
     {
         // PATH_MAX is (theoretically) the max path that can be given
         // to a syscall. Note that this is NOT the max absolute path,
         // but that is okay since we just care about what was passed
         // to the syscall.
-        if (write_string(filename, buffer, &pm->u.string_info.buffer_length, PATH_MAX) < 0)
+        ret = write_string(filename, buffer, &pm->u.string_info.buffer_length, PATH_MAX);
+        if (ret < 0)
         {
-            // the user passed in an invalid filename that the kernel
-            // hasn't verified yet as we probe the start of the
-            // execve*. Just ignore this event as it cannot be a
-            // succesful execve anyway.
-            return;
+            if (ret == -PMW_UNEXPECTED)
+            {
+                // the user passed in an invalid filename that the kernel
+                // hasn't verified yet as we probe the start of the
+                // execve*. Just ignore this event as it cannot be a
+                // succesful execve anyway.
+                return;
+            }
+            else
+            {
+                goto Error;
+            }
+
         }
 
         // add an extra null byte to signify string section end
@@ -564,7 +588,7 @@ static __always_inline void enter_exec(struct pt_regs *ctx, const char __user *f
     {
         // deliberately not using BPF_ANY because we do not want to
         // overwrite it if another thread has already called for exec
-        int ret = bpf_map_update_elem(&exec_tids, &pid, &tid, BPF_NOEXIST);
+        ret = bpf_map_update_elem(&exec_tids, &pid, &tid, BPF_NOEXIST);
         if (ret < 0)
         {
             // not going to Error tag because we don't
@@ -580,7 +604,7 @@ static __always_inline void enter_exec(struct pt_regs *ctx, const char __user *f
         }
     }
 
-    int ret = bpf_map_update_elem(&incomplete_events, &pid_tgid, &event, BPF_ANY);
+    ret = bpf_map_update_elem(&incomplete_events, &pid_tgid, &event, BPF_ANY);
     if (ret < 0)
     {
         // should only happen if `incomplete_events` is filled
