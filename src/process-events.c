@@ -525,10 +525,39 @@ static __always_inline void enter_exec(struct pt_regs *ctx, const char __user *f
 
     if (*skips != 0)
     {
+        // we already started the execve* event; we are now just
+        // tailcalling for the pwd
         goto Pwd;
     }
 
+    // start of the execve* event
+    incomplete_event_t event = {0};
+    event.type = pm_type;
     u32 tid = pid_tgid & 0xFFFFFFFF;
+    event.exec_id = (u64)tid << 32 | bpf_get_prandom_u32();
+
+    pm->type = PM_STRINGS;
+    pm->u.string_info.event_id = event.exec_id;
+    pm->u.string_info.buffer_length = sizeof(process_message_t);
+
+    if (filename)
+    {
+        // PATH_MAX is (theoretically) the max path that can be given
+        // to a syscall. Note that this is NOT the max absolute path,
+        // but that is okay since we just care about what was passed
+        // to the syscall.
+        if (write_string(filename, buffer, &pm->u.string_info.buffer_length, PATH_MAX) < 0)
+        {
+            // the user passed in an invalid filename that the kernel
+            // hasn't verified yet as we probe the start of the
+            // execve*. Just ignore this event as it cannot be a
+            // succesful execve anyway.
+            return;
+        }
+
+        // add an extra null byte to signify string section end
+        write_null_char(buffer, &pm->u.string_info.buffer_length);
+    }
 
     // only incur the cost of using exec_tids if executing from the non-main thread
     if (pid != tid)
@@ -551,38 +580,13 @@ static __always_inline void enter_exec(struct pt_regs *ctx, const char __user *f
         }
     }
 
-    incomplete_event_t event = {0};
-    event.type = pm_type;
-    event.exec_id = (u64)tid << 32 | bpf_get_prandom_u32();
-
-    pm->type = PM_STRINGS;
-    pm->u.string_info.event_id = event.exec_id;
-    pm->u.string_info.buffer_length = sizeof(process_message_t);
-
-    // should only happen if `incomplete_events` is filled
     int ret = bpf_map_update_elem(&incomplete_events, &pid_tgid, &event, BPF_ANY);
-    if (ret)
+    if (ret < 0)
     {
+        // should only happen if `incomplete_events` is filled
         einfo.err = ret;
         ret = -PMW_FILLED_EVENTS;
         goto Error;
-    }
-
-    if (filename)
-    {
-        // PATH_MAX is (theoretically) the max path that can be given
-        // to a syscall. Note that this is NOT the max absolute path,
-        // but that is okay since we just care about what was passed
-        // to the syscall.
-        ret = write_string(filename, buffer, &pm->u.string_info.buffer_length, PATH_MAX);
-        if (ret < 0)
-        {
-            ret = -PMW_READ_FILENAME_STRING;
-            goto Error;
-        }
-
-        // add an extra null byte to signify string section end
-        write_null_char(buffer, &pm->u.string_info.buffer_length);
     }
 
 Pwd:;
