@@ -163,7 +163,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_process_vm_writev_5_5,
     DECLARE_EVENT(write_process_memory_event_t, SP_PROCESS_VM_WRITEV);
     ev.target_pid = target_pid;
 
-#pragma unroll
+#pragma unroll MAX_ADDRESSES
     for (u32 ii = 0; ii < MAX_ADDRESSES && ii < riovcnt; ++ii, riov++)
     {
         iovec_t remote_iov;

@@ -6,7 +6,7 @@ SRC = src
 SRCS = $(wildcard $(SRC)/*.c)
 OBJS = $(patsubst $(SRC)/%.c,$(SRC)/%,$(SRCS))
 OBJS_WRAPPED = $(OBJS)
-CLANG_VER = 8
+CLANG_VER ?= 8
 CC = clang-$(CLANG_VER)
 LLC = llc-$(CLANG_VER)
 OPT = opt-$(CLANG_VER)
@@ -26,6 +26,11 @@ CFLAGS += \
 	-fno-stack-protector \
 	-Xclang -disable-llvm-passes \
 	-O2
+
+ifeq ($(shell test $(CLANG_VER) -gt 10; echo $$?),0)
+  CFLAGS += \
+	-Wno-frame-address
+endif
 
 ifeq ($(ARCH),aarch64)
 CFLAGS += \
@@ -97,6 +102,7 @@ $(OBJS): %: %.c
 all: depends check_headers $(OBJDIR) wrapper no_wrapper
 	@:
 
-
+dev:
+	KERNEL_HEADER_VERSION=$(shell uname -r) CLANG_VER=14 $(MAKE) all
 
 .PHONY: all realclean clean ebpf ebpf_verifier depends check_headers

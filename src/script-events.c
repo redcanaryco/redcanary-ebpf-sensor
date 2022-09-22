@@ -150,7 +150,6 @@ int kprobe__handle_pwd(struct pt_regs *ctx)
     u32 skipped = 0;
     script_message_t sev = {0};
     pscript_message_t ev = &sev;
-    unsigned long long ret = 0;
 
     // if the ID already exists, we are tail-calling into ourselves, skip ahead to reading the path
     u64 p_t = bpf_get_current_pid_tgid();
@@ -203,7 +202,7 @@ Send:
     skipped = 0;
     bpf_map_update_elem(&read_path_skip, &skipped, &to_skip, BPF_ANY);
     // tail call back in
-    ret = bpf_tail_call(ctx, &tail_call_table, HANDLE_PWD);
+    bpf_tail_call(ctx, &tail_call_table, HANDLE_PWD);
 
 Skip:
     skipped = 0;
