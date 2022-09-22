@@ -1,5 +1,4 @@
 #include <linux/kconfig.h>
-#include <uapi/linux/ptrace.h>
 #include <linux/binfmts.h>
 #include <linux/dcache.h>
 #include "types.h"
