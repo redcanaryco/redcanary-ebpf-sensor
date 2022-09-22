@@ -90,7 +90,7 @@ typedef enum
     PMW_MAX_PATH,
     PMW_DOUBLE_EXEC,
     PMW_FILLED_EVENTS,
-    PMW_WRONG_TYPE,
+    PMW_PID_TGID_MISMATCH,
     PMW_UNEXPECTED,
     PMW_MISSING_EVENT,
     PMW_READ_PATH_STRING,
@@ -314,7 +314,7 @@ typedef struct
 typedef union
 {
     int err;
-    process_message_type_t actual_type;
+    u64 stored_pid_tgid;
     u64 offset_crc;
 } error_info_t;
 
@@ -337,6 +337,7 @@ typedef struct
         {
             process_message_warning_t code;
             process_message_type_t message_type;
+            u64 pid_tgid;
             error_info_t info;
         } warning_info;
     } u;
@@ -369,6 +370,7 @@ typedef enum
     SYS_EXECVE_4_11,
     SYS_EXECVEAT_4_11,
     RET_SYS_EXECVEAT_4_8,
+    RET_SYS_EXECVE_4_8,
     SYS_EXECVE_TC_ARGV,
     SYS_EXECVEAT_TC_ARGV,
     HANDLE_PWD,

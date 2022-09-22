@@ -103,6 +103,6 @@ all: depends check_headers $(OBJDIR) wrapper no_wrapper
 	@:
 
 dev:
-	KERNEL_HEADER_VERSION=$(shell uname -r) CLANG_VER=14 $(MAKE) all
+	KERNEL_HEADER_VERSION=$(shell uname -r) CLANG_VER=14 $(MAKE) check_headers $(OBJDIR) wrapper no_wrapper
 
 .PHONY: all realclean clean ebpf ebpf_verifier depends check_headers
