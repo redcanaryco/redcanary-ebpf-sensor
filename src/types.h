@@ -4,6 +4,7 @@
 
 #include <linux/types.h>
 #include <linux/limits.h>
+#include <linux/version.h>
 
 #define MAX_ADDRESSES 16
 #define TRUE 1
@@ -343,6 +344,7 @@ typedef struct
     char strings[];
 } process_message_t, *pprocess_message_t;
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5,3,0)
 // clone3 args are not available in sched.h until 5.3, and we build against 4.4
 struct clone_args
 {
@@ -360,6 +362,7 @@ struct clone_args
     // version 3
     __aligned_u64 cgroup;
 };
+#endif
 
 typedef enum
 {
