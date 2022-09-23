@@ -555,7 +555,7 @@ Done:;
     return ret;
 }
 
-static __always_inline void enter_exec(struct pt_regs *ctx, const char __user *filename,
+static __always_inline void enter_exec(struct pt_regs *ctx,
                                        process_message_type_t pm_type, tail_call_slot_t pwd_slot,
                                        tail_call_slot_t argv_slot)
 {
@@ -591,34 +591,6 @@ static __always_inline void enter_exec(struct pt_regs *ctx, const char __user *f
     pm->u.string_info.buffer_length = sizeof(process_message_t);
 
     int ret = 0;
-    if (filename)
-    {
-        // PATH_MAX is (theoretically) the max path that can be given
-        // to a syscall. Note that this is NOT the max absolute path,
-        // but that is okay since we just care about what was passed
-        // to the syscall.
-        ret = write_string(filename, buffer, &pm->u.string_info.buffer_length, PATH_MAX);
-        if (ret < 0)
-        {
-            if (ret == -PMW_UNEXPECTED)
-            {
-                // the user passed in an invalid filename that the kernel
-                // hasn't verified yet as we probe the start of the
-                // execve*. Just ignore this event as it cannot be a
-                // succesful execve anyway.
-                return;
-            }
-            else
-            {
-                goto Error;
-            }
-
-        }
-
-        // add an extra null byte to signify string section end
-        write_null_char(buffer, &pm->u.string_info.buffer_length);
-    }
-
     // only incur the cost of using exec_tids if executing from the non-main thread
     if (pid != tid)
     {
@@ -721,9 +693,8 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execveat_4_11,
                        const char __user *const __user *envp,
                        int flags)
 {
-    if (!offset_loaded())
-        return 0;
-    enter_exec(ctx, NULL, PM_EXECVEAT, SYS_EXECVEAT_4_11, SYS_EXECVEAT_TC_ARGV);
+    if (!offset_loaded()) return 0;
+    enter_exec(ctx, PM_EXECVEAT, SYS_EXECVEAT_4_11, SYS_EXECVEAT_TC_ARGV);
 
     return 0;
 }
@@ -734,20 +705,14 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execve_4_11,
                        const char __user *const __user *argv,
                        const char __user *const __user *envp)
 {
-    if (!offset_loaded())
-        return 0;
-    // probably not needed but in execveat we explicitly pass NULL to
-    // differentiate so let's make 100% certain this isn't NULL as
-    // that is an invalid exec argument anyway
-    if (!filename)
-        return 0;
+    if (!offset_loaded()) return 0;
 
-    enter_exec(ctx, filename, PM_EXECVE, SYS_EXECVE_4_11, SYS_EXECVE_TC_ARGV);
+    enter_exec(ctx, PM_EXECVE, SYS_EXECVE_4_11, SYS_EXECVE_TC_ARGV);
 
     return 0;
 }
 
-static __always_inline int exit_exec(struct pt_regs *ctx, process_message_t *pm,
+static __always_inline int start_kret_exec(struct pt_regs *ctx, process_message_t *pm,
                                      void *ts, void *exe, process_message_type_t pm_type)
 {
 
@@ -821,56 +786,17 @@ static __always_inline int exit_exec(struct pt_regs *ctx, process_message_t *pm,
     return 0;
 }
 
-SEC("kretprobe/ret_sys_execve_4_8")
-int kretprobe__ret_sys_execve_4_8(struct pt_regs *ctx)
+static __always_inline void exit_exec(struct pt_regs *ctx, process_message_type_t pm_type,
+                                      tail_call_slot_t tail_call)
 {
-    if (!offset_loaded())
-        return 0;
-
-    process_message_t pm = {0};
-    void *ts = (void *)bpf_get_current_task();
-    void *exe = get_current_exe(ts);
-    int ret = 0;
-    if (!exe)
-    {
-        ret = -PMW_MISSING_EXE;
-        goto Done;
-    }
-
-    ret = exit_exec(ctx, &pm, ts, exe, PM_EXECVE);
-    if (ret != 0)
-        goto Done;
-
-    push_message(ctx, &pm);
-
-Done:;
-    if (ret < 0)
-    {
-        pm.type = PM_WARNING;
-        pm.u.warning_info.pid_tgid = bpf_get_current_pid_tgid();
-        pm.u.warning_info.message_type = PM_EXECVE;
-        pm.u.warning_info.code = -ret;
-
-        push_message(ctx, &pm);
-    }
-
-    return 0;
-}
-
-SEC("kretprobe/ret_sys_execveat_4_8")
-int kretprobe__ret_sys_execveat_4_8(struct pt_regs *ctx)
-{
-    if (!offset_loaded())
-        return 0;
+    if (!offset_loaded()) return;
 
     u32 key = 0;
     buf_t *buffer = (buf_t *)bpf_map_lookup_elem(&buffers, &key);
-    if (buffer == NULL)
-        return 0;
+    if (buffer == NULL) return;
 
     u32 *skips = (u32 *)bpf_map_lookup_elem(&percpu_counter, &key);
-    if (skips == NULL)
-        return 0;
+    if (skips == NULL) return;
 
     process_message_t *pm = (process_message_t *)buffer;
     void *ts = (void *)bpf_get_current_task();
@@ -888,7 +814,7 @@ int kretprobe__ret_sys_execveat_4_8(struct pt_regs *ctx)
     }
 
     pm->u.syscall_info.data.exec_info.buffer_length = sizeof(process_message_t);
-    ret = exit_exec(ctx, pm, ts, exe, PM_EXECVEAT);
+    ret = start_kret_exec(ctx, pm, ts, exe, pm_type);
     if (ret != 0)
         goto Done;
 
@@ -896,7 +822,7 @@ Pwd:;
     void *path = offset_ptr(exe, CRC_FILE_F_PATH);
     ret = write_path(ctx, path, buffer, skips,
                      &pm->u.syscall_info.data.exec_info.buffer_length,
-                     RET_SYS_EXECVEAT_4_8, &pm->u.warning_info.info);
+                     tail_call, &pm->u.warning_info.info);
 
     // reset skips back to 0. This will automatically update it in the
     // map so no need to do a bpf_map_update_elem.
@@ -915,11 +841,27 @@ Done:;
     {
         pm->type = PM_WARNING;
         pm->u.warning_info.pid_tgid = bpf_get_current_pid_tgid();
-        pm->u.warning_info.message_type = PM_EXECVEAT;
+        pm->u.warning_info.message_type = pm_type;
         pm->u.warning_info.code = -ret;
 
         push_message(ctx, pm);
     }
+
+    return;
+}
+
+SEC("kretprobe/ret_sys_execve_4_8")
+int kretprobe__ret_sys_execve_4_8(struct pt_regs *ctx)
+{
+    exit_exec(ctx, PM_EXECVE, RET_SYS_EXECVE_4_8);
+
+    return 0;
+}
+
+SEC("kretprobe/ret_sys_execveat_4_8")
+int kretprobe__ret_sys_execveat_4_8(struct pt_regs *ctx)
+{
+    exit_exec(ctx, PM_EXECVEAT, RET_SYS_EXECVEAT_4_8);
 
     return 0;
 }
