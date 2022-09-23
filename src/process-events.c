@@ -71,6 +71,16 @@ struct bpf_map_def SEC("maps/mount_events") mount_events = {
     .namespace = "",
 };
 
+// A per cpu cache of dentry so we can hold it across tail calls.
+struct bpf_map_def SEC("maps/percpu_dentries") percpu_dentries = {
+    .type = BPF_MAP_TYPE_PERCPU_ARRAY,
+    .key_size = sizeof(u32),
+    .value_size = sizeof(void *),
+    .max_entries = 1,
+    .pinning = 0,
+    .namespace = "",
+};
+
 // A per cpu counter so we can hold it across tail calls.
 struct bpf_map_def SEC("maps/percpu_counter") percpu_counter = {
     .type = BPF_MAP_TYPE_PERCPU_ARRAY,
@@ -321,6 +331,76 @@ static __always_inline file_info_t extract_file_info(void *ptr)
 }
 
 // writes a d_path into a buffer - tail calling if necessary
+static __always_inline int write_path_d(struct pt_regs *ctx, void **dentry, buf_t *buffer,
+                                      u32 *buffer_offset, tail_call_slot_t tail_call,
+                                      error_info_t *einfo)
+{
+    // any early exit at the start is unexpected
+    int ret = -PMW_READING_FIELD;
+
+    void *offset = NULL;
+    u64 offset_key = 0;
+
+    einfo->offset_crc = CRC_DENTRY_D_NAME;
+    SET_OFFSET(CRC_DENTRY_D_NAME);
+    u32 name = *(u32 *)offset; // variable name doesn't match here, we're reusing it to preserve stack
+
+    einfo->offset_crc = CRC_QSTR_NAME;
+    SET_OFFSET(CRC_QSTR_NAME);
+    name = name + *(u32 *)offset; // offset to name char ptr within qstr of dentry
+
+    einfo->offset_crc = CRC_DENTRY_D_PARENT;
+    SET_OFFSET(CRC_DENTRY_D_PARENT);
+    u32 parent = *(u32 *)offset; // offset of d_parent
+
+    // at this point let's assume success
+    einfo->offset_crc = 0;
+    ret = 0;
+
+// Anything we add to this for-loop will be repeated
+// MAX_PATH_SEGMENTS_NOTAIL so be very careful of going over the max
+// instruction limit (4096).
+#pragma unroll MAX_PATH_SEGMENTS_NOTAIL
+    for (int i = 0; i < MAX_PATH_SEGMENTS_NOTAIL; i++)
+    {
+        if (bpf_probe_read(&offset, sizeof(offset), *dentry + name) < 0)
+            goto Skip;
+        // NAME_MAX doesn't include null character; so +1 to take it
+        // into account. Mot all systems enforce NAME_MAX so
+        // truncation may happen per path segment. TODO: emit
+        // truncation metrics to see if we need to care about this.
+        int sz = write_string((char *)offset, buffer, buffer_offset, NAME_MAX + 1);
+        if (sz < 0)
+        {
+            if (sz == -PMW_UNEXPECTED)
+            {
+                ret = -PMW_READ_PATH_STRING;
+            }
+            else
+            {
+                ret = sz;
+            }
+            goto Skip;
+        }
+
+        // get the parent
+        void *old_dentry = *dentry;
+        bpf_probe_read(dentry, sizeof(*dentry), *dentry + parent);
+
+        // there is no parent or parent points to itself
+        if ((*dentry) == NULL || old_dentry == *dentry)
+            goto Skip;
+    }
+
+    bpf_tail_call(ctx, &tail_call_table, tail_call);
+
+    ret = -PMW_TAIL_CALL_MAX;
+
+Skip:
+    return ret;
+}
+
+// writes a d_path into a buffer - tail calling if necessary
 static __always_inline int write_path(struct pt_regs *ctx, void *ptr, buf_t *buffer,
                                       u32 *skips, u32 *buffer_offset, tail_call_slot_t tail_call,
                                       error_info_t *einfo)
@@ -517,63 +597,24 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execve_tc_argv,
     return 0;
 }
 
-static __always_inline int write_pwd(struct pt_regs *ctx, buf_t *buffer, u32 *offset,
-                                     u32 *skips, tail_call_slot_t tc_slot, error_info_t *einfo)
-{
-    void *ts = (void *)bpf_get_current_task();
-    int ret = -PMW_READING_FIELD;
-
-    void *pwd_ptr = NULL;
-    // task_struct->fs
-    if (read_value(ts, CRC_TASK_STRUCT_FS, &pwd_ptr, sizeof(pwd_ptr)) < 0)
-    {
-        einfo->offset_crc = CRC_TASK_STRUCT_FS;
-        goto Done;
-    }
-
-    // &(fs->pwd)
-    pwd_ptr = offset_ptr(pwd_ptr, CRC_FS_STRUCT_PWD);
-    if (pwd_ptr == NULL)
-    {
-        einfo->offset_crc = CRC_FS_STRUCT_PWD;
-        goto Done;
-    }
-
-    ret = write_path(ctx, pwd_ptr, buffer, skips, offset, tc_slot, einfo);
-    if (ret < 0)
-        goto Done;
-
-    ret = 0;
-
-    // add an extra null byte to signify string section end
-    write_null_char(buffer, offset);
-
-Done:;
-    // reset skips back to 0. This will automatically update it in the
-    // map so no need to do a bpf_map_update_elem.
-    *skips = 0;
-    return ret;
-}
-
 static __always_inline void enter_exec(struct pt_regs *ctx,
                                        process_message_type_t pm_type, tail_call_slot_t pwd_slot,
                                        tail_call_slot_t argv_slot)
 {
     u32 key = 0;
     buf_t *buffer = (buf_t *)bpf_map_lookup_elem(&buffers, &key);
-    if (buffer == NULL)
-        return;
+    if (buffer == NULL) return;
 
-    u32 *skips = (u32 *)bpf_map_lookup_elem(&percpu_counter, &key);
-    if (skips == NULL)
-        return;
+    void **dentry = (void **)bpf_map_lookup_elem(&percpu_dentries, &key);
+    if (dentry == NULL) return;
 
     process_message_t *pm = (process_message_t *)buffer;
 
     u64 pid_tgid = bpf_get_current_pid_tgid();
     u32 pid = pid_tgid >> 32;
 
-    if (*skips != 0)
+    int ret = 0;
+    if ((*dentry) != NULL)
     {
         // we already started the execve* event; we are now just
         // tailcalling for the pwd
@@ -590,7 +631,6 @@ static __always_inline void enter_exec(struct pt_regs *ctx,
     pm->u.string_info.event_id = event.exec_id;
     pm->u.string_info.buffer_length = sizeof(process_message_t);
 
-    int ret = 0;
     // only incur the cost of using exec_tids if executing from the non-main thread
     if (pid != tid)
     {
@@ -618,13 +658,40 @@ static __always_inline void enter_exec(struct pt_regs *ctx,
         ret = -PMW_UPDATE_MAP_ERROR;
         goto Error;
     }
+    void *ts = (void *)bpf_get_current_task();
+    ret = -PMW_READING_FIELD;
 
-Pwd:;
-    ret = write_pwd(ctx, buffer, &pm->u.string_info.buffer_length, skips, pwd_slot, &pm->u.warning_info.info);
-    if (ret < 0)
+    void *path_ptr = NULL;
+    // task_struct->fs
+    if (read_value(ts, CRC_TASK_STRUCT_FS, &path_ptr, sizeof(path_ptr)) < 0)
     {
+        pm->u.warning_info.info.offset_crc = CRC_TASK_STRUCT_FS;
         goto Error;
     }
+
+    // &(task_struct->fs->pwd)
+    path_ptr = offset_ptr(path_ptr, CRC_FS_STRUCT_PWD);
+    if (path_ptr == NULL)
+    {
+        pm->u.warning_info.info.offset_crc = CRC_TASK_STRUCT_FS;
+        goto Error;
+    }
+
+    // task_struct->fs->pwd.dentry
+    if (read_value(path_ptr, CRC_PATH_DENTRY, dentry, sizeof(*dentry)) < 0)
+    {
+        pm->u.warning_info.info.offset_crc = CRC_PATH_DENTRY;
+        goto Error;
+    }
+
+ Pwd:;
+    ret = write_path_d(ctx, dentry, buffer, &pm->u.string_info.buffer_length, pwd_slot, &pm->u.warning_info.info);
+    *dentry = NULL;
+    if (ret < 0) {
+        goto Error;
+    }
+    // add an extra null byte to signify string section end
+    write_null_char(buffer, &pm->u.string_info.buffer_length);
 
     // tail call to the argv handling program
     bpf_tail_call(ctx, &tail_call_table, argv_slot);
