@@ -81,11 +81,11 @@ struct bpf_map_def SEC("maps/percpu_dentries") percpu_dentries = {
     .namespace = "",
 };
 
-// A per cpu counter so we can hold it across tail calls.
-struct bpf_map_def SEC("maps/percpu_counter") percpu_counter = {
+// A per cpu cache of argv so we can hold it across tail calls.
+struct bpf_map_def SEC("maps/percpu_argv") percpu_argv = {
     .type = BPF_MAP_TYPE_PERCPU_ARRAY,
     .key_size = sizeof(u32),
-    .value_size = sizeof(u32),
+    .value_size = sizeof(const char __user *const __user *),
     .max_entries = 1,
     .pinning = 0,
     .namespace = "",
@@ -401,15 +401,20 @@ Skip:
 }
 
 // writes argv into the buffer - tail calling if necessary
-static __always_inline int write_argv(struct pt_regs *ctx, const char __user *const __user *argv,
-                                      buf_t *buffer, u32 *buffer_offset, tail_call_slot_t tc_slot)
+static __always_inline void write_argv(struct pt_regs *ctx,
+                                       tail_call_slot_t tc_slot, process_message_type_t pm_type)
 {
     u32 key = 0;
-    u32 *arg_num = (u32 *)bpf_map_lookup_elem(&percpu_counter, &key);
-    if (arg_num == NULL)
-        return 0;
+    buf_t *buffer = (buf_t *)bpf_map_lookup_elem(&buffers, &key);
+    if (buffer == NULL) return;
+
+    const char __user *const __user **argvp = (const char __user *const __user **)bpf_map_lookup_elem(&percpu_argv, &key);
+    if (argvp == NULL) return;
 
     int ret = 0;
+    if ((*argvp) == NULL) goto Done;
+
+    process_message_t *pm = (process_message_t *)buffer;
 
 // this number was arrived at experimentally, increasing it will result in too many
 // instructions for older kernels
@@ -417,14 +422,14 @@ static __always_inline int write_argv(struct pt_regs *ctx, const char __user *co
     for (int i = 0; i < MAX_ARGS_NOTAIL; i++)
     {
         char *ptr = NULL;
-        int ret = bpf_probe_read(&ptr, sizeof(ptr), (void *)&argv[*arg_num]);
+        int ret = bpf_probe_read(&ptr, sizeof(ptr), (void *)*argvp);
         if (ret < 0 || ptr == NULL)
             goto Done;
 
         // we are ignoring the case of the string having been too
         // large. If this becomes a problem in practice we can tweak
         // the values somewhat.
-        int sz = write_string(ptr, buffer, buffer_offset, 1024);
+        int sz = write_string(ptr, buffer, &pm->u.string_info.buffer_length, 1024);
         if (sz < 0)
         {
             if (sz == -PMW_UNEXPECTED)
@@ -438,7 +443,8 @@ static __always_inline int write_argv(struct pt_regs *ctx, const char __user *co
             goto Done;
         }
 
-        *arg_num = *arg_num + 1;
+        // go to the next argument
+        (*argvp)++;
     }
 
     bpf_tail_call(ctx, &tail_call_table, tc_slot);
@@ -446,23 +452,8 @@ static __always_inline int write_argv(struct pt_regs *ctx, const char __user *co
     ret = -PMW_TAIL_CALL_MAX;
 
 Done:;
-    *arg_num = 0;
-    return ret;
-}
+    *argvp = NULL;
 
-SEC("kprobe/sys_execve_tc_argv")
-int BPF_KPROBE_SYSCALL(kprobe__sys_execve_tc_argv,
-                       const char __user *filename,
-                       const char __user *const __user *argv)
-{
-    u32 key = 0;
-    buf_t *buffer = (buf_t *)bpf_map_lookup_elem(&buffers, &key);
-    if (buffer == NULL)
-        return 0;
-
-    process_message_t *pm = (process_message_t *)buffer;
-
-    int ret = write_argv(ctx, argv, buffer, &pm->u.string_info.buffer_length, SYS_EXECVE_TC_ARGV);
     if (ret < 0)
     {
         pm->type = PM_WARNING;
@@ -488,10 +479,28 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execve_tc_argv,
         bpf_map_delete_elem(&incomplete_execs, &pid_tgid);
     }
 
+    return;
+}
+
+SEC("kprobe/sys_execve_tc_argv")
+int BPF_KPROBE_SYSCALL(kprobe__sys_execve_tc_argv,
+                       const char __user *filename,
+                       const char __user *const __user *argv)
+{
+    write_argv(ctx, SYS_EXECVE_TC_ARGV, PM_EXECVE);
     return 0;
 }
 
-static __always_inline void enter_exec(struct pt_regs *ctx,
+SEC("kprobe/sys_execveat_tc_argv")
+int BPF_KPROBE_SYSCALL(kprobe__sys_execveat_tc_argv,
+                       int fd, const char __user *filename,
+                       const char __user *const __user *argv)
+{
+    write_argv(ctx, SYS_EXECVEAT_TC_ARGV, PM_EXECVEAT);
+    return 0;
+}
+
+static __always_inline void enter_exec(struct pt_regs *ctx, const char __user *const __user *argv,
                                        process_message_type_t pm_type, tail_call_slot_t pwd_slot,
                                        tail_call_slot_t argv_slot)
 {
@@ -586,6 +595,7 @@ static __always_inline void enter_exec(struct pt_regs *ctx,
     // add an extra null byte to signify string section end
     write_null_char(buffer, &pm->u.string_info.buffer_length);
 
+    bpf_map_update_elem(&percpu_argv, &key, &argv, BPF_ANY);
     // tail call to the argv handling program
     bpf_tail_call(ctx, &tail_call_table, argv_slot);
 
@@ -604,48 +614,6 @@ Error:;
     bpf_map_delete_elem(&incomplete_execs, &pid_tgid);
 }
 
-SEC("kprobe/sys_execveat_tc_argv")
-int BPF_KPROBE_SYSCALL(kprobe__sys_execveat_tc_argv,
-                       int fd, const char __user *filename,
-                       const char __user *const __user *argv)
-{
-    u32 key = 0;
-    buf_t *buffer = (buf_t *)bpf_map_lookup_elem(&buffers, &key);
-    if (buffer == NULL)
-        return 0;
-
-    process_message_t *pm = (process_message_t *)buffer;
-
-    int ret = write_argv(ctx, argv, buffer, &pm->u.string_info.buffer_length, SYS_EXECVEAT_TC_ARGV);
-    if (ret < 0)
-    {
-        pm->type = PM_WARNING;
-        pm->u.warning_info.pid_tgid = bpf_get_current_pid_tgid();
-        pm->u.warning_info.message_type = PM_EXECVEAT;
-        pm->u.warning_info.code = -ret;
-
-        push_message(ctx, pm);
-
-        // deliberately not returning early so we can still push the
-        // message for the bit we have
-    }
-
-    write_null_char(buffer, &pm->u.string_info.buffer_length);
-
-    if (push_flexible_message(ctx, pm, pm->u.string_info.buffer_length) < 0)
-    {
-        // if this message failed to be sent - let's remove the events
-        // from the maps so the kretprobe doesn't do useless work
-        u64 pid_tgid = bpf_get_current_pid_tgid();
-        u32 pid = pid_tgid >> 32;
-
-        bpf_map_delete_elem(&exec_tids, &pid);
-        bpf_map_delete_elem(&incomplete_execs, &pid_tgid);
-    }
-
-    return 0;
-}
-
 SEC("kprobe/sys_execveat_4_11")
 int BPF_KPROBE_SYSCALL(kprobe__sys_execveat_4_11,
                        int fd, const char __user *filename,
@@ -654,7 +622,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execveat_4_11,
                        int flags)
 {
     if (!offset_loaded()) return 0;
-    enter_exec(ctx, PM_EXECVEAT, SYS_EXECVEAT_4_11, SYS_EXECVEAT_TC_ARGV);
+    enter_exec(ctx, argv, PM_EXECVEAT, SYS_EXECVEAT_4_11, SYS_EXECVEAT_TC_ARGV);
 
     return 0;
 }
@@ -667,7 +635,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execve_4_11,
 {
     if (!offset_loaded()) return 0;
 
-    enter_exec(ctx, PM_EXECVE, SYS_EXECVE_4_11, SYS_EXECVE_TC_ARGV);
+    enter_exec(ctx, argv, PM_EXECVE, SYS_EXECVE_4_11, SYS_EXECVE_TC_ARGV);
 
     return 0;
 }
@@ -783,8 +751,8 @@ static __always_inline void exit_exec(struct pt_regs *ctx, process_message_type_
 
 ExeName:;
     ret = write_path(ctx, dentry, buffer,
-                       &pm->u.syscall_info.data.exec_info.buffer_length,
-                       tail_call, &pm->u.warning_info.info);
+                     &pm->u.syscall_info.data.exec_info.buffer_length,
+                     tail_call, &pm->u.warning_info.info);
 
     // reset skips back to 0. This will automatically update it in the
     // map so no need to do a bpf_map_update_elem.
