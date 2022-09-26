@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0+
 
 #include <linux/kconfig.h>
-#include <linux/ptrace.h>
 #include <linux/version.h>
 #include <uapi/linux/bpf.h>
+#include <linux/sched.h>
 #include <linux/uio.h>
 #include <linux/fcntl.h>
 #include "bpf_helpers.h"
@@ -36,17 +36,23 @@
 // instructions allowed.
 #define MAX_ARGS_NOTAIL 75
 
-// used to send data gathered/calculated in a kprobe to the kretprobe.
-typedef struct
-{
-    process_message_type_t type;
-    union
-    {
-        int unshare_flags;
-        clone_info_t clone_info;
-        u64 exec_id;
-    };
-} incomplete_event_t;
+// these structs are used to send data gathered/calculated in a kprobe
+// to the kretprobe.
+
+typedef struct {
+    u64 pid_tgid;
+    int unshare_flags;
+} incomplete_unshare_t;
+
+typedef struct {
+    u64 pid_tgid;
+    clone_info_t clone_info;
+} incomplete_clone_t;
+
+typedef struct {
+    u64 pid_tgid;
+    u64 exec_id;
+} incomplete_exec_t;
 
 // used for events with flexible sizes (i.e., exec*) so it can send
 // extra data. Used in conjuction with a map such that it does not use
@@ -85,12 +91,35 @@ struct bpf_map_def SEC("maps/process_events") process_events = {
     .namespace = "",
 };
 
-// A map of events that have started (a kprobe) but are yet to finish
+// A map of execs that have started (a kprobe) but are yet to finish
 // (the kretprobe).
-struct bpf_map_def SEC("maps/incomplete_events") incomplete_events = {
-    .type = BPF_MAP_TYPE_HASH,
+struct bpf_map_def SEC("maps/incomplete_exec") incomplete_execs = {
+    .type = BPF_MAP_TYPE_LRU_HASH,
     .key_size = sizeof(u64),
-    .value_size = sizeof(incomplete_event_t),
+    .value_size = sizeof(incomplete_exec_t),
+    .max_entries = 8 * 1024,
+    .pinning = 0,
+    .namespace = "",
+};
+
+// A map of unshares that have started (a kprobe) but are yet to finish
+// (the kretprobe).
+struct bpf_map_def SEC("maps/incomplete_unshare") incomplete_unshares = {
+    .type = BPF_MAP_TYPE_LRU_HASH,
+    .key_size = sizeof(u64),
+    .value_size = sizeof(incomplete_unshare_t),
+    // this is lower than exec or clone because we don't foresee that many concurrent unshares
+    .max_entries = 256,
+    .pinning = 0,
+    .namespace = "",
+};
+
+// A map of clones that have started (a kprobe) but are yet to finish
+// (the kretprobe).
+struct bpf_map_def SEC("maps/incomplete_clone") incomplete_clones = {
+    .type = BPF_MAP_TYPE_LRU_HASH,
+    .key_size = sizeof(u64),
+    .value_size = sizeof(incomplete_clone_t),
     .max_entries = 8 * 1024,
     .pinning = 0,
     .namespace = "",
@@ -126,6 +155,13 @@ struct bpf_map_def SEC("maps/buffers") buffers = {
     .pinning = 0,
     .namespace = "",
 };
+
+#define load_event(map, key, ty)                            \
+    void *__eventp = bpf_map_lookup_elem(&map, &key);       \
+    if (__eventp == NULL) goto NoEvent;                     \
+    ty event = {0};                                         \
+    __builtin_memcpy(&event, (void *)__eventp, sizeof(ty)); \
+    if (event.pid_tgid != key) goto EventMismatch;
 
 SEC("kprobe/do_mount")
 int kprobe__do_mount(struct pt_regs *ctx)
@@ -456,6 +492,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execve_tc_argv,
     if (ret < 0)
     {
         pm->type = PM_WARNING;
+        pm->u.warning_info.pid_tgid = bpf_get_current_pid_tgid();
         pm->u.warning_info.message_type = PM_EXECVE;
         pm->u.warning_info.code = -ret;
 
@@ -474,7 +511,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execve_tc_argv,
         u64 pid_tgid = bpf_get_current_pid_tgid();
         u32 pid = pid_tgid >> 32;
         bpf_map_delete_elem(&exec_tids, &pid);
-        bpf_map_delete_elem(&incomplete_events, &pid_tgid);
+        bpf_map_delete_elem(&incomplete_execs, &pid_tgid);
     }
 
     return 0;
@@ -533,7 +570,6 @@ static __always_inline void enter_exec(struct pt_regs *ctx, const char __user *f
 
     process_message_t *pm = (process_message_t *)buffer;
 
-    error_info_t einfo = {0};
     u64 pid_tgid = bpf_get_current_pid_tgid();
     u32 pid = pid_tgid >> 32;
 
@@ -545,8 +581,8 @@ static __always_inline void enter_exec(struct pt_regs *ctx, const char __user *f
     }
 
     // start of the execve* event
-    incomplete_event_t event = {0};
-    event.type = pm_type;
+    incomplete_exec_t event = {0};
+    event.pid_tgid = pid_tgid;
     u32 tid = pid_tgid & 0xFFFFFFFF;
     event.exec_id = (u64)tid << 32 | bpf_get_prandom_u32();
 
@@ -586,35 +622,33 @@ static __always_inline void enter_exec(struct pt_regs *ctx, const char __user *f
     // only incur the cost of using exec_tids if executing from the non-main thread
     if (pid != tid)
     {
-        // deliberately not using BPF_ANY because we do not want to
-        // overwrite it if another thread has already called for exec
-        ret = bpf_map_update_elem(&exec_tids, &pid, &tid, BPF_NOEXIST);
+        ret = bpf_map_update_elem(&exec_tids, &pid, &tid, BPF_ANY);
         if (ret < 0)
         {
             // not going to Error tag because we don't
             // want to delete the pid from exec_tids
-            einfo.err = ret;
             pm->type = PM_WARNING;
+            pm->u.warning_info.pid_tgid = pid_tgid;
             pm->u.warning_info.message_type = pm_type;
-            pm->u.warning_info.code = PMW_DOUBLE_EXEC;
-            pm->u.warning_info.info = einfo;
+            pm->u.warning_info.code = PMW_EXEC_TIDS;
+            pm->u.warning_info.info.err = ret;
             push_message(ctx, pm);
 
             return;
         }
     }
 
-    ret = bpf_map_update_elem(&incomplete_events, &pid_tgid, &event, BPF_ANY);
+    ret = bpf_map_update_elem(&incomplete_execs, &pid_tgid, &event, BPF_ANY);
     if (ret < 0)
     {
-        // should only happen if `incomplete_events` is filled
-        einfo.err = ret;
-        ret = -PMW_FILLED_EVENTS;
+        // should only happen if `incomplete_execs` is filled
+        pm->u.warning_info.info.err = ret;
+        ret = -PMW_UPDATE_MAP_ERROR;
         goto Error;
     }
 
 Pwd:;
-    ret = write_pwd(ctx, buffer, &pm->u.string_info.buffer_length, skips, pwd_slot, &einfo);
+    ret = write_pwd(ctx, buffer, &pm->u.string_info.buffer_length, skips, pwd_slot, &pm->u.warning_info.info);
     if (ret < 0)
     {
         goto Error;
@@ -629,13 +663,13 @@ Pwd:;
 
 Error:;
     pm->type = PM_WARNING;
+    pm->u.warning_info.pid_tgid = pid_tgid;
     pm->u.warning_info.message_type = pm_type;
     pm->u.warning_info.code = -ret;
-    pm->u.warning_info.info = einfo;
     push_message(ctx, pm);
 
     bpf_map_delete_elem(&exec_tids, &pid);
-    bpf_map_delete_elem(&incomplete_events, &pid_tgid);
+    bpf_map_delete_elem(&incomplete_execs, &pid_tgid);
 }
 
 SEC("kprobe/sys_execveat_tc_argv")
@@ -654,6 +688,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execveat_tc_argv,
     if (ret < 0)
     {
         pm->type = PM_WARNING;
+        pm->u.warning_info.pid_tgid = bpf_get_current_pid_tgid();
         pm->u.warning_info.message_type = PM_EXECVEAT;
         pm->u.warning_info.code = -ret;
 
@@ -673,7 +708,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execveat_tc_argv,
         u32 pid = pid_tgid >> 32;
 
         bpf_map_delete_elem(&exec_tids, &pid);
-        bpf_map_delete_elem(&incomplete_events, &pid_tgid);
+        bpf_map_delete_elem(&incomplete_execs, &pid_tgid);
     }
 
     return 0;
@@ -729,25 +764,13 @@ static __always_inline int exit_exec(struct pt_regs *ctx, process_message_t *pm,
     }
 
     int ret = 1;
-    error_info_t einfo = {0};
-    incomplete_event_t *event = (incomplete_event_t *)bpf_map_lookup_elem(&incomplete_events, &pid_tgid);
-    if (event == NULL)
-    {
-        goto Done;
-    }
-
-    if (event->type != pm_type)
-    {
-        ret = -PMW_WRONG_TYPE;
-        einfo.actual_type = event->type;
-        goto Done;
-    }
+    load_event(incomplete_execs, pid_tgid, incomplete_exec_t);
 
     int retcode = (int)PT_REGS_RC(ctx);
     if (retcode < 0)
     {
         pm->type = PM_DISCARD;
-        pm->u.discard_info.event_id = event->exec_id;
+        pm->u.discard_info.event_id = event.exec_id;
         push_message(ctx, pm);
         goto Done;
     }
@@ -756,7 +779,7 @@ static __always_inline int exit_exec(struct pt_regs *ctx, process_message_t *pm,
     {
         // don't exit early without discarding
         pm->type = PM_DISCARD;
-        pm->u.discard_info.event_id = event->exec_id;
+        pm->u.discard_info.event_id = event.exec_id;
         push_message(ctx, pm);
 
         goto Done;
@@ -764,22 +787,27 @@ static __always_inline int exit_exec(struct pt_regs *ctx, process_message_t *pm,
 
     ret = 0;
     pm->type = pm_type;
-    pm->u.syscall_info.data.exec_info.event_id = event->exec_id;
+    pm->u.syscall_info.data.exec_info.event_id = event.exec_id;
     pm->u.syscall_info.retcode = retcode;
     pm->u.syscall_info.data.exec_info.file_info = extract_file_info(exe);
+    goto Done;
 
-Done:;
+ EventMismatch:;
+    ret = -PMW_PID_TGID_MISMATCH;
+    pm->u.warning_info.info.stored_pid_tgid = event.pid_tgid;
+
+ Done:;
     // only delete at the very end so the event and the tid pointers
     // above are valid for the duration of this function.
     bpf_map_delete_elem(&exec_tids, &pid);
-    bpf_map_delete_elem(&incomplete_events, &pid_tgid);
+    bpf_map_delete_elem(&incomplete_execs, &pid_tgid);
 
     if (ret < 0)
     {
         pm->type = PM_WARNING;
+        pm->u.warning_info.pid_tgid = pid_tgid;
         pm->u.warning_info.message_type = pm_type;
         pm->u.warning_info.code = -ret;
-        pm->u.warning_info.info = einfo;
 
         push_message(ctx, pm);
 
@@ -787,8 +815,10 @@ Done:;
         // warning again
         return 1;
     }
-
     return ret;
+
+ NoEvent:;
+    return 0;
 }
 
 SEC("kretprobe/ret_sys_execve_4_8")
@@ -817,6 +847,7 @@ Done:;
     if (ret < 0)
     {
         pm.type = PM_WARNING;
+        pm.u.warning_info.pid_tgid = bpf_get_current_pid_tgid();
         pm.u.warning_info.message_type = PM_EXECVE;
         pm.u.warning_info.code = -ret;
 
@@ -841,7 +872,7 @@ int kretprobe__ret_sys_execveat_4_8(struct pt_regs *ctx)
     if (skips == NULL)
         return 0;
 
-    error_info_t einfo = {0};
+    process_message_t *pm = (process_message_t *)buffer;
     void *ts = (void *)bpf_get_current_task();
     void *exe = get_current_exe(ts);
     int ret = 0;
@@ -850,8 +881,6 @@ int kretprobe__ret_sys_execveat_4_8(struct pt_regs *ctx)
         ret = -PMW_MISSING_EXE;
         goto Done;
     }
-
-    process_message_t *pm = (process_message_t *)buffer;
 
     if (*skips != 0)
     {
@@ -867,7 +896,7 @@ Pwd:;
     void *path = offset_ptr(exe, CRC_FILE_F_PATH);
     ret = write_path(ctx, path, buffer, skips,
                      &pm->u.syscall_info.data.exec_info.buffer_length,
-                     RET_SYS_EXECVEAT_4_8, &einfo);
+                     RET_SYS_EXECVEAT_4_8, &pm->u.warning_info.info);
 
     // reset skips back to 0. This will automatically update it in the
     // map so no need to do a bpf_map_update_elem.
@@ -885,9 +914,9 @@ Done:;
     if (ret < 0)
     {
         pm->type = PM_WARNING;
+        pm->u.warning_info.pid_tgid = bpf_get_current_pid_tgid();
         pm->u.warning_info.message_type = PM_EXECVEAT;
         pm->u.warning_info.code = -ret;
-        pm->u.warning_info.info = einfo;
 
         push_message(ctx, pm);
     }
@@ -903,18 +932,19 @@ static __always_inline void enter_clone(struct pt_regs *ctx, process_message_typ
         return;
 
     u64 pid_tgid = bpf_get_current_pid_tgid();
-    incomplete_event_t event = {0};
-    event.type = pm_type;
+    incomplete_clone_t event = {0};
+    event.pid_tgid = pid_tgid;
     event.clone_info.flags = flags;
 
-    int ret = bpf_map_update_elem(&incomplete_events, &pid_tgid, &event, BPF_ANY);
+    int ret = bpf_map_update_elem(&incomplete_clones, &pid_tgid, &event, BPF_ANY);
     if (ret < 0)
     {
         process_message_t pm = {0};
         pm.type = PM_WARNING;
+        pm.u.warning_info.pid_tgid = pid_tgid;
         pm.u.warning_info.message_type = pm_type;
-        pm.u.warning_info.code = PMW_FILLED_EVENTS;
-        pm.u.warning_info.info = (error_info_t){.err = ret};
+        pm.u.warning_info.code = PMW_UPDATE_MAP_ERROR;
+        pm.u.warning_info.info.err = ret;
 
         push_message(ctx, &pm);
 
@@ -925,44 +955,44 @@ static __always_inline void enter_clone(struct pt_regs *ctx, process_message_typ
 }
 
 // handles the kretprobe of clone-like syscalls (fork, vfork, clone, clone3)
-static __always_inline void exit_clonex(struct pt_regs *ctx, pprocess_message_t ev, process_message_type_t pm_type)
+static __always_inline void exit_clonex(struct pt_regs *ctx, pprocess_message_t pm, process_message_type_t pm_type)
 {
     u64 pid_tgid = bpf_get_current_pid_tgid();
-    incomplete_event_t *event = (incomplete_event_t *)bpf_map_lookup_elem(&incomplete_events, &pid_tgid);
-    if (event == NULL)
-        return;
-
-    if (event->type != pm_type)
-    {
-        process_message_t pm = {0};
-        pm.type = PM_WARNING;
-        pm.u.warning_info.message_type = pm_type;
-        pm.u.warning_info.code = PMW_WRONG_TYPE;
-        pm.u.warning_info.info = (error_info_t){.actual_type = event->type};
-
-        push_message(ctx, &pm);
-
-        goto Done;
-    }
+    load_event(incomplete_clones, pid_tgid, incomplete_clone_t);
 
     int retcode = PT_REGS_RC(ctx);
     if (retcode < 0)
         goto Done;
 
     void *ts = (void *)bpf_get_current_task();
-    if (fill_syscall(&ev->u.syscall_info, ts, pid_tgid >> 32) != 0)
+    if (fill_syscall(&pm->u.syscall_info, ts, pid_tgid >> 32) != 0)
         goto Done;
 
-    ev->type = pm_type;
-    ev->u.syscall_info.data.clone_info = event->clone_info;
-    ev->u.syscall_info.retcode = retcode;
+    pm->type = pm_type;
+    pm->u.syscall_info.data.clone_info = event.clone_info;
+    pm->u.syscall_info.retcode = retcode;
 
-    push_message(ctx, ev);
+    push_message(ctx, pm);
 
-Done:;
+    goto Done;
+
+ EventMismatch:;
+    pm->type = PM_WARNING;
+    pm->u.warning_info.pid_tgid = pid_tgid;
+    pm->u.warning_info.message_type = pm_type;
+    pm->u.warning_info.code = PMW_PID_TGID_MISMATCH;
+    pm->u.warning_info.info.stored_pid_tgid = event.pid_tgid;
+
+    push_message(ctx, pm);
+
+ Done:;
     // only delete at the every end so the event pointer above is
     // valid for the duration of this function.
-    bpf_map_delete_elem(&incomplete_events, &pid_tgid);
+    bpf_map_delete_elem(&incomplete_clones, &pid_tgid);
+    return;
+
+ NoEvent:;
+    return;
 }
 
 SEC("kprobe/sys_clone_4_8")
@@ -1007,23 +1037,7 @@ SEC("kprobe/read_pid_task_struct")
 int kprobe__read_pid_task_struct(struct pt_regs *ctx)
 {
     u64 pid_tgid = bpf_get_current_pid_tgid();
-    incomplete_event_t *event = (incomplete_event_t *)bpf_map_lookup_elem(&incomplete_events, &pid_tgid);
-    if (event == NULL)
-        return 0;
-
-    if (event->type != PM_FORK &&
-        event->type != PM_VFORK &&
-        event->type != PM_CLONE &&
-        event->type != PM_CLONE3)
-    {
-        // maybe a different syscall triggered this hook - we only
-        // want to do the work in this kprobe for clone-like syscalls
-        // so just exit early and do not change anything. If the event
-        // type is actually wrong the kretprobe can handle the error
-        // handling.
-
-        return 0;
-    }
+    load_event(incomplete_clones, pid_tgid, incomplete_clone_t);
 
     // get passed in task_struct
     void *ts = (void *)PT_REGS_PARM1(ctx);
@@ -1040,14 +1054,23 @@ int kprobe__read_pid_task_struct(struct pt_regs *ctx)
     if (npid != ntgid)
     {
         // the kretprobe shouldn't care about it either
-        bpf_map_delete_elem(&incomplete_events, &pid_tgid);
+        bpf_map_delete_elem(&incomplete_clones, &pid_tgid);
         return 0;
     }
 
     // deliberately not deleting from the map - we'll let the
     // kretprobe do that and send the event
-    event->clone_info.child_pid = ntgid;
+    event.clone_info.child_pid = ntgid;
+    // we copied the event so we need to manually update it
+    bpf_map_update_elem(&incomplete_clones, &pid_tgid, &event, BPF_ANY);
 
+    return 0;
+
+ EventMismatch:;
+    // let the kretprobe return the error as that has more information
+    return 0;
+
+ NoEvent:;
     return 0;
 }
 
@@ -1095,18 +1118,19 @@ SEC("kprobe/sys_unshare_4_8")
 int BPF_KPROBE_SYSCALL(kprobe__sys_unshare_4_8, int flags)
 {
     u64 pid_tgid = bpf_get_current_pid_tgid();
-    incomplete_event_t event = {0};
-    event.type = PM_UNSHARE;
+    incomplete_unshare_t event = {0};
+    event.pid_tgid = pid_tgid;
     event.unshare_flags = flags;
 
-    int ret = bpf_map_update_elem(&incomplete_events, &pid_tgid, &event, BPF_ANY);
+    int ret = bpf_map_update_elem(&incomplete_unshares, &pid_tgid, &event, BPF_ANY);
     if (ret < 0)
     {
         process_message_t pm = {0};
         pm.type = PM_WARNING;
+        pm.u.warning_info.pid_tgid = pid_tgid;
         pm.u.warning_info.message_type = PM_UNSHARE;
-        pm.u.warning_info.code = PMW_FILLED_EVENTS;
-        pm.u.warning_info.info = (error_info_t){.err = ret};
+        pm.u.warning_info.code = PMW_UPDATE_MAP_ERROR;
+        pm.u.warning_info.info.err = ret;
 
         push_message(ctx, &pm);
 
@@ -1120,22 +1144,8 @@ SEC("kretprobe/ret_sys_unshare")
 int kretprobe__ret_sys_unshare(struct pt_regs *ctx)
 {
     u64 pid_tgid = bpf_get_current_pid_tgid();
-    incomplete_event_t *event = (incomplete_event_t *)bpf_map_lookup_elem(&incomplete_events, &pid_tgid);
-    if (event == NULL)
-        return 0;
-
     process_message_t pm = {0};
-
-    if (event->type != PM_UNSHARE)
-    {
-        pm.type = PM_WARNING;
-        pm.u.warning_info.message_type = PM_UNSHARE;
-        pm.u.warning_info.code = PMW_WRONG_TYPE;
-        pm.u.warning_info.info = (error_info_t){.actual_type = event->type};
-        push_message(ctx, &pm);
-
-        goto Done;
-    }
+    load_event(incomplete_unshares, pid_tgid, incomplete_unshare_t);
 
     int retcode = (int)PT_REGS_RC(ctx);
     if (retcode < 0)
@@ -1147,15 +1157,26 @@ int kretprobe__ret_sys_unshare(struct pt_regs *ctx)
         goto Done;
 
     pm.type = PM_UNSHARE;
-    pm.u.syscall_info.data.unshare_flags = event->unshare_flags;
+    pm.u.syscall_info.data.unshare_flags = event.unshare_flags;
     pm.u.syscall_info.retcode = retcode;
 
     push_message(ctx, &pm);
+    goto Done;
 
-Done:;
+ EventMismatch:;
+    pm.type = PM_WARNING;
+    pm.u.warning_info.pid_tgid = pid_tgid;
+    pm.u.warning_info.code = PMW_PID_TGID_MISMATCH;
+    pm.u.warning_info.info.stored_pid_tgid = event.pid_tgid;
+    push_message(ctx, &pm);
+
+ Done:;
     // only delete at the very end so the event pointer above is valid
     // for the duration of this function.
-    bpf_map_delete_elem(&incomplete_events, &pid_tgid);
+    bpf_map_delete_elem(&incomplete_unshares, &pid_tgid);
+    return 0;
+
+ NoEvent:;
     return 0;
 }
 

@@ -15,7 +15,7 @@ typedef void *_sock;
 #define SWAP_U16(x) (((x) >> 8) | ((x) << 8))
 
 struct bpf_map_def SEC("maps/tcp_connect") tcp_connect = {
-    .type = BPF_MAP_TYPE_HASH,
+    .type = BPF_MAP_TYPE_LRU_HASH,
     .key_size = sizeof(u32),
     .value_size = sizeof(size_t),
     .max_entries = 1024,
@@ -24,7 +24,7 @@ struct bpf_map_def SEC("maps/tcp_connect") tcp_connect = {
 };
 
 struct bpf_map_def SEC("maps/udp_outgoing_map") udp_outgoing_map = {
-    .type = BPF_MAP_TYPE_HASH,
+    .type = BPF_MAP_TYPE_LRU_HASH,
     .key_size = sizeof(u32),
     .value_size = sizeof(size_t),
     .max_entries = 1024,
