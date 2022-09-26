@@ -108,7 +108,8 @@ struct bpf_map_def SEC("maps/incomplete_unshare") incomplete_unshares = {
     .type = BPF_MAP_TYPE_LRU_HASH,
     .key_size = sizeof(u64),
     .value_size = sizeof(incomplete_unshare_t),
-    .max_entries = 8 * 1024,
+    // this is lower than exec or clone because we don't foresee that many concurrent unshares
+    .max_entries = 256,
     .pinning = 0,
     .namespace = "",
 };
@@ -621,9 +622,7 @@ static __always_inline void enter_exec(struct pt_regs *ctx, const char __user *f
     // only incur the cost of using exec_tids if executing from the non-main thread
     if (pid != tid)
     {
-        // deliberately not using BPF_ANY because we do not want to
-        // overwrite it if another thread has already called for exec
-        ret = bpf_map_update_elem(&exec_tids, &pid, &tid, BPF_NOEXIST);
+        ret = bpf_map_update_elem(&exec_tids, &pid, &tid, BPF_ANY);
         if (ret < 0)
         {
             // not going to Error tag because we don't
@@ -631,7 +630,7 @@ static __always_inline void enter_exec(struct pt_regs *ctx, const char __user *f
             pm->type = PM_WARNING;
             pm->u.warning_info.pid_tgid = pid_tgid;
             pm->u.warning_info.message_type = pm_type;
-            pm->u.warning_info.code = PMW_DOUBLE_EXEC;
+            pm->u.warning_info.code = PMW_EXEC_TIDS;
             pm->u.warning_info.info.err = ret;
             push_message(ctx, pm);
 
@@ -644,7 +643,7 @@ static __always_inline void enter_exec(struct pt_regs *ctx, const char __user *f
     {
         // should only happen if `incomplete_execs` is filled
         pm->u.warning_info.info.err = ret;
-        ret = -PMW_FILLED_EVENTS;
+        ret = -PMW_UPDATE_MAP_ERROR;
         goto Error;
     }
 
@@ -944,7 +943,7 @@ static __always_inline void enter_clone(struct pt_regs *ctx, process_message_typ
         pm.type = PM_WARNING;
         pm.u.warning_info.pid_tgid = pid_tgid;
         pm.u.warning_info.message_type = pm_type;
-        pm.u.warning_info.code = PMW_FILLED_EVENTS;
+        pm.u.warning_info.code = PMW_UPDATE_MAP_ERROR;
         pm.u.warning_info.info.err = ret;
 
         push_message(ctx, &pm);
@@ -1130,7 +1129,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_unshare_4_8, int flags)
         pm.type = PM_WARNING;
         pm.u.warning_info.pid_tgid = pid_tgid;
         pm.u.warning_info.message_type = PM_UNSHARE;
-        pm.u.warning_info.code = PMW_FILLED_EVENTS;
+        pm.u.warning_info.code = PMW_UPDATE_MAP_ERROR;
         pm.u.warning_info.info.err = ret;
 
         push_message(ctx, &pm);
