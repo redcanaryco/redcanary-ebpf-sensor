@@ -254,7 +254,6 @@ typedef struct
         clone_info_t clone_info;
         struct
         {
-            u64 event_id;
             u32 buffer_length;
             file_info_t file_info;
         } exec_info;
@@ -313,6 +312,16 @@ typedef struct
     char truncated;
 } telemetry_value_t;
 
+typedef enum
+{
+    SYS_EXECVE_4_11,
+    SYS_EXECVEAT_4_11,
+    RET_SYS_EXECVEAT_4_8,
+    RET_SYS_EXECVE_4_8,
+    SYS_EXEC_PWD,
+    HANDLE_PWD,
+} tail_call_slot_t;
+
 typedef union
 {
     int err;
@@ -323,6 +332,7 @@ typedef union
         u64 end;
     } argv;
     u64 total_len;
+    tail_call_slot_t tailcall;
 } error_info_t;
 
 typedef struct
@@ -331,15 +341,6 @@ typedef struct
     union
     {
         syscall_info_t syscall_info;
-        struct
-        {
-            u64 event_id;
-            u32 buffer_length;
-        } string_info;
-        struct
-        {
-            u64 event_id;
-        } discard_info;
         struct
         {
             process_message_warning_t code;
@@ -371,17 +372,6 @@ struct clone_args
     __aligned_u64 cgroup;
 };
 #endif
-
-typedef enum
-{
-    SYS_EXECVE_4_11,
-    SYS_EXECVEAT_4_11,
-    RET_SYS_EXECVEAT_4_8,
-    RET_SYS_EXECVE_4_8,
-    SYS_EXECVE_TC_ARGV,
-    SYS_EXECVEAT_TC_ARGV,
-    HANDLE_PWD,
-} tail_call_slot_t;
 
 typedef enum
 {
