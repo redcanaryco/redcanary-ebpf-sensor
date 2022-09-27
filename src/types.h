@@ -256,6 +256,10 @@ typedef struct
         {
             u32 buffer_length;
             file_info_t file_info;
+            // send the length of argv we are processing. This is
+            // necessary because unlike paths, argvs can have empty
+            // strings so we cannot rely on double null separators
+            u32 argv_len;
         } exec_info;
     } data;
 } syscall_info_t, *psyscall_info_t;
