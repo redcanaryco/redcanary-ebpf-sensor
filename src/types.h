@@ -98,6 +98,8 @@ typedef enum
     PMW_READ_FILENAME_STRING,
     PMW_MISSING_EXE,
     PMW_READING_FIELD,
+    PMW_ARGV_TOO_BIG,
+    PMW_ARGV_INCONSISTENT,
 } process_message_warning_t;
 
 typedef enum
@@ -316,6 +318,11 @@ typedef union
     int err;
     u64 stored_pid_tgid;
     u64 offset_crc;
+    struct {
+        u64 start;
+        u64 end;
+    } argv;
+    u64 total_len;
 } error_info_t;
 
 typedef struct

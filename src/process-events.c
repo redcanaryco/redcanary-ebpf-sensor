@@ -31,11 +31,6 @@
 // (max tail call is 33).
 #define MAX_PATH_SEGMENTS_SKIP 192
 
-// maximum number of arguments we can read of an argv before doing a
-// tail call. It may be lowered if we go over the number of
-// instructions allowed.
-#define MAX_ARGS_NOTAIL 75
-
 // these structs are used to send data gathered/calculated in a kprobe
 // to the kretprobe.
 
@@ -76,16 +71,6 @@ struct bpf_map_def SEC("maps/percpu_dentries") percpu_dentries = {
     .type = BPF_MAP_TYPE_PERCPU_ARRAY,
     .key_size = sizeof(u32),
     .value_size = sizeof(void *),
-    .max_entries = 1,
-    .pinning = 0,
-    .namespace = "",
-};
-
-// A per cpu cache of argv so we can hold it across tail calls.
-struct bpf_map_def SEC("maps/percpu_argv") percpu_argv = {
-    .type = BPF_MAP_TYPE_PERCPU_ARRAY,
-    .key_size = sizeof(u32),
-    .value_size = sizeof(const char __user *const __user *),
     .max_entries = 1,
     .pinning = 0,
     .namespace = "",
@@ -400,109 +385,8 @@ Skip:
     return ret;
 }
 
-// writes argv into the buffer - tail calling if necessary
-static __always_inline void write_argv(struct pt_regs *ctx,
-                                       tail_call_slot_t tc_slot, process_message_type_t pm_type)
-{
-    u32 key = 0;
-    buf_t *buffer = (buf_t *)bpf_map_lookup_elem(&buffers, &key);
-    if (buffer == NULL) return;
-
-    const char __user *const __user **argvp = (const char __user *const __user **)bpf_map_lookup_elem(&percpu_argv, &key);
-    if (argvp == NULL) return;
-
-    int ret = 0;
-    if ((*argvp) == NULL) goto Done;
-
-    process_message_t *pm = (process_message_t *)buffer;
-
-// this number was arrived at experimentally, increasing it will result in too many
-// instructions for older kernels
-#pragma unroll MAX_ARGS_NOTAIL
-    for (int i = 0; i < MAX_ARGS_NOTAIL; i++)
-    {
-        char *ptr = NULL;
-        int ret = bpf_probe_read(&ptr, sizeof(ptr), (void *)*argvp);
-        if (ret < 0 || ptr == NULL)
-            goto Done;
-
-        // we are ignoring the case of the string having been too
-        // large. If this becomes a problem in practice we can tweak
-        // the values somewhat.
-        int sz = write_string(ptr, buffer, &pm->u.string_info.buffer_length, 1024);
-        if (sz < 0)
-        {
-            if (sz == -PMW_UNEXPECTED)
-            {
-                ret = -PMW_READ_ARGV_STRING;
-            }
-            else
-            {
-                ret = sz;
-            }
-            goto Done;
-        }
-
-        // go to the next argument
-        (*argvp)++;
-    }
-
-    bpf_tail_call(ctx, &tail_call_table, tc_slot);
-
-    ret = -PMW_TAIL_CALL_MAX;
-
-Done:;
-    *argvp = NULL;
-
-    if (ret < 0)
-    {
-        pm->type = PM_WARNING;
-        pm->u.warning_info.pid_tgid = bpf_get_current_pid_tgid();
-        pm->u.warning_info.message_type = PM_EXECVE;
-        pm->u.warning_info.code = -ret;
-
-        push_message(ctx, pm);
-
-        // deliberately not returning early so we can still push the
-        // message for the bit we have
-    }
-
-    write_null_char(buffer, &pm->u.string_info.buffer_length);
-
-    if (push_flexible_message(ctx, pm, pm->u.string_info.buffer_length) < 0)
-    {
-        // if this message failed to be sent let's remove the events
-        // from the maps so the kretprobe doesn't do useless work
-        u64 pid_tgid = bpf_get_current_pid_tgid();
-        u32 pid = pid_tgid >> 32;
-        bpf_map_delete_elem(&exec_tids, &pid);
-        bpf_map_delete_elem(&incomplete_execs, &pid_tgid);
-    }
-
-    return;
-}
-
-SEC("kprobe/sys_execve_tc_argv")
-int BPF_KPROBE_SYSCALL(kprobe__sys_execve_tc_argv,
-                       const char __user *filename,
-                       const char __user *const __user *argv)
-{
-    write_argv(ctx, SYS_EXECVE_TC_ARGV, PM_EXECVE);
-    return 0;
-}
-
-SEC("kprobe/sys_execveat_tc_argv")
-int BPF_KPROBE_SYSCALL(kprobe__sys_execveat_tc_argv,
-                       int fd, const char __user *filename,
-                       const char __user *const __user *argv)
-{
-    write_argv(ctx, SYS_EXECVEAT_TC_ARGV, PM_EXECVEAT);
-    return 0;
-}
-
-static __always_inline void enter_exec(struct pt_regs *ctx, const char __user *const __user *argv,
-                                       process_message_type_t pm_type, tail_call_slot_t pwd_slot,
-                                       tail_call_slot_t argv_slot)
+static __always_inline void enter_exec(struct pt_regs *ctx, process_message_type_t pm_type,
+                                       tail_call_slot_t pwd_slot)
 {
     u32 key = 0;
     buf_t *buffer = (buf_t *)bpf_map_lookup_elem(&buffers, &key);
@@ -595,13 +479,12 @@ static __always_inline void enter_exec(struct pt_regs *ctx, const char __user *c
     // add an extra null byte to signify string section end
     write_null_char(buffer, &pm->u.string_info.buffer_length);
 
-    bpf_map_update_elem(&percpu_argv, &key, &argv, BPF_ANY);
-    // tail call to the argv handling program
-    bpf_tail_call(ctx, &tail_call_table, argv_slot);
+    if (push_flexible_message(ctx, pm, pm->u.string_info.buffer_length) < 0) {
+        bpf_map_delete_elem(&exec_tids, &pid);
+        bpf_map_delete_elem(&incomplete_execs, &pid_tgid);
+    }
 
-    // tail call shouldn't fail since we don't let pwd use up all the
-    // tail calls but just in case it happens let's emit an error
-    ret = -PMW_TAIL_CALL_MAX;
+    return;
 
 Error:;
     pm->type = PM_WARNING;
@@ -622,7 +505,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execveat_4_11,
                        int flags)
 {
     if (!offset_loaded()) return 0;
-    enter_exec(ctx, argv, PM_EXECVEAT, SYS_EXECVEAT_4_11, SYS_EXECVEAT_TC_ARGV);
+    enter_exec(ctx, PM_EXECVEAT, SYS_EXECVEAT_4_11);
 
     return 0;
 }
@@ -635,7 +518,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execve_4_11,
 {
     if (!offset_loaded()) return 0;
 
-    enter_exec(ctx, argv, PM_EXECVE, SYS_EXECVE_4_11, SYS_EXECVE_TC_ARGV);
+    enter_exec(ctx, PM_EXECVE, SYS_EXECVE_4_11);
 
     return 0;
 }
@@ -737,9 +620,59 @@ static __always_inline void exit_exec(struct pt_regs *ctx, process_message_type_
 
     if ((*dentry) != NULL) goto ExeName;
 
-    pm->u.syscall_info.data.exec_info.buffer_length = sizeof(process_message_t);
     ret = start_kret_exec(ctx, pm, ts, exe, pm_type);
     if (ret != 0) goto Done;
+
+    void *mmptr = is_user_process(ts);
+    if (mmptr == NULL) return;
+
+    u64 arg_start = 0;
+    u64 arg_end = 0;
+    read_value(mmptr, CRC_MM_STRUCT_ARG_START, &arg_start, sizeof(arg_start));
+    read_value(mmptr, CRC_MM_STRUCT_ARG_END, &arg_end, sizeof(arg_end));
+    if (arg_end < arg_start) {
+        ret = -PMW_ARGV_INCONSISTENT;
+        pm->u.warning_info.info.argv.start = arg_start;
+        pm->u.warning_info.info.argv.end = arg_end;
+        goto Done;
+    }
+
+    u64 len = arg_end - arg_start;
+    // manually truncate the length to half of the buffer so the ebpf
+    // verifier knows for a fact we are not going over the bounds of
+    // our buffer.
+    const u32 MAX_ARGV_LEN = (MAX_PERCPU_BUFFER >> 1) - 1;
+    if (len > MAX_ARGV_LEN) {
+        // deliberately making a new process_message_t instead of
+        // reusing `pm`. The goal is to still push the truncated argv
+        // so we do not want to override any of the data in `pm`
+        process_message_t warning = {0};
+        warning.type = PM_WARNING;
+        warning.u.warning_info.pid_tgid = bpf_get_current_pid_tgid();
+        warning.u.warning_info.message_type = pm_type;
+        warning.u.warning_info.code = PMW_ARGV_TOO_BIG;
+        warning.u.warning_info.info.total_len = len;
+        push_message(ctx, &warning);
+    }
+
+    len = (arg_end - arg_start) & (MAX_ARGV_LEN);
+    u32 offset = sizeof(process_message_t);
+    pm->u.syscall_info.data.exec_info.buffer_length = offset;
+    if (bpf_probe_read(&buffer->buf[offset], len, (void *)arg_start) < 0) {
+        ret = -PMW_UNEXPECTED;
+        goto Done;
+    }
+
+    pm->u.syscall_info.data.exec_info.buffer_length += len;
+
+    // if for any reason the last character is not a NULL (e.g., we
+    // truncated the argv not at a string boundary) make sure to
+    // append a NULL to terminate the string
+    if (buffer->buf[(pm->u.syscall_info.data.exec_info.buffer_length - 1) & (MAX_PERCPU_BUFFER - 1)] != '\0') {
+        write_null_char(buffer, &pm->u.syscall_info.data.exec_info.buffer_length);
+    }
+    // append a NULL to signify the end of the argv strings
+    write_null_char(buffer, &pm->u.syscall_info.data.exec_info.buffer_length);
 
     void *path = offset_ptr(exe, CRC_FILE_F_PATH);
     if (read_value(path, CRC_PATH_DENTRY, dentry, sizeof(*dentry)) < 0)

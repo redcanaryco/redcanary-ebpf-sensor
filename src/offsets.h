@@ -22,6 +22,12 @@ const u64 CRC_TASK_STRUCT_MM = 0xce718bb9d7fe31a2;
 /* mm_struct->exe_file */
 const u64 CRC_MM_STRUCT_EXE_FILE = 0x3ac4a1974916ed95;
 
+/* mm_struct->arg_start */
+const u64 CRC_MM_STRUCT_ARG_START = 0xbf4ac23cfb9bfcdc;
+
+/* mm_struct->arg_end */
+const u64 CRC_MM_STRUCT_ARG_END = 0x5a7beb317405d4d2;
+
 /* file->f_path */
 const u64 CRC_FILE_F_PATH = 0xf1d5510f86260be;
 
