@@ -241,6 +241,20 @@ typedef struct
 
 typedef struct
 {
+    // whether argv_length is truncated from the actual length. This
+    // is just here so userspace knows that the argv sent is not the
+    // entirety of the argv but just our best effort.
+    u8 argv_truncated;
+    // send the length of argv we are processing. This is
+    // necessary because unlike paths, argvs can have empty
+    // strings so we cannot rely on double null separators
+    u16 argv_length;
+    u32 buffer_length;
+    file_info_t file_info;
+} exec_info_t;
+
+typedef struct
+{
     u32 pid;
     u32 ppid;
     u32 luid;
@@ -252,15 +266,7 @@ typedef struct
     {
         u32 unshare_flags;
         clone_info_t clone_info;
-        struct
-        {
-            u32 buffer_length;
-            file_info_t file_info;
-            // send the length of argv we are processing. This is
-            // necessary because unlike paths, argvs can have empty
-            // strings so we cannot rely on double null separators
-            u32 argv_len;
-        } exec_info;
+        exec_info_t  exec_info;
     } data;
 } syscall_info_t, *psyscall_info_t;
 
@@ -318,8 +324,6 @@ typedef struct
 
 typedef enum
 {
-    SYS_EXECVE_4_11,
-    SYS_EXECVEAT_4_11,
     RET_SYS_EXECVEAT_4_8,
     RET_SYS_EXECVE_4_8,
     SYS_EXEC_PWD,

@@ -366,32 +366,6 @@ Skip:
     return ret;
 }
 
-SEC("kprobe/sys_execveat_4_11")
-int BPF_KPROBE_SYSCALL(kprobe__sys_execveat_4_11,
-                       int fd, const char __user *filename,
-                       const char __user *const __user *argv,
-                       const char __user *const __user *envp,
-                       int flags)
-{
-    // we do not need to capture anything in the kprobe; all of the
-    // needed data will exist and be more reliable inside the
-    // task_struct once it reaches the kretprobe
-    return 0;
-}
-
-SEC("kprobe/sys_execve_4_11")
-int BPF_KPROBE_SYSCALL(kprobe__sys_execve_4_11,
-                       const char __user *filename,
-                       const char __user *const __user *argv,
-                       const char __user *const __user *envp)
-
-{
-    // we do not need to capture anything in the kprobe; all of the
-    // needed data will exist and be more reliable inside the
-    // task_struct once it reaches the kretprobe
-    return 0;
-}
-
 static __always_inline void exit_exec(struct pt_regs *ctx, process_message_type_t pm_type,
                                       tail_call_slot_t tail_call)
 {
@@ -444,22 +418,6 @@ static __always_inline void exit_exec(struct pt_regs *ctx, process_message_type_
         goto Done;
     }
 
-    // length of all strings counting NULLs
-    u64 argv_len = arg_end - arg_start;
-    const u32 MAX_ARGV_LEN = (MAX_PERCPU_BUFFER >> 1) - 1;
-    if (argv_len > MAX_ARGV_LEN) {
-        // deliberately making a new process_message_t instead of
-        // reusing `pm`. The goal is to still push the truncated argv
-        // so we do not want to override any of the data in `pm`
-        process_message_t warning = {0};
-        warning.type = PM_WARNING;
-        warning.u.warning_info.pid_tgid = pid_tgid;
-        warning.u.warning_info.message_type = pm_type;
-        warning.u.warning_info.code = PMW_ARGV_TOO_BIG;
-        warning.u.warning_info.info.total_len = argv_len;
-        push_message(ctx, &warning);
-    }
-
     /* DONE WITH SANITY CHECKS - TIME TO FILL UP `pm` */
 
     pm->type = pm_type;
@@ -468,32 +426,41 @@ static __always_inline void exit_exec(struct pt_regs *ctx, process_message_type_
 
     /* SAVE ARGV */
 
+    // length of all strings counting NULLs
+    u64 argv_length = arg_end - arg_start;
+
     // manually truncate the length to half of the buffer so the ebpf
     // verifier knows for a fact we are not going over the bounds of
     // our buffer.
-    argv_len = (arg_end - arg_start) & (MAX_ARGV_LEN);
+    const u64 MAX_ARGV_LENGTH = (MAX_PERCPU_BUFFER >> 1) - 1;
+    pm->u.syscall_info.data.exec_info.argv_truncated = (u8) (argv_length > MAX_ARGV_LENGTH);
+    argv_length = (arg_end - arg_start) & (MAX_ARGV_LENGTH);
 
     u32 offset = sizeof(process_message_t);
     pm->u.syscall_info.data.exec_info.buffer_length = offset;
-    if (bpf_probe_read(&buffer->buf[offset], argv_len, (void *)arg_start) < 0) {
+    if (bpf_probe_read(&buffer->buf[offset], argv_length, (void *)arg_start) < 0) {
         ret = -PMW_UNEXPECTED;
         goto Done;
     }
 
-    pm->u.syscall_info.data.exec_info.buffer_length += argv_len;
+    pm->u.syscall_info.data.exec_info.buffer_length += argv_length;
 
     // if for any reason the last character is not a NULL (e.g., we
     // truncated the argv not at a string boundary) make sure to
     // append a NULL to terminate the string
     if (buffer->buf[(pm->u.syscall_info.data.exec_info.buffer_length - 1) & (MAX_PERCPU_BUFFER - 1)] != '\0') {
-        argv_len += 1; // we are taking up one more than we thought
+        argv_length += 1; // we are taking up one more than we thought
         write_null_char(buffer);
     }
 
     // do not rely on double NULL to separate argv from the rest. An
     // empty argument can also cause a double NULL.
-    pm->u.syscall_info.data.exec_info.argv_len = argv_len;
-    // append a NULL to signify the end of the argv strings
+    pm->u.syscall_info.data.exec_info.argv_length = argv_length;
+
+    // append a NULL to signify the end of the argv
+    // strings. Technically not necessary since we are passing
+    // `argv_length` but it keeps it consistent with the other strings
+    // in the buffer
     write_null_char(buffer);
 
     /* FIND THE TOP DENTRY TO THE EXE */
