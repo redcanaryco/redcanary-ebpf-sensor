@@ -273,15 +273,6 @@ static __always_inline int fill_syscall(syscall_info_t *syscall_info, void *ts, 
     return 0;
 }
 
-// returns the running executable on the task struct
-static __always_inline void *get_current_exe(void *mmptr)
-{
-    void *ptr = NULL;
-    read_value(mmptr, CRC_MM_STRUCT_EXE_FILE, &ptr, sizeof(ptr));
-
-    return ptr;
-}
-
 // it's argument should be a pointer to a file
 static __always_inline file_info_t extract_file_info(void *ptr)
 {
