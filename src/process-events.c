@@ -439,7 +439,7 @@ static __always_inline void exit_exec(struct pt_regs *ctx, process_message_type_
     u32 offset = sizeof(process_message_t);
     pm->u.syscall_info.data.exec_info.buffer_length = offset;
     if (bpf_probe_read(&buffer->buf[offset], argv_length, (void *)arg_start) < 0) {
-        ret = -PMW_UNEXPECTED;
+        ret = -PMW_READ_ARGV;
         goto Done;
     }
 

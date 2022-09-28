@@ -88,17 +88,13 @@ typedef enum
     PMW_BUFFER_FULL = 1,
     PMW_TAIL_CALL_MAX,
     PMW_MAX_PATH,
-    PMW_EXEC_TIDS,
     PMW_UPDATE_MAP_ERROR,
     PMW_PID_TGID_MISMATCH,
     PMW_UNEXPECTED,
-    PMW_MISSING_EVENT,
     PMW_READ_PATH_STRING,
-    PMW_READ_ARGV_STRING,
-    PMW_READ_FILENAME_STRING,
+    PMW_READ_ARGV,
     PMW_MISSING_EXE,
     PMW_READING_FIELD,
-    PMW_ARGV_TOO_BIG,
     PMW_ARGV_INCONSISTENT,
 } process_message_warning_t;
 
@@ -114,8 +110,6 @@ typedef enum
     PM_VFORK,
     PM_EXECVE,
     PM_EXECVEAT,
-    PM_STRINGS,
-    PM_DISCARD,
     PM_WARNING,
 } process_message_type_t;
 
