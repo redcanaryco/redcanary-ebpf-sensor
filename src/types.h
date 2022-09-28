@@ -88,16 +88,14 @@ typedef enum
     PMW_BUFFER_FULL = 1,
     PMW_TAIL_CALL_MAX,
     PMW_MAX_PATH,
-    PMW_EXEC_TIDS,
     PMW_UPDATE_MAP_ERROR,
     PMW_PID_TGID_MISMATCH,
     PMW_UNEXPECTED,
-    PMW_MISSING_EVENT,
     PMW_READ_PATH_STRING,
-    PMW_READ_ARGV_STRING,
-    PMW_READ_FILENAME_STRING,
+    PMW_READ_ARGV,
     PMW_MISSING_EXE,
     PMW_READING_FIELD,
+    PMW_ARGV_INCONSISTENT,
 } process_message_warning_t;
 
 typedef enum
@@ -112,8 +110,6 @@ typedef enum
     PM_VFORK,
     PM_EXECVE,
     PM_EXECVEAT,
-    PM_STRINGS,
-    PM_DISCARD,
     PM_WARNING,
 } process_message_type_t;
 
@@ -239,6 +235,20 @@ typedef struct
 
 typedef struct
 {
+    // whether argv_length is truncated from the actual length. This
+    // is just here so userspace knows that the argv sent is not the
+    // entirety of the argv but just our best effort.
+    u8 argv_truncated;
+    // send the length of argv we are processing. This is
+    // necessary because unlike paths, argvs can have empty
+    // strings so we cannot rely on double null separators
+    u16 argv_length;
+    u32 buffer_length;
+    file_info_t file_info;
+} exec_info_t;
+
+typedef struct
+{
     u32 pid;
     u32 ppid;
     u32 luid;
@@ -250,12 +260,7 @@ typedef struct
     {
         u32 unshare_flags;
         clone_info_t clone_info;
-        struct
-        {
-            u64 event_id;
-            u32 buffer_length;
-            file_info_t file_info;
-        } exec_info;
+        exec_info_t  exec_info;
     } data;
 } syscall_info_t, *psyscall_info_t;
 
@@ -311,11 +316,25 @@ typedef struct
     char truncated;
 } telemetry_value_t;
 
+typedef enum
+{
+    RET_SYS_EXECVEAT_4_8,
+    RET_SYS_EXECVE_4_8,
+    SYS_EXEC_PWD,
+    HANDLE_PWD,
+} tail_call_slot_t;
+
 typedef union
 {
     int err;
     u64 stored_pid_tgid;
     u64 offset_crc;
+    struct {
+        u64 start;
+        u64 end;
+    } argv;
+    u64 total_len;
+    tail_call_slot_t tailcall;
 } error_info_t;
 
 typedef struct
@@ -324,15 +343,6 @@ typedef struct
     union
     {
         syscall_info_t syscall_info;
-        struct
-        {
-            u64 event_id;
-            u32 buffer_length;
-        } string_info;
-        struct
-        {
-            u64 event_id;
-        } discard_info;
         struct
         {
             process_message_warning_t code;
@@ -364,17 +374,6 @@ struct clone_args
     __aligned_u64 cgroup;
 };
 #endif
-
-typedef enum
-{
-    SYS_EXECVE_4_11,
-    SYS_EXECVEAT_4_11,
-    RET_SYS_EXECVEAT_4_8,
-    RET_SYS_EXECVE_4_8,
-    SYS_EXECVE_TC_ARGV,
-    SYS_EXECVEAT_TC_ARGV,
-    HANDLE_PWD,
-} tail_call_slot_t;
 
 typedef enum
 {
