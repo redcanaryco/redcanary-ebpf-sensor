@@ -210,6 +210,33 @@ static __always_inline void* read_field_ptr(void *base, u64 field) {
     return dst;
 }
 
+// Equivalent to container_of(ptr, type, member) where field_key is
+// the key for the member offset for the type. If not found the
+// current CPU's warning info is set and NULL is returned.
+static __always_inline void* containerof(void *ptr, u64 field_key) {
+    u32 *offset = get_offset(CRC_MOUNT_MNT);
+    if (offset == NULL) return NULL;
+
+    return ptr - *offset;
+}
+
+static __always_inline void init_dentries(dentry_pair *dentries, void *path)
+{
+    // dentries->path = path->dentry;
+    dentries->path = read_field_ptr(path, CRC_PATH_DENTRY);
+
+    // void *vfsmount = path->mnt;
+    void *vfsmount = read_field_ptr(path, CRC_PATH_MNT);
+    if (vfsmount == NULL) return;
+
+    // void *real_mnt = container_of(vfsmount, mount, mnt);
+    void *real_mnt = containerof(vfsmount, CRC_MOUNT_MNT);
+    if (real_mnt == NULL) return;
+
+    // dentries->mountpoint = real_mnt->mountpoint;
+    dentries->mountpoint = read_field_ptr(real_mnt, CRC_MOUNT_MOUNTPOINT);
+}
+
 #define load_event(map, key, ty)                            \
     void *__eventp = bpf_map_lookup_elem(&map, &key);       \
     if (__eventp == NULL) goto NoEvent;                     \
@@ -420,8 +447,9 @@ static __always_inline int write_path(struct pt_regs *ctx, dentry_pair *dentries
 #pragma unroll MAX_PATH_SEGMENTS_NOTAIL
     for (int i = 0; i < MAX_PATH_SEGMENTS_NOTAIL; i++)
     {
+        // this guard will just return what it's collected so far
         if (bpf_probe_read(&offset, sizeof(offset), dentries->path + name) < 0)
-            return 0;
+            goto PathDone;
 
         // NAME_MAX doesn't include null character; so +1 to take it
         // into account. Not all systems enforce NAME_MAX so
@@ -434,9 +462,35 @@ static __always_inline int write_path(struct pt_regs *ctx, dentry_pair *dentries
         void *old_dentry = dentries->path;
         bpf_probe_read(&dentries->path, sizeof(dentries->path), dentries->path + parent);
 
-        // there is no parent or parent points to itself
-        if ((dentries->path) == NULL || old_dentry == dentries->path)
+        // there is a parent that points to a new dentry so continue
+        if (dentries->path != NULL && old_dentry != dentries->path) continue;
+
+    PathDone:;
+        // the mountpoint was already processed or we failed to grab
+        // it; either way we are done
+        if (dentries->mountpoint == NULL) return 0;
+
+        process_message_t *pm = (process_message_t *)buffer;
+        u32 buffer_length = pm->u.syscall_info.data.exec_info.buffer_length;
+        // if the last thing we processed does NOT end in a '/' then
+        // it means that it is not a path from root (e.g., it could be
+        // a memfd's exe) so adding the mountpoint to make it appear
+        // like an absolute path would be incorrect so don't process
+        // the mountpoint.
+        if (buffer->buf[(buffer_length - 2) & (MAX_PERCPU_BUFFER - 1)] != '/') {
+            dentries->mountpoint = NULL;
             return 0;
+        }
+
+        // HACK: backtrack two characters to undo the last "/" we sent
+        // otherwise we would be sending something like:
+        // /path/to/mount//path/to/file (notice the double slash after
+        // mount). Depending on userspace implementation it could be
+        // reasonably interpreted as /path/to/file which is
+        // *incorrect* so let's make this unambigous.
+        pm->u.syscall_info.data.exec_info.buffer_length -= 2;
+        dentries->path = dentries->mountpoint;
+        dentries->mountpoint = NULL;
     }
 
     bpf_tail_call(ctx, &tail_call_table, tail_call);
@@ -567,9 +621,11 @@ static __always_inline void exit_exec(struct pt_regs *ctx, process_message_type_
     void *path = ptr_to_field(exe, CRC_FILE_F_PATH);
     if (path == NULL) goto EmitWarning;
 
-    // TODO: grab the mount that wraps path->mnt to find the real mount point
-    dentries->path = read_field_ptr(path, CRC_PATH_DENTRY);
+    init_dentries(dentries, path);
     if (dentries->path == NULL) goto EmitWarning;
+    if (dentries->mountpoint == NULL) goto EmitWarning;
+    // deliberary not checking if dentries->mountpoint == NULL because
+    // that is OK, we'll just get the path only
 
  ExeName:;
     /* WRITE EXE PATH; IT MAY TAIL CALL */
@@ -631,10 +687,11 @@ int kprobe__sys_exec_pwd(struct pt_regs *ctx)
     path = ptr_to_field(path, CRC_FS_STRUCT_PWD);
     if (path == NULL) goto Done;
 
-    // TODO: grab the mount that wraps pwd->mnt to find the real mount point
-    // task_struct->fs->pwd.dentry
-    dentries->path = read_field_ptr(path, CRC_PATH_DENTRY);
+    init_dentries(dentries, path);
     if (dentries->path == NULL) goto Done;
+    if (dentries->mountpoint == NULL) goto Done;
+    // deliberary not checking if dentries->mountpoint == NULL because
+    // that is OK, we'll just get the path only
 
  Pwd:;
     /* WRITE PATH; IT MAY TAIL CALL */
