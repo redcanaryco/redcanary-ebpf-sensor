@@ -104,17 +104,6 @@ struct bpf_map_def SEC("maps/incomplete_clone") incomplete_clones = {
     .namespace = "",
 };
 
-// A map of what pids have started an exec; with the value pointing to
-// what thread started it.
-struct bpf_map_def SEC("maps/exec_tids") exec_tids = {
-    .type = BPF_MAP_TYPE_LRU_HASH,
-    .key_size = sizeof(u32),   // pid
-    .value_size = sizeof(u32), // tid
-    .max_entries = 8 * 1024,
-    .pinning = 0,
-    .namespace = "",
-};
-
 struct bpf_map_def SEC("maps/tail_call_table") tail_call_table = {
     .type = BPF_MAP_TYPE_PROG_ARRAY,
     .key_size = sizeof(u32),
@@ -134,6 +123,86 @@ struct bpf_map_def SEC("maps/buffers") buffers = {
     .pinning = 0,
     .namespace = "",
 };
+
+typedef struct
+{
+    process_message_warning_t code;
+    error_info_t info;
+} local_warning_t;
+
+// A "cpu local" warning so we can easily get/set the current warning
+// at any point
+struct bpf_map_def SEC("maps/warning") percpu_warning = {
+    .type = BPF_MAP_TYPE_PERCPU_ARRAY,
+    .key_size = sizeof(u32),
+    .value_size = sizeof(local_warning_t),
+    .max_entries = 1,
+    .pinning = 0,
+    .namespace = "",
+};
+
+static __always_inline int set_local_warning(process_message_warning_t code, error_info_t info)
+{
+    local_warning_t warning = {0};
+    warning.code = code;
+    warning.info = info;
+    u32 key = 0;
+    return bpf_map_update_elem(&percpu_warning, &key, &warning, BPF_ANY);
+}
+
+/// Returns the offset to a field. If not found the current CPU's
+/// warning_info is set and NULL is returned
+static __always_inline u32* get_offset(u64 field) {
+    u32 *offset = (u32 *)bpf_map_lookup_elem(&offsets, &field);
+    if (offset == NULL) {
+        error_info_t info = {0};
+        info.offset_crc = field;
+        set_local_warning(PMW_READING_FIELD, info);
+    }
+
+    return offset;
+}
+
+/// Equivalent to &(base->field). If not found the current CPU's
+/// warning_info is set and NULL is returned
+static __always_inline void* ptr_to_field(void *base, u64 field) {
+    u32 *offset = get_offset(field);
+    if (offset == NULL) return NULL;
+
+    return base + *offset;
+}
+
+/// Equivalent to *dst = base->field. Returns 0 on success, or
+/// negative and sets the current CPU's warning_info in case of
+/// failure.
+static __always_inline int read_field(void *base, u64 field, void *dst, size_t size) {
+    void *ptr_to_ptr = ptr_to_field(base, field);
+    if (ptr_to_ptr == NULL) return -1;
+
+    int ret = bpf_probe_read(dst, size, ptr_to_ptr);
+    if (ret < 0) {
+        error_info_t info = {0};
+        info.offset_crc = field;
+        set_local_warning(PMW_PTR_FIELD_READ, info);
+    }
+
+    return ret;
+}
+
+/// Equivalent to void base->field. If not found or the pointer is
+/// NULL the current CPU's warning_info is set and NULL is returned
+static __always_inline void* read_field_ptr(void *base, u64 field) {
+    void *dst = NULL;
+    if (read_field(base, field, &dst, sizeof(dst)) < 0) return NULL;
+
+    if (dst == NULL) {
+        error_info_t info = {0};
+        info.offset_crc = field;
+        set_local_warning(PMW_NULL_FIELD, info);
+    }
+
+    return dst;
+}
 
 #define load_event(map, key, ty)                            \
     void *__eventp = bpf_map_lookup_elem(&map, &key);       \
@@ -182,20 +251,42 @@ static __always_inline void *offset_loaded()
     return bpf_map_lookup_elem(&offsets, &offset);
 }
 
-// accepts a pointer a `task_struct`. Returns NULL if the task_struct
-// belongs to a kernel process
-static __always_inline void *is_user_process(void *ts)
+// accepts a pointer to a `task_struct`. Returns 0 if it is not
+// user_process; 1 if it is, and -1 if an error occured.
+static __always_inline int is_user_process(void *ts)
 {
     void *mmptr = NULL;
-    read_value(ts, CRC_TASK_STRUCT_MM, &mmptr, sizeof(mmptr));
-    return mmptr;
+    if (read_field(ts, CRC_TASK_STRUCT_MM, &mmptr, sizeof(mmptr)) < 0) {
+        return -1;
+    }
+    return mmptr != NULL;
 }
 
-// pushes a message to the process_events perfmap for the current
-// CPU.
+// pushes a message to the process_events perfmap for the current CPU.
 static __always_inline int push_message(struct pt_regs *ctx, pprocess_message_t ev)
 {
     return bpf_perf_event_output(ctx, &process_events, BPF_F_CURRENT_CPU, ev, sizeof(*ev));
+}
+
+// pushes a warning to the process_events perfmap for the current CPU.
+static __always_inline int push_warning(struct pt_regs *ctx, pprocess_message_t pm,
+                                        process_message_type_t pm_type)
+{
+    pm->type = PM_WARNING;
+
+    u32 key = 0;
+    local_warning_t *warning = (local_warning_t *)bpf_map_lookup_elem(&percpu_warning, &key);
+    if (warning != NULL) {
+        pm->u.warning_info.code = warning->code;
+        pm->u.warning_info.info = warning->info;
+        // reset it so we don't accidentally re-use the same code/info in a new warning
+        *warning = (local_warning_t){0};
+    }
+
+    pm->u.warning_info.pid_tgid = bpf_get_current_pid_tgid();
+    pm->u.warning_info.message_type = pm_type;
+
+    return push_message(ctx, pm);
 }
 
 // pushes a message with an extra `dynamic_size` number of bytes. It
@@ -249,17 +340,17 @@ static __always_inline int fill_syscall(syscall_info_t *syscall_info, void *ts, 
 {
     if (!offset_loaded())
         return 1;
-    if (!is_user_process(ts))
-        return 1;
+    int ret = is_user_process(ts);
+    if (ret < 1) return ret;
 
-    void *ptr = NULL;
-    read_value(ts, CRC_TASK_STRUCT_REAL_PARENT, &ptr, sizeof(ptr));
+    void *real_parent = read_field_ptr(ts, CRC_TASK_STRUCT_REAL_PARENT);
+    if (real_parent == NULL) return -1;
 
     u32 ppid = -1;
-    read_value(ptr, CRC_TASK_STRUCT_TGID, &ppid, sizeof(ppid));
+    if (read_field(real_parent, CRC_TASK_STRUCT_TGID, &ppid, sizeof(ppid)) < 0) return -1;
 
     u32 luid = -1;
-    read_value(ts, CRC_TASK_STRUCT_LOGINUID, &luid, sizeof(luid));
+    if (read_field(ts, CRC_TASK_STRUCT_LOGINUID, &luid, sizeof(luid)) < 0) return -1;
 
     u64 uid_gid = bpf_get_current_uid_gid();
 
@@ -274,53 +365,49 @@ static __always_inline int fill_syscall(syscall_info_t *syscall_info, void *ts, 
 }
 
 // it's argument should be a pointer to a file
-static __always_inline file_info_t extract_file_info(void *ptr)
+static __always_inline int extract_file_info(void *ptr, file_info_t *file_info)
 {
+    void *f_inode = read_field_ptr(ptr, CRC_FILE_F_INODE);
+    if (f_inode == NULL) return -1;
+
+    void *i_sb = read_field_ptr(f_inode, CRC_INODE_I_SB);
+    if (i_sb == NULL) return -1;
+
+    // inode
+    if (read_field(f_inode, CRC_INODE_I_INO, &file_info->inode, sizeof(file_info->inode)) < 0)
+        return -1;
+
+    // device major/minor
     u32 i_dev = 0;
-    u64 i_ino = 0;
-    void *sptr = NULL;
-    read_value(ptr, CRC_FILE_F_INODE, &ptr, sizeof(ptr));
-    read_value(ptr, CRC_INODE_I_SB, &sptr, sizeof(sptr));
-    read_value(sptr, CRC_SBLOCK_S_DEV, &i_dev, sizeof(i_dev));
-    read_value(ptr, CRC_INODE_I_INO, &i_ino, sizeof(i_ino));
+    if (read_field(i_sb, CRC_SBLOCK_S_DEV, &i_dev, sizeof(i_dev)) < 0) return -1;
 
-    file_info_t file_info = {
-        .inode = i_ino,
-        .devmajor = MAJOR(i_dev),
-        .devminor = MINOR(i_dev),
-    };
+    file_info->devmajor = MAJOR(i_dev);
+    file_info->devminor = MINOR(i_dev);
 
-    bpf_get_current_comm(&file_info.comm, sizeof(file_info.comm));
+    // TODO: handle error
+    // comm
+    bpf_get_current_comm(&file_info->comm, sizeof(file_info->comm));
 
-    return file_info;
+    return 0;
 }
 
 // writes a d_path into a buffer - tail calling if necessary
 static __always_inline int write_path(struct pt_regs *ctx, void **dentry, buf_t *buffer,
-                                      tail_call_slot_t tail_call, error_info_t *einfo)
+                                      tail_call_slot_t tail_call)
 {
-    // any early exit at the start is unexpected
-    int ret = -PMW_READING_FIELD;
-
-    void *offset = NULL;
-    u64 offset_key = 0;
-
-    einfo->offset_crc = CRC_DENTRY_D_NAME;
-    SET_OFFSET(CRC_DENTRY_D_NAME);
+    u32 *offset = get_offset(CRC_DENTRY_D_NAME);
+    if (offset == NULL) return -1;
     u32 name = *(u32 *)offset; // variable name doesn't match here, we're reusing it to preserve stack
 
-    einfo->offset_crc = CRC_QSTR_NAME;
-    SET_OFFSET(CRC_QSTR_NAME);
+    offset = get_offset(CRC_QSTR_NAME);
+    if (offset == NULL) return -1;
     name = name + *(u32 *)offset; // offset to name char ptr within qstr of dentry
 
-    einfo->offset_crc = CRC_DENTRY_D_PARENT;
-    SET_OFFSET(CRC_DENTRY_D_PARENT);
+    offset = get_offset(CRC_DENTRY_D_PARENT);
+    if (offset == NULL) return -1;
     u32 parent = *(u32 *)offset; // offset of d_parent
 
-    // at this point let's assume success
-    einfo->offset_crc = 0;
-    ret = 0;
-
+    int ret = 0;
 // Anything we add to this for-loop will be repeated
 // MAX_PATH_SEGMENTS_NOTAIL so be very careful of going over the max
 // instruction limit (4096).
@@ -328,25 +415,14 @@ static __always_inline int write_path(struct pt_regs *ctx, void **dentry, buf_t 
     for (int i = 0; i < MAX_PATH_SEGMENTS_NOTAIL; i++)
     {
         if (bpf_probe_read(&offset, sizeof(offset), *dentry + name) < 0)
-            goto Skip;
+            return 0;
 
         // NAME_MAX doesn't include null character; so +1 to take it
         // into account. Not all systems enforce NAME_MAX so
         // truncation may happen per path segment. TODO: emit
         // truncation metrics to see if we need to care about this.
-        int sz = write_string((char *)offset, buffer, NAME_MAX + 1);
-        if (sz < 0)
-        {
-            if (sz == -PMW_UNEXPECTED)
-            {
-                ret = -PMW_READ_PATH_STRING;
-            }
-            else
-            {
-                ret = sz;
-            }
-            goto Skip;
-        }
+        ret = write_string((char *)offset, buffer, NAME_MAX + 1);
+        if (ret < 0) goto WriteError;
 
         // get the parent
         void *old_dentry = *dentry;
@@ -354,16 +430,27 @@ static __always_inline int write_path(struct pt_regs *ctx, void **dentry, buf_t 
 
         // there is no parent or parent points to itself
         if ((*dentry) == NULL || old_dentry == *dentry)
-            goto Skip;
+            return 0;
     }
 
     bpf_tail_call(ctx, &tail_call_table, tail_call);
 
-    ret = -PMW_TAIL_CALL_MAX;
-    einfo->tailcall = tail_call;
+    error_info_t info = {0};
+    info.tailcall = tail_call;
+    set_local_warning(PMW_TAIL_CALL_MAX, info);
 
-Skip:
-    return ret;
+    return -1;
+
+ WriteError:;
+
+    error_info_t empty_info = {0};
+    if (ret == -PMW_UNEXPECTED) {
+        set_local_warning(PMW_READ_PATH_STRING, empty_info);
+    } else {
+        set_local_warning(-ret, empty_info);
+    }
+
+    return -1;
 }
 
 static __always_inline void exit_exec(struct pt_regs *ctx, process_message_type_t pm_type,
@@ -388,41 +475,46 @@ static __always_inline void exit_exec(struct pt_regs *ctx, process_message_type_
 
     // do not emit failed execs
     int retcode = (int)PT_REGS_RC(ctx);
-    if (retcode < 0) goto Done;
+    if (retcode < 0) return;
 
     void *ts = (void *)bpf_get_current_task();
     u64 pid_tgid = bpf_get_current_pid_tgid();
 
     // do not emit if we couldn't fill the syscall info
-    if (fill_syscall(&pm->u.syscall_info, ts, pid_tgid >> 32) != 0) goto Done;
+    ret = fill_syscall(&pm->u.syscall_info, ts, pid_tgid >> 32);
+    if (ret > 0) return;
+    if (ret < 0) goto EmitWarning;
 
-    void *mmptr = is_user_process(ts);
-    if (mmptr == NULL) goto Done; // this is OK; it just means not a user process
+    void *mmptr = read_field_ptr(ts, CRC_TASK_STRUCT_MM);
+    // we already checked that it is a user process in fill_syscall so
+    // this should never be NULL
+    if (mmptr == NULL) goto EmitWarning;
 
-    void *exe = NULL;
-    read_value(mmptr, CRC_MM_STRUCT_EXE_FILE, &exe, sizeof(exe));
-    if (!exe) // this is wholly unexpected so emit a warning
-    {
-        ret = -PMW_MISSING_EXE;
-        goto Done;
-    }
+    void *exe = read_field_ptr(mmptr, CRC_MM_STRUCT_EXE_FILE);
+    if (exe == NULL) goto EmitWarning;
 
     u64 arg_start = 0;
+    if (read_field(mmptr, CRC_MM_STRUCT_ARG_START, &arg_start, sizeof(arg_start)) < 0)
+        goto EmitWarning;
+
     u64 arg_end = 0;
-    read_value(mmptr, CRC_MM_STRUCT_ARG_START, &arg_start, sizeof(arg_start));
-    read_value(mmptr, CRC_MM_STRUCT_ARG_END, &arg_end, sizeof(arg_end));
+    if (read_field(mmptr, CRC_MM_STRUCT_ARG_END, &arg_end, sizeof(arg_end)))
+        goto EmitWarning;
+
     if (arg_end < arg_start) {
-        ret = -PMW_ARGV_INCONSISTENT;
-        pm->u.warning_info.info.argv.start = arg_start;
-        pm->u.warning_info.info.argv.end = arg_end;
-        goto Done;
+        error_info_t info = {0};
+        info.argv.start = arg_start;
+        info.argv.end = arg_end;
+        set_local_warning(PMW_ARGV_INCONSISTENT, info);
+
+        goto EmitWarning;
     }
 
     /* DONE WITH SANITY CHECKS - TIME TO FILL UP `pm` */
 
     pm->type = pm_type;
     pm->u.syscall_info.retcode = retcode;
-    pm->u.syscall_info.data.exec_info.file_info = extract_file_info(exe);
+    if (extract_file_info(exe, &pm->u.syscall_info.data.exec_info.file_info) < 0) goto EmitWarning;
 
     /* SAVE ARGV */
 
@@ -434,13 +526,16 @@ static __always_inline void exit_exec(struct pt_regs *ctx, process_message_type_
     // our buffer.
     const u64 MAX_ARGV_LENGTH = (MAX_PERCPU_BUFFER >> 1) - 1;
     pm->u.syscall_info.data.exec_info.argv_truncated = (u8) (argv_length > MAX_ARGV_LENGTH);
-    argv_length = (arg_end - arg_start) & (MAX_ARGV_LENGTH);
+    argv_length = (argv_length) & (MAX_ARGV_LENGTH);
 
     u32 offset = sizeof(process_message_t);
     pm->u.syscall_info.data.exec_info.buffer_length = offset;
     if (bpf_probe_read(&buffer->buf[offset], argv_length, (void *)arg_start) < 0) {
-        ret = -PMW_READ_ARGV;
-        goto Done;
+        error_info_t info = {0};
+        info.argv.start = arg_start;
+        info.argv.end = arg_end;
+        set_local_warning(PMW_READ_ARGV, info);
+        goto EmitWarning;
     }
 
     pm->u.syscall_info.data.exec_info.buffer_length += argv_length;
@@ -465,23 +560,21 @@ static __always_inline void exit_exec(struct pt_regs *ctx, process_message_type_
 
     /* FIND THE TOP DENTRY TO THE EXE */
 
-    void *path = offset_ptr(exe, CRC_FILE_F_PATH);
-    // TODO: grab the mount that wraps path->mnt to find the real mount point
-    if (read_value(path, CRC_PATH_DENTRY, dentry, sizeof(*dentry)) < 0)
-    {
-        ret = -PMW_READING_FIELD;
-        pm->u.warning_info.info.offset_crc = CRC_PATH_DENTRY;
-        goto Done;
-    }
+    void *path = ptr_to_field(exe, CRC_FILE_F_PATH);
+    if (path == NULL) goto EmitWarning;
 
-ExeName:;
+    *dentry = read_field_ptr(path, CRC_PATH_DENTRY);
+    // TODO: grab the mount that wraps path->mnt to find the real mount point
+    if (dentry == NULL) goto EmitWarning;
+
+ ExeName:;
     /* WRITE EXE PATH; IT MAY TAIL CALL */
-    ret = write_path(ctx, dentry, buffer, tail_call, &pm->u.warning_info.info);
+    ret = write_path(ctx, dentry, buffer, tail_call);
 
     // reset skips back to 0. This will automatically update it in the
     // map so no need to do a bpf_map_update_elem.
     *dentry = NULL;
-    if (ret < 0) goto Done;
+    if (ret < 0) goto EmitWarning;
 
     // add an extra null byte to signify string section end
     write_null_char(buffer);
@@ -494,21 +587,12 @@ ExeName:;
     push_flexible_message(ctx, pm, pm->u.syscall_info.data.exec_info.buffer_length);
 
     // but still emit a warning afterwards
-    ret = -PMW_TAIL_CALL_MAX;
-    pm->u.warning_info.info.tailcall = SYS_EXEC_PWD;
+    error_info_t info = {0};
+    info.tailcall = tail_call;
+    set_local_warning(PMW_TAIL_CALL_MAX, info);
 
-Done:;
-    if (ret < 0)
-    {
-        pm->type = PM_WARNING;
-        pm->u.warning_info.pid_tgid = bpf_get_current_pid_tgid();
-        pm->u.warning_info.message_type = pm_type;
-        pm->u.warning_info.code = -ret;
-
-        push_message(ctx, pm);
-    }
-
-    return;
+ EmitWarning:;
+    push_warning(ctx, pm, pm_type);
 }
 
 SEC("kprobe/sys_exec_pwd")
@@ -523,10 +607,6 @@ int kprobe__sys_exec_pwd(struct pt_regs *ctx)
     void **dentry = (void **)bpf_map_lookup_elem(&percpu_dentries, &key);
     if (dentry == NULL) return 0;
 
-    // create a separate einfo so we do not override the data in the
-    // buffer during warnings as we may still want to emit the event
-    // with partial data.
-    error_info_t einfo = {0};
     int ret = 0;
     process_message_t *pm = (process_message_t *)buffer;
     process_message_type_t pm_type = pm->type;
@@ -537,35 +617,25 @@ int kprobe__sys_exec_pwd(struct pt_regs *ctx)
 
     void *ts = (void *)bpf_get_current_task();
     void *path_ptr = NULL;
-    ret = -PMW_READING_FIELD;
+    ret = -1;
 
     // task_struct->fs
-    if (read_value(ts, CRC_TASK_STRUCT_FS, &path_ptr, sizeof(path_ptr)) < 0)
-    {
-        einfo.offset_crc = CRC_TASK_STRUCT_FS;
-        goto Done;
-    }
+    path_ptr = read_field_ptr(ts, CRC_TASK_STRUCT_FS);
+    if (path_ptr == NULL) goto Done;
 
     // &(task_struct->fs->pwd)
-    path_ptr = offset_ptr(path_ptr, CRC_FS_STRUCT_PWD);
-    if (path_ptr == NULL)
-    {
-        einfo.offset_crc = CRC_TASK_STRUCT_FS;
-        goto Done;
-    }
+    path_ptr = ptr_to_field(path_ptr, CRC_FS_STRUCT_PWD);
+    if (path_ptr == NULL) goto Done;
 
     // TODO: grab the mount that wraps pwd->mnt to find the real mount point
     // task_struct->fs->pwd.dentry
-    if (read_value(path_ptr, CRC_PATH_DENTRY, dentry, sizeof(*dentry)) < 0)
-    {
-        einfo.offset_crc = CRC_PATH_DENTRY;
-        goto Done;
-    }
+    *dentry = read_field_ptr(path_ptr, CRC_PATH_DENTRY);
+    if ((*dentry) == NULL) goto Done;
 
  Pwd:;
     /* WRITE PATH; IT MAY TAIL CALL */
 
-    ret = write_path(ctx, dentry, buffer, SYS_EXEC_PWD, &einfo);
+    ret = write_path(ctx, dentry, buffer, SYS_EXEC_PWD);
 
  Done:;
     /* PUSH THE EVENT AND RESET */
@@ -575,14 +645,7 @@ int kprobe__sys_exec_pwd(struct pt_regs *ctx)
     write_null_char(buffer);
     push_flexible_message(ctx, pm, pm->u.syscall_info.data.exec_info.buffer_length);
 
-    if (ret < 0) {
-        pm->type = PM_WARNING;
-        pm->u.warning_info.pid_tgid = bpf_get_current_pid_tgid();
-        pm->u.warning_info.message_type = pm_type;
-        pm->u.warning_info.code = -ret;
-        pm->u.warning_info.info = einfo;
-        push_message(ctx, pm);
-    }
+    if (ret < 0) push_warning(ctx, pm, pm_type);
 
     return 0;
 }
@@ -644,8 +707,9 @@ static __always_inline void exit_clonex(struct pt_regs *ctx, pprocess_message_t 
         goto Done;
 
     void *ts = (void *)bpf_get_current_task();
-    if (fill_syscall(&pm->u.syscall_info, ts, pid_tgid >> 32) != 0)
-        goto Done;
+    int ret = fill_syscall(&pm->u.syscall_info, ts, pid_tgid >> 32);
+    if (ret > 0) return;
+    if (ret < 0) goto EmitWarning;
 
     pm->type = pm_type;
     pm->u.syscall_info.data.clone_info = event.clone_info;
@@ -656,13 +720,12 @@ static __always_inline void exit_clonex(struct pt_regs *ctx, pprocess_message_t 
     goto Done;
 
  EventMismatch:;
-    pm->type = PM_WARNING;
-    pm->u.warning_info.pid_tgid = pid_tgid;
-    pm->u.warning_info.message_type = pm_type;
-    pm->u.warning_info.code = PMW_PID_TGID_MISMATCH;
-    pm->u.warning_info.info.stored_pid_tgid = event.pid_tgid;
+    error_info_t info = {0};
+    info.stored_pid_tgid = event.pid_tgid;
+    set_local_warning(PMW_PID_TGID_MISMATCH, info);
 
-    push_message(ctx, pm);
+ EmitWarning:;
+    push_warning(ctx, pm, pm_type);
 
  Done:;
     // only delete at the every end so the event pointer above is
@@ -723,9 +786,16 @@ int kprobe__read_pid_task_struct(struct pt_regs *ctx)
 
     // get the true pid
     u32 npid = 0;
+    if (read_field(ts, CRC_TASK_STRUCT_PID, &npid, sizeof(npid)) < 0) {
+        // don't bother emitting a warning; worst case we can use the retcode
+        return 0;
+    }
+
     u32 ntgid = 0;
-    read_value(ts, CRC_TASK_STRUCT_PID, &npid, sizeof(npid));
-    read_value(ts, CRC_TASK_STRUCT_TGID, &ntgid, sizeof(ntgid));
+    if (read_field(ts, CRC_TASK_STRUCT_TGID, &ntgid, sizeof(ntgid)) < 0) {
+        // don't bother emitting a warning; worst case we can use the retcode
+        return 0;
+    }
 
     // this means that this task_struct belongs to a non-main
     // thread. We do not care about new threads being spawned so exit
@@ -832,8 +902,9 @@ int kretprobe__ret_sys_unshare(struct pt_regs *ctx)
 
     void *ts = (void *)bpf_get_current_task();
 
-    if (fill_syscall(&pm.u.syscall_info, ts, pid_tgid >> 32) != 0)
-        goto Done;
+    int ret = fill_syscall(&pm.u.syscall_info, ts, pid_tgid >> 32);
+    if (ret > 0) return 0;
+    if (ret < 0) goto EmitWarning;
 
     pm.type = PM_UNSHARE;
     pm.u.syscall_info.data.unshare_flags = event.unshare_flags;
@@ -843,11 +914,12 @@ int kretprobe__ret_sys_unshare(struct pt_regs *ctx)
     goto Done;
 
  EventMismatch:;
-    pm.type = PM_WARNING;
-    pm.u.warning_info.pid_tgid = pid_tgid;
-    pm.u.warning_info.code = PMW_PID_TGID_MISMATCH;
-    pm.u.warning_info.info.stored_pid_tgid = event.pid_tgid;
-    push_message(ctx, &pm);
+    error_info_t info = {0};
+    info.stored_pid_tgid = event.pid_tgid;
+    set_local_warning(PMW_PID_TGID_MISMATCH, info);
+
+ EmitWarning:;
+    push_warning(ctx, &pm, PM_UNSHARE);
 
  Done:;
     // only delete at the very end so the event pointer above is valid
@@ -859,15 +931,19 @@ int kretprobe__ret_sys_unshare(struct pt_regs *ctx)
     return 0;
 }
 
-static __always_inline void push_exit(struct pt_regs *ctx, pprocess_message_t ev,
+static __always_inline void push_exit(struct pt_regs *ctx, pprocess_message_t pm,
                                       process_message_type_t pm_type, u32 pid)
 {
     void *ts = (void *)bpf_get_current_task();
-    if (fill_syscall(&ev->u.syscall_info, ts, pid) != 0)
+    int ret = fill_syscall(&pm->u.syscall_info, ts, pid);
+    if (ret > 0) return;
+    if (ret < 0) {
+        push_warning(ctx, pm, pm_type);
         return;
-    ev->type = pm_type;
+    }
 
-    push_message(ctx, ev);
+    pm->type = pm_type;
+    push_message(ctx, pm);
 }
 
 SEC("kprobe/sys_exit")

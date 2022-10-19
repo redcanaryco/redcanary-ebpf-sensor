@@ -85,17 +85,18 @@ typedef enum
 
 typedef enum
 {
-    PMW_BUFFER_FULL = 1,
+    PMW_UNSPEC,
+    PMW_BUFFER_FULL,
     PMW_TAIL_CALL_MAX,
-    PMW_MAX_PATH,
     PMW_UPDATE_MAP_ERROR,
     PMW_PID_TGID_MISMATCH,
     PMW_UNEXPECTED,
     PMW_READ_PATH_STRING,
     PMW_READ_ARGV,
-    PMW_MISSING_EXE,
     PMW_READING_FIELD,
     PMW_ARGV_INCONSISTENT,
+    PMW_PTR_FIELD_READ,
+    PMW_NULL_FIELD,
 } process_message_warning_t;
 
 typedef enum
@@ -113,11 +114,11 @@ typedef enum
     PM_WARNING,
 } process_message_type_t;
 
-#define COMMON_FIELDS \
-    u32 pid;          \
-    u32 tid;          \
-    u64 mono_ns;      \
-    u32 ppid;         \
+#define COMMON_FIELDS                           \
+    u32 pid;                                    \
+    u32 tid;                                    \
+    u64 mono_ns;                                \
+    u32 ppid;                                   \
     syscall_pattern_type_t syscall_pattern;
 
 typedef struct
@@ -247,6 +248,13 @@ typedef struct
     file_info_t file_info;
 } exec_info_t;
 
+typedef union
+{
+    u32 unshare_flags;
+    clone_info_t clone_info;
+    exec_info_t  exec_info;
+} syscall_data_t;
+
 typedef struct
 {
     u32 pid;
@@ -256,12 +264,7 @@ typedef struct
     u32 egid;
     int retcode;
     u64 mono_ns;
-    union
-    {
-        u32 unshare_flags;
-        clone_info_t clone_info;
-        exec_info_t  exec_info;
-    } data;
+    syscall_data_t data;
 } syscall_info_t, *psyscall_info_t;
 
 enum direction_t
@@ -333,24 +336,27 @@ typedef union
         u64 start;
         u64 end;
     } argv;
-    u64 total_len;
     tail_call_slot_t tailcall;
 } error_info_t;
 
 typedef struct
 {
+    process_message_warning_t code;
+    process_message_type_t message_type;
+    u64 pid_tgid;
+    error_info_t info;
+} warning_info_t;
+
+typedef union
+{
+    syscall_info_t syscall_info;
+    warning_info_t warning_info;
+} process_message_data_t;
+
+typedef struct
+{
     process_message_type_t type;
-    union
-    {
-        syscall_info_t syscall_info;
-        struct
-        {
-            process_message_warning_t code;
-            process_message_type_t message_type;
-            u64 pid_tgid;
-            error_info_t info;
-        } warning_info;
-    } u;
+    process_message_data_t u;
     // not allowed inside union
     char strings[];
 } process_message_t, *pprocess_message_t;
