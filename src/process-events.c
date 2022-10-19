@@ -23,7 +23,7 @@
 // TODO: make programs for newer kernels where we can use higher values
 
 // maximum segments we can read from a d_path before doing a tail call
-#define MAX_PATH_SEGMENTS_NOTAIL 12
+#define MAX_PATH_SEGMENTS_NOTAIL 32
 
 // these structs are used to send data gathered/calculated in a kprobe
 // to the kretprobe.
