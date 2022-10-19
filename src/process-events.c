@@ -25,12 +25,6 @@
 // maximum segments we can read from a d_path before doing a tail call
 #define MAX_PATH_SEGMENTS_NOTAIL 12
 
-// maximum number of path segments that we can read from a
-// d_path. This number is DELIBERATELY 16 * MAX_PATH_SEGMENTS_NOTAIL
-// so as to not consume all the available tail calls on the path alone
-// (max tail call is 33).
-#define MAX_PATH_SEGMENTS_SKIP 192
-
 // these structs are used to send data gathered/calculated in a kprobe
 // to the kretprobe.
 
@@ -52,6 +46,18 @@ typedef struct
     char buf[MAX_PERCPU_BUFFER];
 } buf_t;
 
+typedef struct
+{
+    // the dentry to the path currently being processed. At the
+    // beginning this is set to the top dentry of a path but it may be
+    // set to the mount after the path to the file is done processing
+    void *path;
+    // the dentry to the mountpoint that will be processed for the
+    // path. This is set to NULL once the path is processed and the
+    // mount is being processed
+    void *mountpoint;
+} dentry_pair;
+
 struct bpf_map_def SEC("maps/mount_events") mount_events = {
     .type = BPF_MAP_TYPE_PERF_EVENT_ARRAY,
     .key_size = sizeof(u32),
@@ -65,7 +71,7 @@ struct bpf_map_def SEC("maps/mount_events") mount_events = {
 struct bpf_map_def SEC("maps/percpu_dentries") percpu_dentries = {
     .type = BPF_MAP_TYPE_PERCPU_ARRAY,
     .key_size = sizeof(u32),
-    .value_size = sizeof(void *),
+    .value_size = sizeof(dentry_pair),
     .max_entries = 1,
     .pinning = 0,
     .namespace = "",
@@ -392,7 +398,7 @@ static __always_inline int extract_file_info(void *ptr, file_info_t *file_info)
 }
 
 // writes a d_path into a buffer - tail calling if necessary
-static __always_inline int write_path(struct pt_regs *ctx, void **dentry, buf_t *buffer,
+static __always_inline int write_path(struct pt_regs *ctx, dentry_pair *dentries, buf_t *buffer,
                                       tail_call_slot_t tail_call)
 {
     u32 *offset = get_offset(CRC_DENTRY_D_NAME);
@@ -414,7 +420,7 @@ static __always_inline int write_path(struct pt_regs *ctx, void **dentry, buf_t 
 #pragma unroll MAX_PATH_SEGMENTS_NOTAIL
     for (int i = 0; i < MAX_PATH_SEGMENTS_NOTAIL; i++)
     {
-        if (bpf_probe_read(&offset, sizeof(offset), *dentry + name) < 0)
+        if (bpf_probe_read(&offset, sizeof(offset), dentries->path + name) < 0)
             return 0;
 
         // NAME_MAX doesn't include null character; so +1 to take it
@@ -425,11 +431,11 @@ static __always_inline int write_path(struct pt_regs *ctx, void **dentry, buf_t 
         if (ret < 0) goto WriteError;
 
         // get the parent
-        void *old_dentry = *dentry;
-        bpf_probe_read(dentry, sizeof(*dentry), *dentry + parent);
+        void *old_dentry = dentries->path;
+        bpf_probe_read(&dentries->path, sizeof(dentries->path), dentries->path + parent);
 
         // there is no parent or parent points to itself
-        if ((*dentry) == NULL || old_dentry == *dentry)
+        if ((dentries->path) == NULL || old_dentry == dentries->path)
             return 0;
     }
 
@@ -442,7 +448,6 @@ static __always_inline int write_path(struct pt_regs *ctx, void **dentry, buf_t 
     return -1;
 
  WriteError:;
-
     error_info_t empty_info = {0};
     if (ret == -PMW_UNEXPECTED) {
         set_local_warning(PMW_READ_PATH_STRING, empty_info);
@@ -461,15 +466,15 @@ static __always_inline void exit_exec(struct pt_regs *ctx, process_message_type_
     buf_t *buffer = (buf_t *)bpf_map_lookup_elem(&buffers, &key);
     if (buffer == NULL) return;
 
-    void **dentry = (void **)bpf_map_lookup_elem(&percpu_dentries, &key);
-    if (dentry == NULL) return;
+    dentry_pair *dentries = (dentry_pair *)bpf_map_lookup_elem(&percpu_dentries, &key);
+    if (dentries == NULL) return;
 
     process_message_t *pm = (process_message_t *)buffer;
     int ret = 0;
 
     // We have been tail-called to find the exename, so go straight to
     // ExeName
-    if ((*dentry) != NULL) goto ExeName;
+    if (dentries->path != NULL) goto ExeName;
 
     /* SANITY CHECKS THAT THE EVENT IS RELEVANT */
 
@@ -559,21 +564,20 @@ static __always_inline void exit_exec(struct pt_regs *ctx, process_message_type_
     write_null_char(buffer);
 
     /* FIND THE TOP DENTRY TO THE EXE */
-
     void *path = ptr_to_field(exe, CRC_FILE_F_PATH);
     if (path == NULL) goto EmitWarning;
 
-    *dentry = read_field_ptr(path, CRC_PATH_DENTRY);
     // TODO: grab the mount that wraps path->mnt to find the real mount point
-    if (dentry == NULL) goto EmitWarning;
+    dentries->path = read_field_ptr(path, CRC_PATH_DENTRY);
+    if (dentries->path == NULL) goto EmitWarning;
 
  ExeName:;
     /* WRITE EXE PATH; IT MAY TAIL CALL */
-    ret = write_path(ctx, dentry, buffer, tail_call);
+    ret = write_path(ctx, dentries, buffer, tail_call);
 
     // reset skips back to 0. This will automatically update it in the
     // map so no need to do a bpf_map_update_elem.
-    *dentry = NULL;
+    dentries->path = NULL;
     if (ret < 0) goto EmitWarning;
 
     // add an extra null byte to signify string section end
@@ -604,42 +608,41 @@ int kprobe__sys_exec_pwd(struct pt_regs *ctx)
     buf_t *buffer = (buf_t *)bpf_map_lookup_elem(&buffers, &key);
     if (buffer == NULL) return 0;
 
-    void **dentry = (void **)bpf_map_lookup_elem(&percpu_dentries, &key);
-    if (dentry == NULL) return 0;
+    dentry_pair *dentries = (dentry_pair *)bpf_map_lookup_elem(&percpu_dentries, &key);
+    if (dentries == NULL) return 0;
 
     int ret = 0;
     process_message_t *pm = (process_message_t *)buffer;
     process_message_type_t pm_type = pm->type;
 
-    if ((*dentry) != NULL) goto Pwd;
+    if (dentries->path != NULL) goto Pwd;
 
     /* FIND THE TOP DENTRY TO THE PWD */
 
     void *ts = (void *)bpf_get_current_task();
-    void *path_ptr = NULL;
-    ret = -1;
 
+    // set ret to error to handle any going to Done early
+    ret = -1;
     // task_struct->fs
-    path_ptr = read_field_ptr(ts, CRC_TASK_STRUCT_FS);
-    if (path_ptr == NULL) goto Done;
+    void *path = path = read_field_ptr(ts, CRC_TASK_STRUCT_FS);
+    if (path == NULL) goto Done;
 
     // &(task_struct->fs->pwd)
-    path_ptr = ptr_to_field(path_ptr, CRC_FS_STRUCT_PWD);
-    if (path_ptr == NULL) goto Done;
+    path = ptr_to_field(path, CRC_FS_STRUCT_PWD);
+    if (path == NULL) goto Done;
 
     // TODO: grab the mount that wraps pwd->mnt to find the real mount point
     // task_struct->fs->pwd.dentry
-    *dentry = read_field_ptr(path_ptr, CRC_PATH_DENTRY);
-    if ((*dentry) == NULL) goto Done;
+    dentries->path = read_field_ptr(path, CRC_PATH_DENTRY);
+    if (dentries->path == NULL) goto Done;
 
  Pwd:;
     /* WRITE PATH; IT MAY TAIL CALL */
-
-    ret = write_path(ctx, dentry, buffer, SYS_EXEC_PWD);
+    ret = write_path(ctx, dentries, buffer, SYS_EXEC_PWD);
 
  Done:;
     /* PUSH THE EVENT AND RESET */
-    *dentry = NULL;
+    dentries->path = NULL;
 
     // add an extra null byte to signify string section end
     write_null_char(buffer);
