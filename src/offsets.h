@@ -126,3 +126,9 @@ const u64 CRC_MOUNT_MNT = 0x332c1523b7204177;
 
 /* mount->mnt_mountpoint */
 const u64 CRC_MOUNT_MOUNTPOINT = 0x497e95c14e2d950;
+
+/* mount->mnt_parent */
+const u64 CRC_MOUNT_MNTPARENT = 0x57a4eea49a711d75;
+
+/* vfsmount->mnt_root */
+const u64 CRC_VFSMOUNT_MNTROOT = 0xe4baf16bf0b472fa;
