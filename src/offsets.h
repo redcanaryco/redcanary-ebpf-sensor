@@ -34,6 +34,9 @@ const u64 CRC_FILE_F_PATH = 0xf1d5510f86260be;
 /* path->dentry */
 const u64 CRC_PATH_DENTRY = 0x71a4a97d6a6791a9;
 
+/* path->mnt */
+const u64 CRC_PATH_MNT = 0x88c40f5cf27266ae;
+
 /* dentry->d_name */
 const u64 CRC_DENTRY_D_NAME = 0x1b807e513eab1323;
 
@@ -117,3 +120,9 @@ const u64 CRC_LINUX_BINPRM_FILENAME = 0xb583ce53935255c5;
 
 /* linux_binprm->interp */
 const u64 CRC_BPRM_INTERP = 0x9f4cedeb0b40dc2c;
+
+/* mount->mnt */
+const u64 CRC_MOUNT_MNT = 0x332c1523b7204177;
+
+/* mount->mnt_mountpoint */
+const u64 CRC_MOUNT_MOUNTPOINT = 0x497e95c14e2d950;
