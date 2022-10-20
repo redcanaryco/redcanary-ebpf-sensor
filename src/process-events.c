@@ -270,9 +270,15 @@ static __always_inline void write_null_char(buf_t *buffer)
     process_message_t *pm = (process_message_t *)buffer;
     u32 *offset = &pm->u.syscall_info.data.exec_info.buffer_length;
 
-    // bpf_probe_read_str always write a null character at the end,
-    // even when truncating. So this is either adding a null at the
-    // end or replacing a null with another null when full which is OK.
+    // We are already full and we do not want the bitwise AND to
+    // modulus back onto 0 and overwrite the first bit so just
+    // bail. Best case this is the last NULL to write so we are done
+    // anyway, worst case there are more strings to write and it will
+    // trigger a buffer full warning later.
+    if (*offset == MAX_PERCPU_BUFFER) return;
+
+    // `&` safe because we've checked that offset isn't going to
+    // "overflow".
     buffer->buf[*offset & (MAX_PERCPU_BUFFER - 1)] = '\0';
     *offset = *offset + 1;
 }
@@ -323,13 +329,17 @@ static __always_inline int push_warning(struct pt_regs *ctx, pprocess_message_t 
 }
 
 // pushes a message with an extra `dynamic_size` number of bytes. It
-// caps the message to `MAX_PERCPU_BUFFER - 1` to appease verifier
-// however. The "-1" is there to make it an easy bit cap against a
-// power of two; it may drop an null byte out of the string which is
-// OK.
+// will never send more than `MAX_PERCPU_BUFFER` number of bytes. It
+// is a *bug* if dynamic_size here is larger than MAX_PERCPU_BUFFER
+// and it will cause the number of bytes to to dynamic_size %
+// MAX_PERCPU_BUFFER.
 static __always_inline int push_flexible_message(struct pt_regs *ctx, pprocess_message_t ev, u64 dynamic_size)
 {
-    return bpf_perf_event_output(ctx, &process_events, BPF_F_CURRENT_CPU, ev, dynamic_size & (MAX_PERCPU_BUFFER - 1));
+    // The -1 and +1 logic is here to prevent a buffer that is exactly
+    // MAX_PERCPU_BUFFER size to become 0 due to the bitwise AND. We
+    // know that dynamic_size will never be 0 so this is safe.
+    u64 size_to_send = ((dynamic_size - 1) & (MAX_PERCPU_BUFFER - 1)) + 1;
+    return bpf_perf_event_output(ctx, &process_events, BPF_F_CURRENT_CPU, ev, size_to_send);
 }
 
 // writes the string into the provided buffer. On a
@@ -584,8 +594,12 @@ static __always_inline void exit_exec(struct pt_regs *ctx, process_message_type_
     // verifier knows for a fact we are not going over the bounds of
     // our buffer.
     const u64 MAX_ARGV_LENGTH = (MAX_PERCPU_BUFFER >> 1) - 1;
-    pm->u.syscall_info.data.exec_info.argv_truncated = (u8) (argv_length > MAX_ARGV_LENGTH);
-    argv_length = (argv_length) & (MAX_ARGV_LENGTH);
+    if (argv_length > MAX_ARGV_LENGTH) {
+        pm->u.syscall_info.data.exec_info.argv_truncated = 1;
+        argv_length = MAX_ARGV_LENGTH;
+    } else {
+        pm->u.syscall_info.data.exec_info.argv_truncated = 0;
+    }
 
     u32 offset = sizeof(process_message_t);
     pm->u.syscall_info.data.exec_info.buffer_length = offset;
