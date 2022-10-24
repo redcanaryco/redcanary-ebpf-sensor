@@ -206,16 +206,6 @@ static __always_inline void* read_field_ptr(void *base, u64 field) {
     return dst;
 }
 
-// Equivalent to container_of(ptr, type, member) where field_key is
-// the key for the member offset for the type. If not found the
-// current CPU's warning info is set and NULL is returned.
-static __always_inline void* containerof(void *ptr, u64 field_key) {
-    u32 *offset = get_offset(CRC_MOUNT_MNT);
-    if (offset == NULL) return NULL;
-
-    return ptr - *offset;
-}
-
 static __always_inline void init_cached_path(cached_path_t *cached_path, void *path)
 {
     // cached_path->next_dentry = path->dentry;
