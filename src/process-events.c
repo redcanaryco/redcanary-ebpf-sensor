@@ -48,15 +48,11 @@ typedef struct
 
 typedef struct
 {
-    // the dentry to the path currently being processed. At the
-    // beginning this is set to the top dentry of a path but it may be
-    // set to the mount after the path to the file is done processing
-    void *path;
-    // the dentry to the mountpoint that will be processed for the
-    // path. This is set to NULL once the path is processed and the
-    // mount is being processed
-    void *mountpoint;
-} dentry_pair;
+    // the dentry to the next path segment
+    void *next_dentry;
+    // the virtual fs mount where the path is mounted
+    void *vfsmount;
+} cached_path_t;
 
 struct bpf_map_def SEC("maps/mount_events") mount_events = {
     .type = BPF_MAP_TYPE_PERF_EVENT_ARRAY,
@@ -68,10 +64,10 @@ struct bpf_map_def SEC("maps/mount_events") mount_events = {
 };
 
 // A per cpu cache of dentry so we can hold it across tail calls.
-struct bpf_map_def SEC("maps/percpu_dentries") percpu_dentries = {
+struct bpf_map_def SEC("maps/percpu_path") percpu_path = {
     .type = BPF_MAP_TYPE_PERCPU_ARRAY,
     .key_size = sizeof(u32),
-    .value_size = sizeof(dentry_pair),
+    .value_size = sizeof(cached_path_t),
     .max_entries = 1,
     .pinning = 0,
     .namespace = "",
@@ -210,31 +206,13 @@ static __always_inline void* read_field_ptr(void *base, u64 field) {
     return dst;
 }
 
-// Equivalent to container_of(ptr, type, member) where field_key is
-// the key for the member offset for the type. If not found the
-// current CPU's warning info is set and NULL is returned.
-static __always_inline void* containerof(void *ptr, u64 field_key) {
-    u32 *offset = get_offset(CRC_MOUNT_MNT);
-    if (offset == NULL) return NULL;
-
-    return ptr - *offset;
-}
-
-static __always_inline void init_dentries(dentry_pair *dentries, void *path)
+static __always_inline void init_cached_path(cached_path_t *cached_path, void *path)
 {
-    // dentries->path = path->dentry;
-    dentries->path = read_field_ptr(path, CRC_PATH_DENTRY);
+    // cached_path->next_dentry = path->dentry;
+    cached_path->next_dentry = read_field_ptr(path, CRC_PATH_DENTRY);
 
-    // void *vfsmount = path->mnt;
-    void *vfsmount = read_field_ptr(path, CRC_PATH_MNT);
-    if (vfsmount == NULL) return;
-
-    // void *real_mnt = container_of(vfsmount, mount, mnt);
-    void *real_mnt = containerof(vfsmount, CRC_MOUNT_MNT);
-    if (real_mnt == NULL) return;
-
-    // dentries->mountpoint = real_mnt->mountpoint;
-    dentries->mountpoint = read_field_ptr(real_mnt, CRC_MOUNT_MOUNTPOINT);
+    // cached_path->vfsmount = path->mnt;
+    cached_path->vfsmount = read_field_ptr(path, CRC_PATH_MNT);
 }
 
 #define load_event(map, key, ty)                            \
@@ -435,7 +413,7 @@ static __always_inline int extract_file_info(void *ptr, file_info_t *file_info)
 }
 
 // writes a d_path into a buffer - tail calling if necessary
-static __always_inline int write_path(struct pt_regs *ctx, dentry_pair *dentries, buf_t *buffer,
+static __always_inline int write_path(struct pt_regs *ctx, cached_path_t *cached_path, buf_t *buffer,
                                       tail_call_slot_t tail_call)
 {
     u32 *offset = get_offset(CRC_DENTRY_D_NAME);
@@ -448,18 +426,66 @@ static __always_inline int write_path(struct pt_regs *ctx, dentry_pair *dentries
 
     offset = get_offset(CRC_DENTRY_D_PARENT);
     if (offset == NULL) return -1;
-    u32 parent = *(u32 *)offset; // offset of d_parent
+    u32 dentry_parent = *(u32 *)offset; // offset of d_parent
+
+    offset = get_offset(CRC_MOUNT_MNTPARENT);
+    if (offset == NULL) return -1;
+    u32 mnt_parent_offset = *(u32 *)offset; // offset of mount->mnt_parent
+
+    offset = get_offset(CRC_VFSMOUNT_MNTROOT);
+    if (offset == NULL) return -1;
+    u32 mnt_root_offset = *(u32 *)offset; // offset of vfsmount->mnt_root
+
+    offset = get_offset(CRC_MOUNT_MOUNTPOINT);
+    if (offset == NULL) return -1;
+    u32 mountpoint_offset = *(u32 *)offset; // offset of mount->mountpoint
+
+    offset = get_offset(CRC_MOUNT_MNT);
+    if (offset == NULL) return -1;
+    u32 mnt_offset = *(u32 *)offset; // offset of mount->mnt
+
+    void *mnt = cached_path->vfsmount - mnt_offset;
+    void *mnt_parent = NULL;
+    void *mnt_root = NULL;
+
+    bpf_probe_read(&mnt_parent, sizeof(mnt_parent), mnt + mnt_parent_offset);
+    bpf_probe_read(&mnt_root, sizeof(mnt_root), cached_path->vfsmount + mnt_root_offset);
 
     int ret = 0;
+
 // Anything we add to this for-loop will be repeated
 // MAX_PATH_SEGMENTS_NOTAIL so be very careful of going over the max
 // instruction limit (4096).
 #pragma unroll MAX_PATH_SEGMENTS_NOTAIL
     for (int i = 0; i < MAX_PATH_SEGMENTS_NOTAIL; i++)
     {
-        // this guard will just return what it's collected so far
-        if (bpf_probe_read(&offset, sizeof(offset), dentries->path + name) < 0)
-            goto PathDone;
+        if (cached_path->next_dentry == mnt_root)
+        {
+            if (mnt == mnt_parent) goto AtGlobalRoot;
+
+            // we are done with the path but not with its mount
+            // start appending the path to the mountpoint
+            bpf_probe_read(&cached_path->next_dentry, sizeof(cached_path->next_dentry), mnt + mountpoint_offset);
+
+            // allow for nested mounts
+            mnt = mnt_parent;
+            bpf_probe_read(&mnt_parent, sizeof(mnt_parent), mnt + mnt_parent_offset);
+
+            // set what our new mount root is
+            cached_path->vfsmount = mnt + mnt_offset;
+            bpf_probe_read(&mnt_root, sizeof(mnt_root), cached_path->vfsmount + mnt_root_offset);
+
+            // force a continue early to check if the new path is also at at its root
+            continue;
+        }
+
+        void *dentry = cached_path->next_dentry;
+        bpf_probe_read(&cached_path->next_dentry, sizeof(cached_path->next_dentry), cached_path->next_dentry + dentry_parent);
+
+        if (dentry == cached_path->next_dentry) goto AtGlobalRoot;
+
+        if (bpf_probe_read(&offset, sizeof(offset), dentry + name) < 0)
+            goto NameError;
 
         // NAME_MAX doesn't include null character; so +1 to take it
         // into account. Not all systems enforce NAME_MAX so
@@ -467,40 +493,6 @@ static __always_inline int write_path(struct pt_regs *ctx, dentry_pair *dentries
         // truncation metrics to see if we need to care about this.
         ret = write_string((char *)offset, buffer, NAME_MAX + 1);
         if (ret < 0) goto WriteError;
-
-        // get the parent
-        void *old_dentry = dentries->path;
-        bpf_probe_read(&dentries->path, sizeof(dentries->path), dentries->path + parent);
-
-        // there is a parent that points to a new dentry so continue
-        if (dentries->path != NULL && old_dentry != dentries->path) continue;
-
-    PathDone:;
-        // the mountpoint was already processed or we failed to grab
-        // it; either way we are done
-        if (dentries->mountpoint == NULL) return 0;
-
-        process_message_t *pm = (process_message_t *)buffer;
-        u32 buffer_length = pm->u.syscall_info.data.exec_info.buffer_length;
-        // if the last thing we processed does NOT end in a '/' then
-        // it means that it is not a path from root (e.g., it could be
-        // a memfd's exe) so adding the mountpoint to make it appear
-        // like an absolute path would be incorrect so don't process
-        // the mountpoint.
-        if (buffer->buf[(buffer_length - 2) & (MAX_PERCPU_BUFFER - 1)] != '/') {
-            dentries->mountpoint = NULL;
-            return 0;
-        }
-
-        // HACK: backtrack two characters to undo the last "/" we sent
-        // otherwise we would be sending something like:
-        // /path/to/mount//path/to/file (notice the double slash after
-        // mount). Depending on userspace implementation it could be
-        // reasonably interpreted as /path/to/file which is
-        // *incorrect* so let's make this unambigous.
-        pm->u.syscall_info.data.exec_info.buffer_length -= 2;
-        dentries->path = dentries->mountpoint;
-        dentries->mountpoint = NULL;
     }
 
     bpf_tail_call(ctx, &tail_call_table, tail_call);
@@ -511,6 +503,16 @@ static __always_inline int write_path(struct pt_regs *ctx, dentry_pair *dentries
 
     return -1;
 
+ AtGlobalRoot:;
+    // let's not forget to write the global root (might be a / or the memfd name)
+    if (bpf_probe_read(&offset, sizeof(offset), cached_path->next_dentry + name) < 0)
+            goto NameError;
+
+    ret = write_string((char *)offset, buffer, NAME_MAX + 1);
+    if (ret < 0) goto WriteError;
+
+    return 0;
+
  WriteError:;
     error_info_t empty_info = {0};
     if (ret == -PMW_UNEXPECTED) {
@@ -518,6 +520,13 @@ static __always_inline int write_path(struct pt_regs *ctx, dentry_pair *dentries
     } else {
         set_local_warning(-ret, empty_info);
     }
+
+    return -1;
+
+ NameError:;
+    error_info_t read_error_info = {0};
+    read_error_info.offset_crc = CRC_QSTR_NAME;
+    set_local_warning(PMW_PTR_FIELD_READ, read_error_info);
 
     return -1;
 }
@@ -530,15 +539,15 @@ static __always_inline void exit_exec(struct pt_regs *ctx, process_message_type_
     buf_t *buffer = (buf_t *)bpf_map_lookup_elem(&buffers, &key);
     if (buffer == NULL) return;
 
-    dentry_pair *dentries = (dentry_pair *)bpf_map_lookup_elem(&percpu_dentries, &key);
-    if (dentries == NULL) return;
+    cached_path_t *cached_path = (cached_path_t *)bpf_map_lookup_elem(&percpu_path, &key);
+    if (cached_path == NULL) return;
 
     process_message_t *pm = (process_message_t *)buffer;
     int ret = 0;
 
     // We have been tail-called to find the exename, so go straight to
     // ExeName
-    if (dentries->path != NULL) goto ExeName;
+    if (cached_path->next_dentry != NULL) goto ExeName;
 
     /* SANITY CHECKS THAT THE EVENT IS RELEVANT */
 
@@ -635,19 +644,16 @@ static __always_inline void exit_exec(struct pt_regs *ctx, process_message_type_
     void *path = ptr_to_field(exe, CRC_FILE_F_PATH);
     if (path == NULL) goto EmitWarning;
 
-    init_dentries(dentries, path);
-    if (dentries->path == NULL) goto EmitWarning;
-    if (dentries->mountpoint == NULL) goto EmitWarning;
-    // deliberary not checking if dentries->mountpoint == NULL because
-    // that is OK, we'll just get the path only
+    init_cached_path(cached_path, path);
+    if (cached_path->next_dentry == NULL || cached_path->vfsmount == NULL) goto EmitWarning;
 
  ExeName:;
     /* WRITE EXE PATH; IT MAY TAIL CALL */
-    ret = write_path(ctx, dentries, buffer, tail_call);
+    ret = write_path(ctx, cached_path, buffer, tail_call);
 
     // reset skips back to 0. This will automatically update it in the
     // map so no need to do a bpf_map_update_elem.
-    dentries->path = NULL;
+    cached_path->next_dentry = NULL;
     if (ret < 0) goto EmitWarning;
 
     // add an extra null byte to signify string section end
@@ -666,6 +672,8 @@ static __always_inline void exit_exec(struct pt_regs *ctx, process_message_type_
     set_local_warning(PMW_TAIL_CALL_MAX, info);
 
  EmitWarning:;
+    cached_path->next_dentry = NULL;
+
     push_warning(ctx, pm, pm_type);
 }
 
@@ -678,14 +686,14 @@ int kprobe__sys_exec_pwd(struct pt_regs *ctx)
     buf_t *buffer = (buf_t *)bpf_map_lookup_elem(&buffers, &key);
     if (buffer == NULL) return 0;
 
-    dentry_pair *dentries = (dentry_pair *)bpf_map_lookup_elem(&percpu_dentries, &key);
-    if (dentries == NULL) return 0;
+    cached_path_t *cached_path = (cached_path_t *)bpf_map_lookup_elem(&percpu_path, &key);
+    if (cached_path == NULL) return 0;
 
     int ret = 0;
     process_message_t *pm = (process_message_t *)buffer;
     process_message_type_t pm_type = pm->type;
 
-    if (dentries->path != NULL) goto Pwd;
+    if (cached_path->next_dentry != NULL) goto Pwd;
 
     /* FIND THE TOP DENTRY TO THE PWD */
 
@@ -701,19 +709,16 @@ int kprobe__sys_exec_pwd(struct pt_regs *ctx)
     path = ptr_to_field(path, CRC_FS_STRUCT_PWD);
     if (path == NULL) goto Done;
 
-    init_dentries(dentries, path);
-    if (dentries->path == NULL) goto Done;
-    if (dentries->mountpoint == NULL) goto Done;
-    // deliberary not checking if dentries->mountpoint == NULL because
-    // that is OK, we'll just get the path only
+    init_cached_path(cached_path, path);
+    if (cached_path->next_dentry == NULL || cached_path->vfsmount == NULL) goto Done;
 
  Pwd:;
     /* WRITE PATH; IT MAY TAIL CALL */
-    ret = write_path(ctx, dentries, buffer, SYS_EXEC_PWD);
+    ret = write_path(ctx, cached_path, buffer, SYS_EXEC_PWD);
 
  Done:;
     /* PUSH THE EVENT AND RESET */
-    dentries->path = NULL;
+    cached_path->next_dentry = NULL;
 
     // add an extra null byte to signify string section end
     write_null_char(buffer);
