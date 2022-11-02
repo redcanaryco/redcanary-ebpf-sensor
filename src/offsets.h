@@ -132,3 +132,9 @@ const u64 CRC_MOUNT_MNTPARENT = 0x57a4eea49a711d75;
 
 /* vfsmount->mnt_root */
 const u64 CRC_VFSMOUNT_MNTROOT = 0xe4baf16bf0b472fa;
+
+/* task_struct->audit */
+const u64 CRC_TASK_STRUCT_AUDIT = 0x67da4ab26d333059;
+
+/* audit_task_info->loginuid */
+const u64 CRC_AUDIT_TASK_INFO_LOGINUID = 0xe6dd107ea26da1a0;
