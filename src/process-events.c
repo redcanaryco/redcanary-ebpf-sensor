@@ -370,8 +370,27 @@ static __always_inline int fill_syscall(syscall_info_t *syscall_info, void *ts, 
     u32 ppid = -1;
     if (read_field(real_parent, CRC_TASK_STRUCT_TGID, &ppid, sizeof(ppid)) < 0) return -1;
 
+    // luid could either be in ts->loginuid OR ts->audit->luid. In
+    // most systems it will be in ts->loginuid so let's try that
+    // first.
     u32 luid = -1;
-    if (read_field(ts, CRC_TASK_STRUCT_LOGINUID, &luid, sizeof(luid)) < 0) return -1;
+    u64 offset_key = CRC_TASK_STRUCT_LOGINUID;
+    u32 *offset = (u32 *)bpf_map_lookup_elem(&offsets, &offset_key);
+    if (offset == NULL) {
+        // if any part of ts->audit->loginuid fails emit a warning as
+        // we expect it there when ts->loginuid is not.
+        void *audit = read_field_ptr(ts, CRC_TASK_STRUCT_AUDIT);
+        if (audit == NULL) return -1;
+        if (read_field(audit, CRC_AUDIT_TASK_INFO_LOGINUID, &luid, sizeof(luid)) < 0) return -1;
+    } else {
+        if (bpf_probe_read(&luid, sizeof(luid), ts + *offset) < 0) {
+            error_info_t info = {0};
+            info.offset_crc = offset_key;
+            set_local_warning(PMW_PTR_FIELD_READ, info);
+
+            return -1;
+        }
+    }
 
     u64 uid_gid = bpf_get_current_uid_gid();
 
