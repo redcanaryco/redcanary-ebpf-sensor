@@ -1,7 +1,17 @@
-#ifndef _COMMON_H
-#define _COMMON_H
+#pragma once
+
 #include "bpf_helpers.h"
 #include "bpf_tracing.h"
+#include "offsets.h"
+
+struct bpf_map_def SEC("maps/tail_call_table") tail_call_table = {
+    .type = BPF_MAP_TYPE_PROG_ARRAY,
+    .key_size = sizeof(u32),
+    .value_size = sizeof(u32),
+    .max_entries = 32,
+    .pinning = 0,
+    .namespace = "",
+};
 
 struct bpf_map_def SEC("maps/offsets") offsets = {
     .type = BPF_MAP_TYPE_HASH,
@@ -59,4 +69,16 @@ static __always_inline int read_value(void *base, u64 offset, void *dest, size_t
     return -1;
 }
 
-#endif //_COMMON_H
+#define load_event(map, key, ty)                            \
+    void *__eventp = bpf_map_lookup_elem(&map, &key);       \
+    if (__eventp == NULL) goto NoEvent;                     \
+    ty event = {0};                                         \
+    __builtin_memcpy(&event, (void *)__eventp, sizeof(ty)); \
+    if (event.pid_tgid != key) goto EventMismatch;
+
+// returns NULL if offsets have not yet been loaded
+static __always_inline void *offset_loaded()
+{
+    u64 offset = CRC_LOADED;
+    return bpf_map_lookup_elem(&offsets, &offset);
+}
