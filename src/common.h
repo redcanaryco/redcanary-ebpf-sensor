@@ -4,6 +4,15 @@
 #include "bpf_tracing.h"
 #include "offsets.h"
 
+struct bpf_map_def SEC("maps/tail_call_table") tail_call_table = {
+    .type = BPF_MAP_TYPE_PROG_ARRAY,
+    .key_size = sizeof(u32),
+    .value_size = sizeof(u32),
+    .max_entries = 32,
+    .pinning = 0,
+    .namespace = "",
+};
+
 struct bpf_map_def SEC("maps/offsets") offsets = {
     .type = BPF_MAP_TYPE_HASH,
     .key_size = sizeof(u64),
