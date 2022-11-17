@@ -112,6 +112,7 @@ typedef enum
     PM_EXECVE,
     PM_EXECVEAT,
     PM_WARNING,
+    PM_SCRIPT,
 } process_message_type_t;
 
 #define COMMON_FIELDS                           \
@@ -225,7 +226,6 @@ typedef struct
     u32 devmajor;
     u32 devminor;
     u64 inode;
-    char comm[TASK_COMM_LEN];
 } file_info_t, *pfile_info_t;
 
 typedef struct
@@ -246,6 +246,7 @@ typedef struct
     u16 argv_length;
     u32 buffer_length;
     file_info_t file_info;
+    char comm[TASK_COMM_LEN];
 } exec_info_t;
 
 typedef union
@@ -351,6 +352,10 @@ typedef union
 {
     syscall_info_t syscall_info;
     warning_info_t warning_info;
+    struct {
+        file_info_t scripts[4];
+        u32 buffer_length;
+    } script_info;
 } process_message_data_t;
 
 typedef struct

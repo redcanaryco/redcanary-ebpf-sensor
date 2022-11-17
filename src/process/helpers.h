@@ -117,3 +117,26 @@ static __always_inline int fill_syscall(syscall_info_t *syscall_info, void *ts, 
 
     return 0;
 }
+
+// it's argument should be a pointer to a file
+static __always_inline int extract_file_info(void *ptr, file_info_t *file_info)
+{
+    void *f_inode = read_field_ptr(ptr, CRC_FILE_F_INODE);
+    if (f_inode == NULL) return -1;
+
+    void *i_sb = read_field_ptr(f_inode, CRC_INODE_I_SB);
+    if (i_sb == NULL) return -1;
+
+    // inode
+    if (read_field(f_inode, CRC_INODE_I_INO, &file_info->inode, sizeof(file_info->inode)) < 0)
+        return -1;
+
+    // device major/minor
+    u32 i_dev = 0;
+    if (read_field(i_sb, CRC_SBLOCK_S_DEV, &i_dev, sizeof(i_dev)) < 0) return -1;
+
+    file_info->devmajor = MAJOR(i_dev);
+    file_info->devminor = MINOR(i_dev);
+
+    return 0;
+}

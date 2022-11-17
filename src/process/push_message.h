@@ -1,3 +1,5 @@
+#include "buffer.h"
+
 #pragma once
 
 // The map where process event messages get emitted to

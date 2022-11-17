@@ -33,11 +33,8 @@ static __always_inline void init_cached_path(cached_path_t *cached_path, void *p
 }
 
 // writes '\0' into the buffer; checks and updates the offset
-static __always_inline void write_null_char(buf_t *buffer)
+static __always_inline void write_null_char(buf_t *buffer, u32 *offset)
 {
-    process_message_t *pm = (process_message_t *)buffer;
-    u32 *offset = &pm->u.syscall_info.data.exec_info.buffer_length;
-
     // We are already full and we do not want the bitwise AND to
     // modulus back onto 0 and overwrite the first bit so just
     // bail. Best case this is the last NULL to write so we are done
@@ -55,7 +52,7 @@ static __always_inline void write_null_char(buf_t *buffer)
 // succesful write it modifies the offset with the length of the read
 // string. It deliberately does not handle truncations; it just reads
 // up to `max_string`.
-static __always_inline int write_string(const char *string, buf_t *buffer, const u32 max_string)
+static __always_inline int write_string(const char *string, buf_t *buffer, u32 *offset, const u32 max_string)
 {
     // A smarter implementation of this wouldn't use max_string but
     // instead would just check MAX_PERCPU_BUFFER - *offset as the max
@@ -65,9 +62,6 @@ static __always_inline int write_string(const char *string, buf_t *buffer, const
     // to improve this with just the right incantations (and maybe
     // turning off some compiler optimizaitons that remove some
     // checks) at this time this is considered good enough (TM).
-
-    process_message_t *pm = (process_message_t *)buffer;
-    u32 *offset = &pm->u.syscall_info.data.exec_info.buffer_length;
 
     // already too full
     if (*offset > MAX_PERCPU_BUFFER - max_string)
@@ -164,7 +158,8 @@ static __always_inline int write_path(struct pt_regs *ctx, cached_path_t *cached
         // into account. Not all systems enforce NAME_MAX so
         // truncation may happen per path segment. TODO: emit
         // truncation metrics to see if we need to care about this.
-        ret = write_string((char *)offset, buffer, NAME_MAX + 1);
+        process_message_t *pm = (process_message_t *)buffer;
+        ret = write_string((char *)offset, buffer, &pm->u.syscall_info.data.exec_info.buffer_length, NAME_MAX + 1);
         if (ret < 0) goto WriteError;
     }
 
@@ -181,7 +176,8 @@ static __always_inline int write_path(struct pt_regs *ctx, cached_path_t *cached
     if (bpf_probe_read(&offset, sizeof(offset), cached_path->next_dentry + name) < 0)
             goto NameError;
 
-    ret = write_string((char *)offset, buffer, NAME_MAX + 1);
+    process_message_t *pm = (process_message_t *)buffer;
+    ret = write_string((char *)offset, buffer, &pm->u.syscall_info.data.exec_info.buffer_length, NAME_MAX + 1);
     if (ret < 0) goto WriteError;
 
     return 0;
