@@ -183,11 +183,10 @@ static __always_inline int write_path(struct pt_regs *ctx, cached_path_t *cached
     return 0;
 
  WriteError:;
-    error_info_t empty_info = {0};
     if (ret == -PMW_UNEXPECTED) {
-        set_local_warning(PMW_READ_PATH_STRING, empty_info);
+        set_empty_local_warning(PMW_READ_PATH_STRING);
     } else {
-        set_local_warning(-ret, empty_info);
+        set_empty_local_warning(-ret);
     }
 
     return -1;

@@ -7,6 +7,8 @@
 // the kernel deliberately fails if it has to rewrite it more than 4 times
 #define MAX_INTERPRETERS 4
 
+#define PATH_MAX 4096
+
 typedef struct
 {
   struct {
@@ -20,7 +22,7 @@ typedef struct
   file_info_t interpreters[MAX_INTERPRETERS];
 } script_t;
 
-// A map containing script information for currently running exe*c
+// A map containing script information for currently running exec*
 struct bpf_map_def SEC("maps/scripts") scripts = {
   .type = BPF_MAP_TYPE_LRU_HASH,
   .key_size = sizeof(u32),
@@ -34,7 +36,7 @@ typedef struct {
   char path[BINPRM_BUF_SIZE];
 } interpreter_path_t;
 
-// A map of file identities to interpreter paths. We do not currently
+// A map of file identities -> interpreter paths. We do not currently
 // invalidate keys when paths are deleted/renamed so this is meant to
 // be inserted and retrieved by different probes corresponding to the
 // *same* syscall. In theory this could create a data race if an exec
@@ -48,6 +50,24 @@ struct bpf_map_def SEC("maps/interpreters") interpreters = {
   .key_size = sizeof(file_info_t),
   .value_size = sizeof(interpreter_path_t),
   .max_entries = 1024,
+  .pinning = 0,
+  .namespace = "",
+};
+
+typedef struct {
+  u32 pid;
+  file_info_t interpreter;
+} relative_file_info_t;
+
+// A map of file identities + pid -> interpreter paths that are
+// relative to the cwd of the related process. This map is used for
+// the rare cases where a script uses a relative path in its
+// interpreter line (e.g., `#!./my_special_interpreter`).
+struct bpf_map_def SEC("maps/rel_interpreters") rel_interpreters = {
+  .type = BPF_MAP_TYPE_LRU_HASH,
+  .key_size = sizeof(relative_file_info_t),
+  .value_size = sizeof(interpreter_path_t),
+  .max_entries = 128, // TODO: should we expand oxidebpf to allow scaling based on # cpus?
   .pinning = 0,
   .namespace = "",
 };
@@ -68,19 +88,25 @@ static __always_inline void enter_script(struct pt_regs *ctx, void *bprm) {
   u64 pid_tgid = bpf_get_current_pid_tgid();
   u32 pid = pid_tgid >> 32;
   script_t *script = bpf_map_lookup_elem(&scripts, &pid);
+  int ret = 0;
 
   // first time saving a script for this exec*
   if (script == NULL) {
     if (filename != interp) {
-      bpf_printk("unexpected state: filename != interp on first load_script");
-      return;
+      set_empty_local_warning(PMW_INTERP_MISMATCH);
+      goto EmitWarning;
     }
+
     script_t script = {};
     script.file.path = filename;
     if (extract_file_info(file, &script.file.identity) < 0) goto EmitWarning;
 
-    if (bpf_map_update_elem(&scripts, &pid, &script, BPF_ANY) < 0) {
-      bpf_printk("failed to insert scripts");
+    ret = bpf_map_update_elem(&scripts, &pid, &script, BPF_ANY);
+    if (ret < 0) {
+      error_info_t info = {0};
+      info.err = ret;
+      set_local_warning(PMW_UPDATE_MAP_ERROR, info);
+      goto EmitWarning;
     }
 
     return;
@@ -99,8 +125,8 @@ static __always_inline void enter_script(struct pt_regs *ctx, void *bprm) {
   }
 
   if (new_interpreter == NULL) {
-    bpf_printk("unexpected state; no free slot for interpreter");
-    return;
+    set_empty_local_warning(PMW_INTERP_SLOT);
+    goto EmitWarning;
   }
 
   if (extract_file_info(file, new_interpreter) < 0) goto EmitWarning;
@@ -111,22 +137,42 @@ static __always_inline void enter_script(struct pt_regs *ctx, void *bprm) {
 
   interpreter_path_t *path = (interpreter_path_t *)buffer;
 
-  int sz = bpf_probe_read_str(&path->path, BINPRM_BUF_SIZE, interp);
-  if (sz < 0) {
-    bpf_printk("failed to read interp");
+  // skip check if sz == BINPRM_BUF_SIZE. If a future kernel increases
+  // the value of BINPRM_BUF_SIZE then we may run into truncation but
+  // I don't think we need to worry right now.
+  ret = bpf_probe_read_str(&path->path, BINPRM_BUF_SIZE, interp);
+  if (ret < 0) {
+    set_empty_local_warning(PMW_READ_PATH_STRING);
     return;
-  } else if (sz == BINPRM_BUF_SIZE) {
-    bpf_printk("hit interp size limit");
   }
-  if (bpf_map_update_elem(&interpreters, new_interpreter, path, BPF_ANY) < 0) {
-    bpf_printk("failed to insert interp path");
+
+  if (path->path[0] == '/') {
+    ret = bpf_map_update_elem(&interpreters, new_interpreter, path, BPF_ANY);
+    if (ret < 0) {
+      error_info_t info = {0};
+      info.err = ret;
+      set_local_warning(PMW_UPDATE_MAP_ERROR, info);
+      goto EmitWarning;
+    }
+  } else {
+    relative_file_info_t rel_interpreter = {0};
+    rel_interpreter.pid = pid;
+    rel_interpreter.interpreter = *new_interpreter;
+
+    ret = bpf_map_update_elem(&rel_interpreters, &rel_interpreter, path, BPF_ANY);
+    if (ret < 0) {
+      error_info_t info = {0};
+      info.err = ret;
+      set_local_warning(PMW_UPDATE_MAP_ERROR, info);
+      goto EmitWarning;
+    }
   }
 
   return;
 
  EmitWarning:;
   process_message_t pm = {0};
-  push_warning(ctx, &pm, PM_EXECVE);
+  push_warning(ctx, &pm, PM_SCRIPT);
 
   return;
 }
@@ -147,36 +193,58 @@ static __always_inline void push_scripts(struct pt_regs *ctx, buf_t *buffer) {
   pm->u.script_info.scripts[0] = script->file.identity;
   pm->u.script_info.buffer_length = sizeof(process_message_t);
 
-  int sz = write_string(script->file.path, buffer, &pm->u.script_info.buffer_length, 4096);
-  if (sz < 0) {
-    bpf_printk("failed to write path to buffer");
-    goto Done;
-  } else if (sz == 4096) {
-    bpf_printk("unexpected path max");
-  }
+  // the original script file path came from the user; the kernel
+  // verifies that the user provided path cannot go beyond
+  // PATH_MAX. The total path can still be beyond PATH_MAX once you
+  // combine it with the CWD but userspace can take care of that
+  int ret = write_string(script->file.path, buffer, &pm->u.script_info.buffer_length, PATH_MAX);
+  if (ret < 0) goto WriteError;
 
 #pragma unroll MAX_INTERPRETERS
   for (int i = 1; i < MAX_INTERPRETERS; i++) {
+    // there is no interpreter which means the last interpreter was
+    // the actual executable
     if (script->interpreters[i].inode == 0) break;
 
+    // The last interpreter was a script
     file_info_t *intp_key = &script->interpreters[i - 1];
     pm->u.script_info.scripts[i] = *intp_key;
 
-    interpreter_path_t *intp_path = bpf_map_lookup_elem(&interpreters, intp_key);
+    relative_file_info_t rel_interpreter = {0};
+    rel_interpreter.pid = pid;
+    rel_interpreter.interpreter = *intp_key;
+
+    interpreter_path_t *intp_path = bpf_map_lookup_elem(&rel_interpreters, &rel_interpreter);
     if (intp_path == NULL) {
-      bpf_printk("failed to find interpreter path");
+      intp_path = bpf_map_lookup_elem(&interpreters, intp_key);
+    }
+
+    if (intp_path == NULL) {
+      // we couldn't find the saved path given the file identity. This
+      // most likely means we got a *lot* of interpreter scripts in
+      // quick succession and made this one be evicted from our LRU
+      // cache. This is not an error so just write a null character to
+      // tell userspace that we don't have a path for this interpreter
+      // and then move on. Do not exit early because we still got
       write_null_char(buffer, &pm->u.script_info.buffer_length);
       continue;
     }
 
-    int sz = write_string(intp_path->path, buffer, &pm->u.script_info.buffer_length, BINPRM_BUF_SIZE);
-    if (sz < 0) {
-      bpf_printk("failed to write path to buffer");
-    }
-    /* overflow impossible for sized array not checking */
+    ret = write_string(intp_path->path, buffer, &pm->u.script_info.buffer_length, BINPRM_BUF_SIZE);
+    if (ret < 0) goto WriteError;
   }
 
   push_flexible_message(ctx, pm, pm->u.script_info.buffer_length);
+  goto Done;
+
+ WriteError:;
+  if (ret == -PMW_UNEXPECTED) {
+    set_empty_local_warning(PMW_READ_PATH_STRING);
+  } else {
+    set_empty_local_warning(-ret);
+  }
+
+  push_warning(ctx, pm, PM_SCRIPT);
 
  Done:;
   bpf_map_delete_elem(&scripts, &pid);

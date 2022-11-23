@@ -97,6 +97,8 @@ typedef enum
     PMW_ARGV_INCONSISTENT,
     PMW_PTR_FIELD_READ,
     PMW_NULL_FIELD,
+    PMW_INTERP_MISMATCH,
+    PMW_INTERP_SLOT,
 } process_message_warning_t;
 
 typedef enum

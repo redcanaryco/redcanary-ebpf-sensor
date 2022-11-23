@@ -40,6 +40,14 @@ static __always_inline int push_warning(struct pt_regs *ctx, pprocess_message_t 
     return push_message(ctx, pm);
 }
 
+static __always_inline int set_empty_local_warning(process_message_warning_t code)
+{
+    local_warning_t warning = {0};
+    warning.code = code;
+    u32 key = 0;
+    return bpf_map_update_elem(&percpu_warning, &key, &warning, BPF_ANY);
+}
+
 static __always_inline int set_local_warning(process_message_warning_t code, error_info_t info)
 {
     local_warning_t warning = {0};

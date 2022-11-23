@@ -202,7 +202,6 @@ SEC("kprobe/load_script")
 int kprobe__load_script(struct pt_regs *ctx)
 {
     void *bprm = (void *)PT_REGS_PARM1(ctx);
-
     enter_script(ctx, bprm);
 
     return 0;
