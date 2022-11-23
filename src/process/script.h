@@ -177,13 +177,14 @@ static __always_inline void enter_script(struct pt_regs *ctx, void *bprm) {
   return;
 }
 
-static __always_inline void push_scripts(struct pt_regs *ctx, buf_t *buffer) {
+static __always_inline u64 push_scripts(struct pt_regs *ctx, buf_t *buffer) {
   process_message_t *pm = (process_message_t *)buffer;
   u64 pid_tgid = bpf_get_current_pid_tgid();
   u32 pid = pid_tgid >> 32;
+  u64 event_id = 0;
 
   script_t *script = bpf_map_lookup_elem(&scripts, &pid);
-  if (script == NULL) return;
+  if (script == NULL) return event_id;
 
   if (script->interpreters[0].inode == 0) goto Done;
   // clear out the buffer
@@ -197,8 +198,8 @@ static __always_inline void push_scripts(struct pt_regs *ctx, buf_t *buffer) {
   // verifies that the user provided path cannot go beyond
   // PATH_MAX. The total path can still be beyond PATH_MAX once you
   // combine it with the CWD but userspace can take care of that
-  int ret = write_string(script->file.path, buffer, &pm->u.script_info.buffer_length, PATH_MAX);
-  if (ret < 0) goto WriteError;
+  int sz = write_string(script->file.path, buffer, &pm->u.script_info.buffer_length, PATH_MAX);
+  if (sz < 0) goto WriteError;
 
 #pragma unroll MAX_INTERPRETERS
   for (int i = 1; i < MAX_INTERPRETERS; i++) {
@@ -230,18 +231,21 @@ static __always_inline void push_scripts(struct pt_regs *ctx, buf_t *buffer) {
       continue;
     }
 
-    ret = write_string(intp_path->path, buffer, &pm->u.script_info.buffer_length, BINPRM_BUF_SIZE);
-    if (ret < 0) goto WriteError;
+    sz = write_string(intp_path->path, buffer, &pm->u.script_info.buffer_length, BINPRM_BUF_SIZE);
+    if (sz < 0) goto WriteError;
   }
+
+  event_id = ((u64) pid) << 32 | bpf_get_prandom_u32();
+  pm->u.script_info.event_id = event_id;
 
   push_flexible_message(ctx, pm, pm->u.script_info.buffer_length);
   goto Done;
 
  WriteError:;
-  if (ret == -PMW_UNEXPECTED) {
+  if (sz == -PMW_UNEXPECTED) {
     set_empty_local_warning(PMW_READ_PATH_STRING);
   } else {
-    set_empty_local_warning(-ret);
+    set_empty_local_warning(-sz);
   }
 
   push_warning(ctx, pm, PM_SCRIPT);
@@ -249,5 +253,5 @@ static __always_inline void push_scripts(struct pt_regs *ctx, buf_t *buffer) {
  Done:;
   bpf_map_delete_elem(&scripts, &pid);
 
-  return;
+  return event_id;
 }

@@ -31,14 +31,14 @@ static __always_inline void exit_exec(struct pt_regs *ctx, process_message_type_
     int retcode = (int)PT_REGS_RC(ctx);
     if (retcode < 0) return;
 
-    push_scripts(ctx, buffer);
+    pm->u.syscall_info.data.exec_info.event_id = push_scripts(ctx, buffer);
 
     void *ts = (void *)bpf_get_current_task();
     u64 pid_tgid = bpf_get_current_pid_tgid();
 
     // do not emit if we couldn't fill the syscall info
     ret = fill_syscall(&pm->u.syscall_info, ts, pid_tgid >> 32);
-    if (ret > 0) return;
+    if (ret > 0) return; // TODO: send discard event if pm->u.syscall_info.data.exec_info.event_id != 0?
     if (ret < 0) goto EmitWarning;
 
     void *mmptr = read_field_ptr(ts, CRC_TASK_STRUCT_MM);
@@ -153,6 +153,7 @@ static __always_inline void exit_exec(struct pt_regs *ctx, process_message_type_
     set_local_warning(PMW_TAIL_CALL_MAX, info);
 
  EmitWarning:;
+    // TODO: send discard event if pm->u.syscall_info.data.exec_info.event_id != 0?
     cached_path->next_dentry = NULL;
 
     push_warning(ctx, pm, pm_type);

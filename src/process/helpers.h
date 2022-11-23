@@ -76,7 +76,8 @@ static __always_inline int fill_syscall(syscall_info_t *syscall_info, void *ts, 
     if (!offset_loaded())
         return 1;
     int ret = is_user_process(ts);
-    if (ret < 1) return ret;
+    if (ret < 0) return ret; // error checking if user process
+    if (ret == 0) return 1;  // not a user process
 
     void *real_parent = read_field_ptr(ts, CRC_TASK_STRUCT_REAL_PARENT);
     if (real_parent == NULL) return -1;

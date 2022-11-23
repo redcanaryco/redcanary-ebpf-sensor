@@ -121,9 +121,6 @@ const u64 CRC_LINUX_BINPRM_FILENAME = 0xb583ce53935255c5;
 /* linux_binprm->interp */
 const u64 CRC_LINUX_BINPRM_INTERP = 0x9f4cedeb0b40dc2c;
 
-/* linux_binprm->interp */
-const u64 CRC_BPRM_INTERP = 0x9f4cedeb0b40dc2c;
-
 /* mount->mnt */
 const u64 CRC_MOUNT_MNT = 0x332c1523b7204177;
 
