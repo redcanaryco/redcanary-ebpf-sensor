@@ -74,7 +74,7 @@ static __always_inline int read_value(void *base, u64 offset, void *dest, size_t
     if (__eventp == NULL) goto NoEvent;                     \
     ty event = {0};                                         \
     __builtin_memcpy(&event, (void *)__eventp, sizeof(ty)); \
-    if (event.pid_tgid != key) goto EventMismatch;
+    if (event.key != key) goto EventMismatch;
 
 // returns NULL if offsets have not yet been loaded
 static __always_inline void *offset_loaded()

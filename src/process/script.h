@@ -11,6 +11,8 @@
 
 typedef struct
 {
+  u32 pid;
+
   struct {
     // relative path to the script. This string has already been
     // copied into kernel space and it is not freed during
@@ -73,6 +75,10 @@ struct bpf_map_def SEC("maps/rel_interpreters") rel_interpreters = {
 };
 
 static __always_inline void enter_script(struct pt_regs *ctx, void *bprm) {
+  u32 key = 0;
+  buf_t *buffer = (buf_t *)bpf_map_lookup_elem(&buffers, &key);
+  if (buffer == NULL) return;
+
   // filename = bprm->filename
   char *filename = read_field_ptr(bprm, CRC_LINUX_BINPRM_FILENAME);
   if (filename == NULL) goto EmitWarning;
@@ -87,30 +93,8 @@ static __always_inline void enter_script(struct pt_regs *ctx, void *bprm) {
 
   u64 pid_tgid = bpf_get_current_pid_tgid();
   u32 pid = pid_tgid >> 32;
-  script_t *script = bpf_map_lookup_elem(&scripts, &pid);
   int ret = 0;
-
-  // first time saving a script for this exec*
-  if (script == NULL) {
-    if (filename != interp) {
-      set_empty_local_warning(PMW_INTERP_MISMATCH);
-      goto EmitWarning;
-    }
-
-    script_t script = {};
-    script.file.path = filename;
-    if (extract_file_info(file, &script.file.identity) < 0) goto EmitWarning;
-
-    ret = bpf_map_update_elem(&scripts, &pid, &script, BPF_ANY);
-    if (ret < 0) {
-      error_info_t info = {0};
-      info.err = ret;
-      set_local_warning(PMW_UPDATE_MAP_ERROR, info);
-      goto EmitWarning;
-    }
-
-    return;
-  }
+  load_event(scripts, pid, script_t);
 
   // nothing else to do
   if (filename == interp) return;
@@ -118,9 +102,9 @@ static __always_inline void enter_script(struct pt_regs *ctx, void *bprm) {
   file_info_t *new_interpreter = NULL;
 #pragma unroll MAX_INTERPRETERS
   for (int i = 0; i < MAX_INTERPRETERS; i++) {
-    if (script->interpreters[i].inode != 0) continue;
+    if (event.interpreters[i].inode != 0) continue;
 
-    new_interpreter = &script->interpreters[i];
+    new_interpreter = &event.interpreters[i];
     break;
   }
 
@@ -130,10 +114,6 @@ static __always_inline void enter_script(struct pt_regs *ctx, void *bprm) {
   }
 
   if (extract_file_info(file, new_interpreter) < 0) goto EmitWarning;
-
-  u32 key = 0;
-  buf_t *buffer = (buf_t *)bpf_map_lookup_elem(&buffers, &key);
-  if (buffer == NULL) return;
 
   interpreter_path_t *path = (interpreter_path_t *)buffer;
 
@@ -168,11 +148,41 @@ static __always_inline void enter_script(struct pt_regs *ctx, void *bprm) {
     }
   }
 
+  goto SaveEvent;
+
+ NoEvent:;
+  // first time saving a script for this exec*
+  if (filename != interp) {
+    set_empty_local_warning(PMW_INTERP_MISMATCH);
+    goto EmitWarning;
+  }
+
+  event = (script_t){0};
+  event.pid = pid;
+  event.file.path = filename;
+  if (extract_file_info(file, &event.file.identity) < 0) goto EmitWarning;
+
+  goto SaveEvent;
+
+ SaveEvent:;
+  ret = bpf_map_update_elem(&scripts, &event.pid, &event, BPF_ANY);
+  if (ret < 0) {
+    error_info_t info = {0};
+    info.err = ret;
+    set_local_warning(PMW_UPDATE_MAP_ERROR, info);
+    goto EmitWarning;
+  }
+
   return;
 
+ EventMismatch:;
+  error_info_t info = {0};
+  info.stored_pid_tgid = (((u64) event.pid) << 32) & (event.pid);
+  set_local_warning(PMW_PID_TGID_MISMATCH, info);
+
  EmitWarning:;
-  process_message_t pm = {0};
-  push_warning(ctx, &pm, PM_SCRIPT);
+  process_message_t *pm = (process_message_t *)buffer;
+  push_warning(ctx, pm, PM_SCRIPT);
 
   return;
 }
@@ -183,32 +193,31 @@ static __always_inline u64 push_scripts(struct pt_regs *ctx, buf_t *buffer) {
   u32 pid = pid_tgid >> 32;
   u64 event_id = 0;
 
-  script_t *script = bpf_map_lookup_elem(&scripts, &pid);
-  if (script == NULL) return event_id;
+  load_event(scripts, pid, script_t);
 
-  if (script->interpreters[0].inode == 0) goto Done;
+  if (event.interpreters[0].inode == 0) goto Done;
   // clear out the buffer
   __builtin_memset(&pm->u.script_info.scripts, 0, sizeof(pm->u.script_info.scripts));
 
   pm->type = PM_SCRIPT;
-  pm->u.script_info.scripts[0] = script->file.identity;
+  pm->u.script_info.scripts[0] = event.file.identity;
   pm->u.script_info.buffer_length = sizeof(process_message_t);
 
   // the original script file path came from the user; the kernel
   // verifies that the user provided path cannot go beyond
   // PATH_MAX. The total path can still be beyond PATH_MAX once you
   // combine it with the CWD but userspace can take care of that
-  int sz = write_string(script->file.path, buffer, &pm->u.script_info.buffer_length, PATH_MAX);
+  int sz = write_string(event.file.path, buffer, &pm->u.script_info.buffer_length, PATH_MAX);
   if (sz < 0) goto WriteError;
 
 #pragma unroll MAX_INTERPRETERS
   for (int i = 1; i < MAX_INTERPRETERS; i++) {
     // there is no interpreter which means the last interpreter was
     // the actual executable
-    if (script->interpreters[i].inode == 0) break;
+    if (event.interpreters[i].inode == 0) break;
 
     // The last interpreter was a script
-    file_info_t *intp_key = &script->interpreters[i - 1];
+    file_info_t *intp_key = &event.interpreters[i - 1];
     pm->u.script_info.scripts[i] = *intp_key;
 
     relative_file_info_t rel_interpreter = {0};
@@ -226,7 +235,9 @@ static __always_inline u64 push_scripts(struct pt_regs *ctx, buf_t *buffer) {
       // quick succession and made this one be evicted from our LRU
       // cache. This is not an error so just write a null character to
       // tell userspace that we don't have a path for this interpreter
-      // and then move on. Do not exit early because we still got
+      // and then move on. Do not exit early because at least we still
+      // got useful information (e.g., the script path and potentially
+      // other interpreters).
       write_null_char(buffer, &pm->u.script_info.buffer_length);
       continue;
     }
@@ -248,10 +259,19 @@ static __always_inline u64 push_scripts(struct pt_regs *ctx, buf_t *buffer) {
     set_empty_local_warning(-sz);
   }
 
+  goto EmitWarning;
+
+ EventMismatch:;
+  error_info_t info = {0};
+  info.stored_pid_tgid = (((u64) event.pid) << 32) & (event.pid);
+  set_local_warning(PMW_PID_TGID_MISMATCH, info);
+
+ EmitWarning:;
   push_warning(ctx, pm, PM_SCRIPT);
 
  Done:;
   bpf_map_delete_elem(&scripts, &pid);
 
+ NoEvent:;
   return event_id;
 }
