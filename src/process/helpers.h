@@ -119,7 +119,7 @@ static __always_inline int fill_syscall(syscall_info_t *syscall_info, void *ts, 
     return 0;
 }
 
-// it's argument should be a pointer to a file
+// its argument should be a pointer to a file
 static __always_inline int extract_file_info(void *ptr, file_info_t *file_info)
 {
     void *f_inode = read_field_ptr(ptr, CRC_FILE_F_INODE);
