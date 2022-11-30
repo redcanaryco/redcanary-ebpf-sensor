@@ -3,7 +3,7 @@
 // TODO: make programs for newer kernels where we can use higher values
 
 // maximum segments we can read from a d_path before doing a tail call
-#define MAX_PATH_SEGMENTS_NOTAIL 32
+#define MAX_PATH_SEGMENTS_NOTAIL 25
 
 typedef struct
 {

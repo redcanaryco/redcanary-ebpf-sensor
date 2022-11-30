@@ -114,6 +114,9 @@ static __always_inline void enter_script(struct pt_regs *ctx, void *bprm) {
   }
 
   if (extract_file_info(file, new_interpreter) < 0) goto EmitWarning;
+  relative_file_info_t rel_interpreter = {0};
+  rel_interpreter.pid = pid;
+  rel_interpreter.interpreter = *new_interpreter;
 
   interpreter_path_t *path = (interpreter_path_t *)buffer;
 
@@ -134,11 +137,13 @@ static __always_inline void enter_script(struct pt_regs *ctx, void *bprm) {
       set_local_warning(PMW_UPDATE_MAP_ERROR, info);
       goto EmitWarning;
     }
-  } else {
-    relative_file_info_t rel_interpreter = {0};
-    rel_interpreter.pid = pid;
-    rel_interpreter.interpreter = *new_interpreter;
 
+    // evict older relative path interpreters with this inode +
+    // pid. When doing lookup relative interpreters take priority so
+    // we need to evict them to prevent errors during double execs
+    // that both run scripts.
+    bpf_map_delete_elem(&rel_interpreters, &rel_interpreter);
+  } else {
     ret = bpf_map_update_elem(&rel_interpreters, &rel_interpreter, path, BPF_ANY);
     if (ret < 0) {
       error_info_t info = {0};
