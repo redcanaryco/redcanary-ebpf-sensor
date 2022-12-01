@@ -13,6 +13,11 @@ To build this project run
 A vscode cpp properties files has been included. Make sure to update the include path with the path
 on your local system where the kernel header files are located
 
+For convenience-sake, when running in a system with apt (e.g., Ubuntu)
+you can run `sudo make dev` to build all of the eBPF programs into the
+local `build/` directory. This command uses the kernel version of the
+currently running system.
+
 ## Gotchas and Patterns
 
 ### Dummy Telemetry Event
@@ -20,10 +25,10 @@ on your local system where the kernel header files are located
 At the beginning of the programs we often have code that looks like:
 
 ```c
-telemetry_event_t sev = {0};
+process_message_t pm = {0};
 ```
 
-We then proceed to send `&sev` to our functions and set the proper values there. This is done for two reasons:
+We then proceed to send `&pm` to our functions and set the proper values there. This is done for two reasons:
 
 1. We want to save stack space, so by creating a single dummy event at
    the top we can remind ourselves that this is the only event we ever
@@ -49,18 +54,30 @@ programs will not always work in multicore systems. Note, however,
 that tail calling is *NOT* preemptable, so it is okay to pass
 information using per cpu structures through tail calls.
 
-### Kprobe and Kretprobe synchronization
+### Multi-message events
 
-Since syscalls may start and finish in different CPUs (they are
-preemptable), we need to be send extra data to synchronize them in
-user space. To do this, we send a a `TE_ENTER_DONE` event as the very
-last event produced by a kprobe. Note that since programs may tail
-call into other programs we need to follow that tail call through and
-send it as the very last event in the final tail call. We also rely on
-the `TE_RETCODE` event being the last event in a `kretprobe` so no
-extra signaling event is done for them. If this changes in the future
-(e.g., due to tail calling) we'll need to add synchronization events
-there too.
+Whenever possible a single event (i.e., syscall) should emit only a
+single message during its `kretprobe`. You cannot have synchronizaiton
+issues if there is only one message. When this is not possible we need
+to be careful because syscalls may start and finish in different CPUs
+(they are preemptable). All messages in the same program will be in
+the same per-CPU buffer but messages for the same syscall but in
+different non-tailcalled programs (e.g., `kprobe` vs `kretprobe`) will
+not necessarily be put in the same per-CPU buffer which means
+user-space may read them at different times. To avoid synchronization
+issues all messages for a single event (i.e., syscall) should be sent
+in the same `kretprobe` or tail calls from it and should share a
+(unique enough) event id. Because they are all from the same probe we
+can guarantee the order and thus not having to re-order events in
+user-space. The event id is used as the identifier for user space to
+know what messages to combine into the same event.
+
+### Kretprobe not firing
+
+Kretprobes are not guaranteed to fire so we cannot rely on it as a
+cleanup strategy. Because of this our maps that send messages from
+`kprobe` to `kretprobe`s are LRU maps such that any message that we
+didn't clean up in a `kretprobe` will eventually be evicted.
 
 ## Validate Instruction Count
 

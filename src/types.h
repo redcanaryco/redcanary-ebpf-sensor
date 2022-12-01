@@ -34,12 +34,6 @@ struct ethhdr
     __be16 h_proto;                   /* packet type ID field	*/
 } __attribute__((packed));
 
-/*
- * This number was determined experimentally, setting it higher will exceed
- * the BPF 512 byte stack limit.
- */
-#define VALUE_SIZE 144UL
-
 typedef enum
 {
     PAM_SERVICE = 1,       /* The service name */
@@ -97,6 +91,8 @@ typedef enum
     PMW_ARGV_INCONSISTENT,
     PMW_PTR_FIELD_READ,
     PMW_NULL_FIELD,
+    PMW_INTERP_MISMATCH,
+    PMW_INTERP_SLOT,
 } process_message_warning_t;
 
 typedef enum
@@ -112,6 +108,7 @@ typedef enum
     PM_EXECVE,
     PM_EXECVEAT,
     PM_WARNING,
+    PM_SCRIPT,
 } process_message_type_t;
 
 #define COMMON_FIELDS                           \
@@ -143,16 +140,6 @@ typedef struct
     u32 prot;
     u32 _pad;
 } change_memory_permission_event_t;
-
-typedef struct
-{
-    COMMON_FIELDS;
-    u64 flags;
-    u8 source[128];
-    u8 target[128];
-    u8 fs_type[16];
-    u8 data[64];
-} mount_event_t;
 
 typedef struct
 {
@@ -225,7 +212,6 @@ typedef struct
     u32 devmajor;
     u32 devminor;
     u64 inode;
-    char comm[TASK_COMM_LEN];
 } file_info_t, *pfile_info_t;
 
 typedef struct
@@ -245,7 +231,9 @@ typedef struct
     // strings so we cannot rely on double null separators
     u16 argv_length;
     u32 buffer_length;
+    u64 event_id;
     file_info_t file_info;
+    char comm[TASK_COMM_LEN];
 } exec_info_t;
 
 typedef union
@@ -280,13 +268,6 @@ struct process_data
     char comm[TASK_COMM_LEN];
 };
 
-typedef struct
-{
-    u64 mono_ns;
-    struct process_data process;
-    char path[128];
-} script_info_t;
-
 typedef union
 {
     struct
@@ -305,19 +286,13 @@ typedef struct
 {
     u16 protocol_type;           // Something like IPPROTO_TCP or IPPROTO_UDP
     u16 ip_type;                 // AF_INET or AF_INET6
+    u16 dest_port;
+    u16 src_port;
     enum direction_t direction;  // inbound or outbound
     struct process_data process; // pid and comm string
     u64 mono_ns;                 // Timestamp
-    u16 dest_port;
-    u16 src_port;
     ip_addr_t protos;
 } network_event_t, *pnetwork_event_t;
-
-typedef struct
-{
-    char value[VALUE_SIZE];
-    char truncated;
-} telemetry_value_t;
 
 typedef enum
 {
@@ -347,10 +322,18 @@ typedef struct
     error_info_t info;
 } warning_info_t;
 
+typedef struct
+{
+    u32 buffer_length;
+    u64 event_id;
+    file_info_t scripts[4];
+} script_info_t;
+
 typedef union
 {
     syscall_info_t syscall_info;
     warning_info_t warning_info;
+    script_info_t script_info;
 } process_message_data_t;
 
 typedef struct
@@ -380,21 +363,3 @@ struct clone_args
     __aligned_u64 cgroup;
 };
 #endif
-
-typedef enum
-{
-    SM_PWD,
-    SM_SCRIPT,
-    SM_CHAR_STR,
-} script_message_type_t;
-
-typedef struct
-{
-    u32 event_id;
-    script_message_type_t type;
-    union
-    {
-        script_info_t script_info;
-        telemetry_value_t v;
-    } u;
-} script_message_t, *pscript_message_t;

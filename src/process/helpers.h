@@ -76,7 +76,8 @@ static __always_inline int fill_syscall(syscall_info_t *syscall_info, void *ts, 
     if (!offset_loaded())
         return 1;
     int ret = is_user_process(ts);
-    if (ret < 1) return ret;
+    if (ret < 0) return ret; // error checking if user process
+    if (ret == 0) return 1;  // not a user process
 
     void *real_parent = read_field_ptr(ts, CRC_TASK_STRUCT_REAL_PARENT);
     if (real_parent == NULL) return -1;
@@ -114,6 +115,29 @@ static __always_inline int fill_syscall(syscall_info_t *syscall_info, void *ts, 
     syscall_info->euid = uid_gid >> 32;
     syscall_info->egid = uid_gid & 0xFFFFFFFF;
     syscall_info->mono_ns = bpf_ktime_get_ns();
+
+    return 0;
+}
+
+// its argument should be a pointer to a file
+static __always_inline int extract_file_info(void *ptr, file_info_t *file_info)
+{
+    void *f_inode = read_field_ptr(ptr, CRC_FILE_F_INODE);
+    if (f_inode == NULL) return -1;
+
+    void *i_sb = read_field_ptr(f_inode, CRC_INODE_I_SB);
+    if (i_sb == NULL) return -1;
+
+    // inode
+    if (read_field(f_inode, CRC_INODE_I_INO, &file_info->inode, sizeof(file_info->inode)) < 0)
+        return -1;
+
+    // device major/minor
+    u32 i_dev = 0;
+    if (read_field(i_sb, CRC_SBLOCK_S_DEV, &i_dev, sizeof(i_dev)) < 0) return -1;
+
+    file_info->devmajor = MAJOR(i_dev);
+    file_info->devminor = MINOR(i_dev);
 
     return 0;
 }

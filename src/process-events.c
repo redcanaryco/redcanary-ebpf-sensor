@@ -12,11 +12,9 @@
 #include "repeat.h"
 #include "common.h"
 
-#include "process/buffer.h"
 #include "process/clone.h"
 #include "process/exec.h"
 #include "process/exit.h"
-#include "process/helpers.h"
 #include "process/unshare.h"
 
 SEC("kprobe/sys_exec_pwd")
@@ -169,6 +167,42 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_exit_group, int status)
 {
     process_message_t pm = {0};
     push_exit(ctx, &pm, PM_EXITGROUP, bpf_get_current_pid_tgid() >> 32);
+
+    return 0;
+}
+
+SEC("kprobe/sys_execveat")
+int BPF_KPROBE_SYSCALL(kprobe__sys_execveat,
+                       int fd, const char __user *filename,
+                       const char __user *const __user *argv,
+                       const char __user *const __user *envp,
+                       int flags)
+{
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+    u32 pid = pid_tgid >> 32;
+    bpf_map_delete_elem(&scripts, &pid);
+
+    return 0;
+}
+
+SEC("kprobe/sys_execve")
+int BPF_KPROBE_SYSCALL(kprobe__sys_execve,
+                       const char __user *filename,
+                       const char __user *const __user *argv,
+                       const char __user *const __user *envp)
+{
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+    u32 pid = pid_tgid >> 32;
+    bpf_map_delete_elem(&scripts, &pid);
+
+    return 0;
+}
+
+SEC("kprobe/load_script")
+int kprobe__load_script(struct pt_regs *ctx)
+{
+    void *bprm = (void *)PT_REGS_PARM1(ctx);
+    enter_script(ctx, bprm);
 
     return 0;
 }

@@ -1,35 +1,11 @@
 #pragma once
 
+#include "bpf_tracing.h"
+#include "buffer.h"
 #include "helpers.h"
 #include "path.h"
 #include "push_message.h"
-
-// it's argument should be a pointer to a file
-static __always_inline int extract_file_info(void *ptr, file_info_t *file_info)
-{
-    void *f_inode = read_field_ptr(ptr, CRC_FILE_F_INODE);
-    if (f_inode == NULL) return -1;
-
-    void *i_sb = read_field_ptr(f_inode, CRC_INODE_I_SB);
-    if (i_sb == NULL) return -1;
-
-    // inode
-    if (read_field(f_inode, CRC_INODE_I_INO, &file_info->inode, sizeof(file_info->inode)) < 0)
-        return -1;
-
-    // device major/minor
-    u32 i_dev = 0;
-    if (read_field(i_sb, CRC_SBLOCK_S_DEV, &i_dev, sizeof(i_dev)) < 0) return -1;
-
-    file_info->devmajor = MAJOR(i_dev);
-    file_info->devminor = MINOR(i_dev);
-
-    // TODO: handle error
-    // comm
-    bpf_get_current_comm(&file_info->comm, sizeof(file_info->comm));
-
-    return 0;
-}
+#include "script.h"
 
 static __always_inline void exit_exec(struct pt_regs *ctx, process_message_type_t pm_type,
                                       tail_call_slot_t tail_call)
@@ -55,12 +31,14 @@ static __always_inline void exit_exec(struct pt_regs *ctx, process_message_type_
     int retcode = (int)PT_REGS_RC(ctx);
     if (retcode < 0) return;
 
+    pm->u.syscall_info.data.exec_info.event_id = push_scripts(ctx, buffer);
+
     void *ts = (void *)bpf_get_current_task();
     u64 pid_tgid = bpf_get_current_pid_tgid();
 
     // do not emit if we couldn't fill the syscall info
     ret = fill_syscall(&pm->u.syscall_info, ts, pid_tgid >> 32);
-    if (ret > 0) return;
+    if (ret > 0) return; // TODO: send discard event if pm->u.syscall_info.data.exec_info.event_id != 0?
     if (ret < 0) goto EmitWarning;
 
     void *mmptr = read_field_ptr(ts, CRC_TASK_STRUCT_MM);
@@ -93,6 +71,9 @@ static __always_inline void exit_exec(struct pt_regs *ctx, process_message_type_
     pm->type = pm_type;
     pm->u.syscall_info.retcode = retcode;
     if (extract_file_info(exe, &pm->u.syscall_info.data.exec_info.file_info) < 0) goto EmitWarning;
+
+    // TODO: handle error
+    bpf_get_current_comm(&pm->u.syscall_info.data.exec_info.comm, sizeof(pm->u.syscall_info.data.exec_info.comm));
 
     /* SAVE ARGV */
 
@@ -127,7 +108,7 @@ static __always_inline void exit_exec(struct pt_regs *ctx, process_message_type_
     // append a NULL to terminate the string
     if (buffer->buf[(pm->u.syscall_info.data.exec_info.buffer_length - 1) & (MAX_PERCPU_BUFFER - 1)] != '\0') {
         argv_length += 1; // we are taking up one more than we thought
-        write_null_char(buffer);
+        write_null_char(buffer, &pm->u.syscall_info.data.exec_info.buffer_length);
     }
 
     // do not rely on double NULL to separate argv from the rest. An
@@ -138,7 +119,7 @@ static __always_inline void exit_exec(struct pt_regs *ctx, process_message_type_
     // strings. Technically not necessary since we are passing
     // `argv_length` but it keeps it consistent with the other strings
     // in the buffer
-    write_null_char(buffer);
+    write_null_char(buffer, &pm->u.syscall_info.data.exec_info.buffer_length);
 
     /* FIND THE TOP DENTRY TO THE EXE */
     void *path = ptr_to_field(exe, CRC_FILE_F_PATH);
@@ -157,7 +138,7 @@ static __always_inline void exit_exec(struct pt_regs *ctx, process_message_type_
     if (ret < 0) goto EmitWarning;
 
     // add an extra null byte to signify string section end
-    write_null_char(buffer);
+    write_null_char(buffer, &pm->u.syscall_info.data.exec_info.buffer_length);
 
     /* PROCESS PWD IN A TAIL CALL  */
     bpf_tail_call(ctx, &tail_call_table, SYS_EXEC_PWD);
@@ -172,6 +153,7 @@ static __always_inline void exit_exec(struct pt_regs *ctx, process_message_type_
     set_local_warning(PMW_TAIL_CALL_MAX, info);
 
  EmitWarning:;
+    // TODO: send discard event if pm->u.syscall_info.data.exec_info.event_id != 0?
     cached_path->next_dentry = NULL;
 
     push_warning(ctx, pm, pm_type);
@@ -220,7 +202,7 @@ static __always_inline void process_pwd(struct pt_regs *ctx)
     cached_path->next_dentry = NULL;
 
     // add an extra null byte to signify string section end
-    write_null_char(buffer);
+    write_null_char(buffer, &pm->u.syscall_info.data.exec_info.buffer_length);
     push_flexible_message(ctx, pm, pm->u.syscall_info.data.exec_info.buffer_length);
 
     if (ret < 0) push_warning(ctx, pm, pm_type);
