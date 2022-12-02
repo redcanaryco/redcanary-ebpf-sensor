@@ -112,8 +112,8 @@ static __always_inline int fill_syscall(syscall_info_t *syscall_info, void *ts, 
     syscall_info->pid = pid;
     syscall_info->ppid = ppid;
     syscall_info->luid = luid;
-    syscall_info->euid = uid_gid >> 32;
-    syscall_info->egid = uid_gid & 0xFFFFFFFF;
+    syscall_info->euid = uid_gid & 0xFFFFFFFF;
+    syscall_info->egid = uid_gid >> 32;
     syscall_info->mono_ns = bpf_ktime_get_ns();
 
     return 0;
