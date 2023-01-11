@@ -188,7 +188,7 @@ static __always_inline void enter_script(struct pt_regs *ctx, void *bprm) {
 
  EventMismatch:;
   error_info_t info = {0};
-  info.stored_pid_tgid = (((u64) event.pid) << 32) & (event.pid);
+  info.stored_pid_tgid = (((u64) event.pid) << 32) | (event.pid);
   set_local_warning(PMW_PID_TGID_MISMATCH, info);
 
  EmitWarning:;
@@ -274,7 +274,7 @@ static __always_inline u64 push_scripts(struct pt_regs *ctx, buf_t *buffer) {
 
  EventMismatch:;
   error_info_t info = {0};
-  info.stored_pid_tgid = (((u64) event.pid) << 32) & (event.pid);
+  info.stored_pid_tgid = (((u64) event.pid) << 32) | (event.pid);
   set_local_warning(PMW_PID_TGID_MISMATCH, info);
 
  EmitWarning:;
