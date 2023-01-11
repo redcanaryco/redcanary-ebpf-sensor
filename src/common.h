@@ -76,9 +76,12 @@ static __always_inline int read_value(void *base, u64 offset, void *dest, size_t
     __builtin_memcpy(&event, (void *)__eventp, sizeof(ty)); \
     if (event.key != key) goto EventMismatch;
 
-// returns NULL if offsets have not yet been loaded
-static __always_inline void *offset_loaded()
+// returns 0 if offsets have not yet been loaded
+static __always_inline u32 offset_loaded()
 {
     u64 offset = CRC_LOADED;
-    return bpf_map_lookup_elem(&offsets, &offset);
+    u32 *loaded = bpf_map_lookup_elem(&offsets, &offset);
+
+    if (loaded == NULL) { return 0; }
+    return *loaded;
 }

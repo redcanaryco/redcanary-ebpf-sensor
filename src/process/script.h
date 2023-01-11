@@ -75,6 +75,8 @@ struct bpf_map_def SEC("maps/rel_interpreters") rel_interpreters = {
 };
 
 static __always_inline void enter_script(struct pt_regs *ctx, void *bprm) {
+  if (!offset_loaded()) return;
+
   u32 key = 0;
   buf_t *buffer = (buf_t *)bpf_map_lookup_elem(&buffers, &key);
   if (buffer == NULL) return;
