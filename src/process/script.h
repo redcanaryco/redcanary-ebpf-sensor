@@ -160,8 +160,12 @@ static __always_inline void enter_script(struct pt_regs *ctx, void *bprm) {
  NoEvent:;
   // first time saving a script for this exec*
   if (filename != interp) {
-    set_empty_local_warning(PMW_INTERP_MISMATCH);
-    goto EmitWarning;
+    // if they don't match but we do not have an existing incomplete
+    // event then it most likely means that the program was loaded
+    // right in between two load_script calls. We can't really know
+    // for sure what information was in the initial load_script so we
+    // should just skip this.
+    return;
   }
 
   event = (script_t){0};
