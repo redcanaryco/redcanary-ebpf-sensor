@@ -77,10 +77,6 @@ struct bpf_map_def SEC("maps/rel_interpreters") rel_interpreters = {
 static __always_inline void enter_script(struct pt_regs *ctx, void *bprm) {
   if (!offset_loaded()) return;
 
-  u32 key = 0;
-  buf_t *buffer = (buf_t *)bpf_map_lookup_elem(&buffers, &key);
-  if (buffer == NULL) return;
-
   // filename = bprm->filename
   char *filename = read_field_ptr(bprm, CRC_LINUX_BINPRM_FILENAME);
   if (filename == NULL) goto EmitWarning;
@@ -120,19 +116,19 @@ static __always_inline void enter_script(struct pt_regs *ctx, void *bprm) {
   rel_interpreter.pid = pid;
   rel_interpreter.interpreter = *new_interpreter;
 
-  interpreter_path_t *path = (interpreter_path_t *)buffer;
+  interpreter_path_t path = {0};
 
   // skip check if sz == BINPRM_BUF_SIZE. If a future kernel increases
   // the value of BINPRM_BUF_SIZE then we may run into truncation but
   // I don't think we need to worry right now.
-  ret = bpf_probe_read_str(&path->path, BINPRM_BUF_SIZE, interp);
+  ret = bpf_probe_read_str(&path.path, BINPRM_BUF_SIZE, interp);
   if (ret < 0) {
     set_empty_local_warning(PMW_READ_PATH_STRING);
     return;
   }
 
-  if (path->path[0] == '/') {
-    ret = bpf_map_update_elem(&interpreters, new_interpreter, path, BPF_ANY);
+  if (path.path[0] == '/') {
+    ret = bpf_map_update_elem(&interpreters, new_interpreter, &path, BPF_ANY);
     if (ret < 0) {
       error_info_t info = {0};
       info.err = ret;
@@ -146,7 +142,7 @@ static __always_inline void enter_script(struct pt_regs *ctx, void *bprm) {
     // that both run scripts.
     bpf_map_delete_elem(&rel_interpreters, &rel_interpreter);
   } else {
-    ret = bpf_map_update_elem(&rel_interpreters, &rel_interpreter, path, BPF_ANY);
+    ret = bpf_map_update_elem(&rel_interpreters, &rel_interpreter, &path, BPF_ANY);
     if (ret < 0) {
       error_info_t info = {0};
       info.err = ret;
@@ -192,6 +188,11 @@ static __always_inline void enter_script(struct pt_regs *ctx, void *bprm) {
   set_local_warning(PMW_PID_TGID_MISMATCH, info);
 
  EmitWarning:;
+  // no room in the stack for a process_message_t; let's use our per-cpu buffer
+  u32 key = 0;
+  buf_t *buffer = (buf_t *)bpf_map_lookup_elem(&buffers, &key);
+  if (buffer == NULL) return;
+
   process_message_t *pm = (process_message_t *)buffer;
   push_warning(ctx, pm, PM_SCRIPT);
 
