@@ -75,6 +75,8 @@ struct bpf_map_def SEC("maps/rel_interpreters") rel_interpreters = {
 };
 
 static __always_inline void enter_script(struct pt_regs *ctx, void *bprm) {
+  if (!offset_loaded()) return;
+
   u32 key = 0;
   buf_t *buffer = (buf_t *)bpf_map_lookup_elem(&buffers, &key);
   if (buffer == NULL) return;
@@ -158,8 +160,12 @@ static __always_inline void enter_script(struct pt_regs *ctx, void *bprm) {
  NoEvent:;
   // first time saving a script for this exec*
   if (filename != interp) {
-    set_empty_local_warning(PMW_INTERP_MISMATCH);
-    goto EmitWarning;
+    // if they don't match but we do not have an existing incomplete
+    // event then it most likely means that the program was loaded
+    // right in between two load_script calls. We can't really know
+    // for sure what information was in the initial load_script so we
+    // should just skip this.
+    return;
   }
 
   event = (script_t){0};
@@ -182,7 +188,7 @@ static __always_inline void enter_script(struct pt_regs *ctx, void *bprm) {
 
  EventMismatch:;
   error_info_t info = {0};
-  info.stored_pid_tgid = (((u64) event.pid) << 32) & (event.pid);
+  info.stored_pid_tgid = (((u64) event.pid) << 32) | (event.pid);
   set_local_warning(PMW_PID_TGID_MISMATCH, info);
 
  EmitWarning:;
@@ -268,7 +274,7 @@ static __always_inline u64 push_scripts(struct pt_regs *ctx, buf_t *buffer) {
 
  EventMismatch:;
   error_info_t info = {0};
-  info.stored_pid_tgid = (((u64) event.pid) << 32) & (event.pid);
+  info.stored_pid_tgid = (((u64) event.pid) << 32) | (event.pid);
   set_local_warning(PMW_PID_TGID_MISMATCH, info);
 
  EmitWarning:;

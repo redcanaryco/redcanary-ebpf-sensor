@@ -70,15 +70,23 @@ static __always_inline int read_value(void *base, u64 offset, void *dest, size_t
 }
 
 #define load_event(map, key, ty)                            \
-    void *__eventp = bpf_map_lookup_elem(&map, &key);       \
+    ty *__eventp = bpf_map_lookup_elem(&map, &key);         \
     if (__eventp == NULL) goto NoEvent;                     \
-    ty event = {0};                                         \
-    __builtin_memcpy(&event, (void *)__eventp, sizeof(ty)); \
-    if (event.key != key) goto EventMismatch;
+    ty event = *__eventp;                                   \
+    /* retry once */                                        \
+    if (event.key != key) {                                 \
+        __eventp = bpf_map_lookup_elem(&map, &key);         \
+        if (__eventp == NULL) goto NoEvent;                 \
+        event = *__eventp;                                  \
+        if (event.key != key) goto EventMismatch;           \
+    }                                                       \
 
-// returns NULL if offsets have not yet been loaded
-static __always_inline void *offset_loaded()
+// returns 0 if offsets have not yet been loaded
+static __always_inline u32 offset_loaded()
 {
     u64 offset = CRC_LOADED;
-    return bpf_map_lookup_elem(&offsets, &offset);
+    u32 *loaded = bpf_map_lookup_elem(&offsets, &offset);
+
+    if (loaded == NULL) { return 0; }
+    return *loaded;
 }
