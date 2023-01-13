@@ -232,6 +232,7 @@ typedef struct
     u16 argv_length;
     u32 buffer_length;
     u64 event_id;
+    u64 cgroup_id;
     file_info_t file_info;
     char comm[TASK_COMM_LEN];
 } exec_info_t;
@@ -296,8 +297,8 @@ typedef struct
 
 typedef enum
 {
-    RET_SYS_EXECVEAT_4_8,
-    RET_SYS_EXECVE_4_8,
+    RET_SYS_EXECVEAT,
+    RET_SYS_EXECVE,
     SYS_EXEC_PWD,
     HANDLE_PWD,
 } tail_call_slot_t;
