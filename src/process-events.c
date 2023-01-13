@@ -25,18 +25,34 @@ int kprobe__sys_exec_pwd(struct pt_regs *ctx)
     return 0;
 }
 
-SEC("kretprobe/ret_sys_execve_4_8")
-int kretprobe__ret_sys_execve_4_8(struct pt_regs *ctx)
+SEC("kretprobe/ret_sys_execve")
+int kretprobe__ret_sys_execve(struct pt_regs *ctx)
 {
-    exit_exec(ctx, PM_EXECVE, RET_SYS_EXECVE_4_8);
+    exit_exec(ctx, PM_EXECVE, bpf_get_current_cgroup_id(), RET_SYS_EXECVE);
 
     return 0;
 }
 
-SEC("kretprobe/ret_sys_execveat_4_8")
-int kretprobe__ret_sys_execveat_4_8(struct pt_regs *ctx)
+SEC("kretprobe/ret_sys_execveat")
+int kretprobe__ret_sys_execveat(struct pt_regs *ctx)
 {
-    exit_exec(ctx, PM_EXECVEAT, RET_SYS_EXECVEAT_4_8);
+    exit_exec(ctx, PM_EXECVEAT, bpf_get_current_cgroup_id(), RET_SYS_EXECVEAT);
+
+    return 0;
+}
+
+SEC("kretprobe/ret_sys_execve_pre_4_18")
+int kretprobe__ret_sys_execve_pre_4_18(struct pt_regs *ctx)
+{
+    exit_exec(ctx, PM_EXECVE, 0, RET_SYS_EXECVE);
+
+    return 0;
+}
+
+SEC("kretprobe/ret_sys_execveat_pre_4_18")
+int kretprobe__ret_sys_execveat_pre_4_18(struct pt_regs *ctx)
+{
+    exit_exec(ctx, PM_EXECVEAT, 0, RET_SYS_EXECVEAT);
 
     return 0;
 }
