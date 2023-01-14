@@ -124,7 +124,7 @@ static __always_inline void enter_script(struct pt_regs *ctx, void *bprm) {
   ret = bpf_probe_read_str(&path.path, BINPRM_BUF_SIZE, interp);
   if (ret < 0) {
     set_empty_local_warning(PMW_READ_PATH_STRING);
-    return;
+    goto EmitWarning;
   }
 
   if (path.path[0] == '/') {
@@ -166,8 +166,51 @@ static __always_inline void enter_script(struct pt_regs *ctx, void *bprm) {
 
   event = (script_t){0};
   event.pid = pid;
-  event.file.path = filename;
   if (extract_file_info(file, &event.file.identity) < 0) goto EmitWarning;
+
+  char dev[] = "/dev/fd/";
+  char truncated_filename[sizeof(dev)] = {0};
+  int sz = bpf_probe_read_str(truncated_filename, sizeof(dev), filename);
+  int is_dev_fd_file = 0;
+  if (sz == sizeof(dev)) {
+    is_dev_fd_file = 1;
+#pragma unroll sizeof(dev)
+    for (int i = 0; i < sizeof(dev); i++) {
+      if (dev[i] != truncated_filename[i]) {
+        is_dev_fd_file = 0;
+        break;
+      }
+    }
+  }
+
+  // If our filename is /dev/fd/* then the kernel (most likely)
+  // allocated the string during the creation of the binprm for an
+  // execveat. Because the binprm is de-allocated before the kretprobe
+  // for exec* is fired we need to copy that string manually.
+  if (is_dev_fd_file) {
+    interpreter_path_t path = {0};
+
+    // skip check if sz == BINPRM_BUF_SIZE. In theory this *can*
+    // truncate the name in the case of a script launched using
+    // execveat that uses both the dirfd and a *really long*
+    // pathname. I rather truncate in this extreme edge case instead
+    // of incurring the runtime cost for all the normal cases.
+    ret = bpf_probe_read_str(&path.path, BINPRM_BUF_SIZE, filename);
+    if (ret < 0) {
+      set_empty_local_warning(PMW_READ_PATH_STRING);
+      goto EmitWarning;
+    }
+
+    ret = bpf_map_update_elem(&interpreters, &event.file.identity, &path, BPF_ANY);
+    if (ret < 0) {
+      error_info_t info = {0};
+      info.err = ret;
+      set_local_warning(PMW_UPDATE_MAP_ERROR, info);
+      goto EmitWarning;
+    }
+  } else {
+    event.file.path = filename;
+  }
 
   goto SaveEvent;
 
@@ -215,11 +258,26 @@ static __always_inline u64 push_scripts(struct pt_regs *ctx, buf_t *buffer) {
   pm->u.script_info.scripts[0] = event.file.identity;
   pm->u.script_info.buffer_length = sizeof(process_message_t);
 
-  // the original script file path came from the user; the kernel
-  // verifies that the user provided path cannot go beyond
-  // PATH_MAX. The total path can still be beyond PATH_MAX once you
-  // combine it with the CWD but userspace can take care of that
-  int sz = write_string(event.file.path, buffer, &pm->u.script_info.buffer_length, PATH_MAX);
+  int sz = 0;
+  if (event.file.path == NULL) {
+    // we didn't save the path because the kernel was going to
+    // de-allocate it; look it up in our interpreters map instead. No
+    // need to look at the rel_interpreters, it is always an absolute
+    // path for the /dev/fd/* case
+    interpreter_path_t *intp_path = bpf_map_lookup_elem(&interpreters, &event.file.identity);
+    if (intp_path == NULL) {
+      write_null_char(buffer, &pm->u.script_info.buffer_length);
+    } else {
+      sz = write_string(intp_path->path, buffer, &pm->u.script_info.buffer_length, BINPRM_BUF_SIZE);
+    }
+  } else {
+    // the original script file path came from the user; the kernel
+    // verifies that the user provided path cannot go beyond
+    // PATH_MAX. The total path can still be beyond PATH_MAX once you
+    // combine it with the CWD but userspace can take care of that
+    sz = write_string(event.file.path, buffer, &pm->u.script_info.buffer_length, PATH_MAX);
+  }
+
   if (sz < 0) goto WriteError;
 
 #pragma unroll MAX_INTERPRETERS
