@@ -4,8 +4,9 @@
 #include "helpers.h"
 
 typedef struct {
-    u64 pid_tgid;
-    clone_info_t clone_info;
+  u64 pid_tgid;
+  u64 start_ktime_ns;
+  clone_info_t clone_info;
 } incomplete_clone_t;
 
 // A map of clones that have started (a kprobe) but are yet to finish
@@ -31,6 +32,7 @@ static __always_inline void enter_clone(struct pt_regs *ctx, process_message_typ
   incomplete_clone_t event = {0};
   event.pid_tgid = pid_tgid;
   event.clone_info.flags = flags;
+  event.start_ktime_ns = bpf_ktime_get_ns();
 
   int ret = bpf_map_update_elem(&incomplete_clones, &pid_tgid, &event, BPF_ANY);
   if (ret < 0)
@@ -66,6 +68,7 @@ static __always_inline void exit_clone(struct pt_regs *ctx, pprocess_message_t p
   if (ret < 0) goto EmitWarning;
 
   pm->type = pm_type;
+  pm->u.syscall_info.mono_ns = event.start_ktime_ns;
   pm->u.syscall_info.data.clone_info = event.clone_info;
   pm->u.syscall_info.retcode = retcode;
 
