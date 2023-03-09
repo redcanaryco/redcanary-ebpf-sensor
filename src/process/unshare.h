@@ -5,6 +5,7 @@
 
 typedef struct {
   u64 pid_tgid;
+  u64 start_ktime_ns;
   int unshare_flags;
 } incomplete_unshare_t;
 
@@ -25,6 +26,7 @@ static __always_inline void enter_unshare(struct pt_regs *ctx, int flags)
   u64 pid_tgid = bpf_get_current_pid_tgid();
   incomplete_unshare_t event = {0};
   event.pid_tgid = pid_tgid;
+  event.start_ktime_ns = bpf_ktime_get_ns();
   event.unshare_flags = flags;
 
   int ret = bpf_map_update_elem(&incomplete_unshares, &pid_tgid, &event, BPF_ANY);
@@ -56,6 +58,7 @@ static __always_inline void exit_unshare(struct pt_regs *ctx, pprocess_message_t
   if (ret < 0) goto EmitWarning;
 
   pm->type = PM_UNSHARE;
+  pm->u.syscall_info.mono_ns = event.start_ktime_ns;
   pm->u.syscall_info.data.unshare_flags = event.unshare_flags;
   pm->u.syscall_info.retcode = retcode;
 
