@@ -94,27 +94,37 @@ static __always_inline void exit_exec(struct pt_regs *ctx, process_message_type_
 
     u32 offset = sizeof(process_message_t);
     pm->u.syscall_info.data.exec_info.buffer_length = offset;
-    if (bpf_probe_read(&buffer->buf[offset], argv_length, (void *)arg_start) < 0) {
-        error_info_t info = {0};
-        info.argv.start = arg_start;
-        info.argv.end = arg_end;
-        set_local_warning(PMW_READ_ARGV, info);
-        goto EmitWarning;
+    // in kernels before 4.15 the verifier would not allow a
+    // potentially zero value sent to bpf_probe_read so we need to
+    // check for a minimum bound. We are checking for >1 because the
+    // compiler is too smart and the verifier too dumb. A check for >0
+    // makes the compiler do a != 0 check which verifier doesn't use
+    // for checking the minimum range of argv_length. Checking for >1
+    // is OK because non-empty C strings all use at least 2 bytes.
+    if (argv_length > 1) {
+        if (bpf_probe_read(&buffer->buf[offset], argv_length, (void *)arg_start) < 0) {
+            error_info_t info = {0};
+            info.argv.start = arg_start;
+            info.argv.end = arg_end;
+            set_local_warning(PMW_READ_ARGV, info);
+            goto EmitWarning;
+        }
+
+        pm->u.syscall_info.data.exec_info.buffer_length += argv_length;
+        // if for any reason the last character is not a NULL (e.g., we
+        // truncated the argv not at a string boundary) make sure to
+        // append a NULL to terminate the string
+        if (buffer->buf[(pm->u.syscall_info.data.exec_info.buffer_length - 1) & (MAX_PERCPU_BUFFER - 1)] != '\0') {
+            argv_length += 1; // we are taking up one more than we thought
+            write_null_char(buffer, &pm->u.syscall_info.data.exec_info.buffer_length);
+        }
+        // do not rely on double NULL to separate argv from the rest. An
+        // empty argument can also cause a double NULL.
+        pm->u.syscall_info.data.exec_info.argv_length = argv_length;
+    } else {
+        // set it 0 no matter what if we didn't bother reading the argv length
+        pm->u.syscall_info.data.exec_info.argv_length = 0;
     }
-
-    pm->u.syscall_info.data.exec_info.buffer_length += argv_length;
-
-    // if for any reason the last character is not a NULL (e.g., we
-    // truncated the argv not at a string boundary) make sure to
-    // append a NULL to terminate the string
-    if (buffer->buf[(pm->u.syscall_info.data.exec_info.buffer_length - 1) & (MAX_PERCPU_BUFFER - 1)] != '\0') {
-        argv_length += 1; // we are taking up one more than we thought
-        write_null_char(buffer, &pm->u.syscall_info.data.exec_info.buffer_length);
-    }
-
-    // do not rely on double NULL to separate argv from the rest. An
-    // empty argument can also cause a double NULL.
-    pm->u.syscall_info.data.exec_info.argv_length = argv_length;
 
     // append a NULL to signify the end of the argv
     // strings. Technically not necessary since we are passing
