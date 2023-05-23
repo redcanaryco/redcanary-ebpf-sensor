@@ -107,7 +107,7 @@ static __always_inline void enter_script(struct pt_regs *ctx, void *bprm) {
   }
 
   if (new_interpreter == NULL) {
-    set_empty_local_warning(PMW_INTERP_SLOT);
+    set_empty_local_warning(W_INTERP_SLOT);
     goto EmitWarning;
   }
 
@@ -123,7 +123,7 @@ static __always_inline void enter_script(struct pt_regs *ctx, void *bprm) {
   // I don't think we need to worry right now.
   ret = bpf_probe_read_str(&path.path, BINPRM_BUF_SIZE, interp);
   if (ret < 0) {
-    set_empty_local_warning(PMW_READ_PATH_STRING);
+    set_empty_local_warning(W_READ_PATH_STRING);
     goto EmitWarning;
   }
 
@@ -132,7 +132,7 @@ static __always_inline void enter_script(struct pt_regs *ctx, void *bprm) {
     if (ret < 0) {
       error_info_t info = {0};
       info.err = ret;
-      set_local_warning(PMW_UPDATE_MAP_ERROR, info);
+      set_local_warning(W_UPDATE_MAP_ERROR, info);
       goto EmitWarning;
     }
 
@@ -146,7 +146,7 @@ static __always_inline void enter_script(struct pt_regs *ctx, void *bprm) {
     if (ret < 0) {
       error_info_t info = {0};
       info.err = ret;
-      set_local_warning(PMW_UPDATE_MAP_ERROR, info);
+      set_local_warning(W_UPDATE_MAP_ERROR, info);
       goto EmitWarning;
     }
   }
@@ -197,7 +197,7 @@ static __always_inline void enter_script(struct pt_regs *ctx, void *bprm) {
     // of incurring the runtime cost for all the normal cases.
     ret = bpf_probe_read_str(&path.path, BINPRM_BUF_SIZE, filename);
     if (ret < 0) {
-      set_empty_local_warning(PMW_READ_PATH_STRING);
+      set_empty_local_warning(W_READ_PATH_STRING);
       goto EmitWarning;
     }
 
@@ -205,7 +205,7 @@ static __always_inline void enter_script(struct pt_regs *ctx, void *bprm) {
     if (ret < 0) {
       error_info_t info = {0};
       info.err = ret;
-      set_local_warning(PMW_UPDATE_MAP_ERROR, info);
+      set_local_warning(W_UPDATE_MAP_ERROR, info);
       goto EmitWarning;
     }
   } else {
@@ -219,7 +219,7 @@ static __always_inline void enter_script(struct pt_regs *ctx, void *bprm) {
   if (ret < 0) {
     error_info_t info = {0};
     info.err = ret;
-    set_local_warning(PMW_UPDATE_MAP_ERROR, info);
+    set_local_warning(W_UPDATE_MAP_ERROR, info);
     goto EmitWarning;
   }
 
@@ -228,7 +228,7 @@ static __always_inline void enter_script(struct pt_regs *ctx, void *bprm) {
  EventMismatch:;
   error_info_t info = {0};
   info.stored_pid_tgid = (((u64) event.pid) << 32) | (event.pid);
-  set_local_warning(PMW_PID_TGID_MISMATCH, info);
+  set_local_warning(W_PID_TGID_MISMATCH, info);
 
  EmitWarning:;
   // no room in the stack for a process_message_t; let's use our per-cpu buffer
@@ -323,8 +323,8 @@ static __always_inline u64 push_scripts(struct pt_regs *ctx, buf_t *buffer) {
   goto Done;
 
  WriteError:;
-  if (sz == -PMW_UNEXPECTED) {
-    set_empty_local_warning(PMW_READ_PATH_STRING);
+  if (sz == -W_UNEXPECTED) {
+    set_empty_local_warning(W_READ_PATH_STRING);
   } else {
     set_empty_local_warning(-sz);
   }
@@ -334,7 +334,7 @@ static __always_inline u64 push_scripts(struct pt_regs *ctx, buf_t *buffer) {
  EventMismatch:;
   error_info_t info = {0};
   info.stored_pid_tgid = (((u64) event.pid) << 32) | (event.pid);
-  set_local_warning(PMW_PID_TGID_MISMATCH, info);
+  set_local_warning(W_PID_TGID_MISMATCH, info);
 
  EmitWarning:;
   push_warning(ctx, pm, PM_SCRIPT);

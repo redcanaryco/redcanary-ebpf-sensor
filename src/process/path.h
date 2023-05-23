@@ -65,12 +65,12 @@ static __always_inline int write_string(const char *string, buf_t *buffer, u32 *
 
     // already too full
     if (*offset > MAX_PERCPU_BUFFER - max_string)
-        return -PMW_BUFFER_FULL;
+        return -W_BUFFER_FULL;
 
     int sz = bpf_probe_read_str(&buffer->buf[*offset], max_string, string);
     if (sz < 0)
     {
-        return -PMW_UNEXPECTED;
+        return -W_UNEXPECTED;
     }
     else
     {
@@ -80,7 +80,7 @@ static __always_inline int write_string(const char *string, buf_t *buffer, u32 *
 }
 
 // writes a d_path into a buffer - tail calling if necessary
-static __always_inline int write_path(struct pt_regs *ctx, cached_path_t *cached_path, buf_t *buffer,
+static __always_inline int write_path(struct pt_regs *ctx, cached_path_t *cached_path, cursor_t *buf,
                                       tail_call_slot_t tail_call)
 {
     u32 *offset = get_offset(CRC_DENTRY_D_NAME);
@@ -158,8 +158,7 @@ static __always_inline int write_path(struct pt_regs *ctx, cached_path_t *cached
         // into account. Not all systems enforce NAME_MAX so
         // truncation may happen per path segment. TODO: emit
         // truncation metrics to see if we need to care about this.
-        process_message_t *pm = (process_message_t *)buffer;
-        ret = write_string((char *)offset, buffer, &pm->u.syscall_info.data.exec_info.buffer_length, NAME_MAX + 1);
+        ret = write_string((char *)offset, buf->buffer, buf->offset, NAME_MAX + 1);
         if (ret < 0) goto WriteError;
     }
 
@@ -167,7 +166,7 @@ static __always_inline int write_path(struct pt_regs *ctx, cached_path_t *cached
 
     error_info_t info = {0};
     info.tailcall = tail_call;
-    set_local_warning(PMW_TAIL_CALL_MAX, info);
+    set_local_warning(W_TAIL_CALL_MAX, info);
 
     return -1;
 
@@ -176,15 +175,14 @@ static __always_inline int write_path(struct pt_regs *ctx, cached_path_t *cached
     if (bpf_probe_read(&offset, sizeof(offset), cached_path->next_dentry + name) < 0)
             goto NameError;
 
-    process_message_t *pm = (process_message_t *)buffer;
-    ret = write_string((char *)offset, buffer, &pm->u.syscall_info.data.exec_info.buffer_length, NAME_MAX + 1);
+    ret = write_string((char *)offset, buf->buffer, buf->offset, NAME_MAX + 1);
     if (ret < 0) goto WriteError;
 
     return 0;
 
  WriteError:;
-    if (ret == -PMW_UNEXPECTED) {
-        set_empty_local_warning(PMW_READ_PATH_STRING);
+    if (ret == -W_UNEXPECTED) {
+        set_empty_local_warning(W_READ_PATH_STRING);
     } else {
         set_empty_local_warning(-ret);
     }
@@ -194,7 +192,7 @@ static __always_inline int write_path(struct pt_regs *ctx, cached_path_t *cached
  NameError:;
     error_info_t read_error_info = {0};
     read_error_info.offset_crc = CRC_QSTR_NAME;
-    set_local_warning(PMW_PTR_FIELD_READ, read_error_info);
+    set_local_warning(W_PTR_FIELD_READ, read_error_info);
 
     return -1;
 }

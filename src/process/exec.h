@@ -61,7 +61,7 @@ static __always_inline void exit_exec(struct pt_regs *ctx, process_message_type_
         error_info_t info = {0};
         info.argv.start = arg_start;
         info.argv.end = arg_end;
-        set_local_warning(PMW_ARGV_INCONSISTENT, info);
+        set_local_warning(W_ARGV_INCONSISTENT, info);
 
         goto EmitWarning;
     }
@@ -106,7 +106,7 @@ static __always_inline void exit_exec(struct pt_regs *ctx, process_message_type_
             error_info_t info = {0};
             info.argv.start = arg_start;
             info.argv.end = arg_end;
-            set_local_warning(PMW_READ_ARGV, info);
+            set_local_warning(W_READ_ARGV, info);
             goto EmitWarning;
         }
 
@@ -141,7 +141,8 @@ static __always_inline void exit_exec(struct pt_regs *ctx, process_message_type_
 
  ExeName:;
     /* WRITE EXE PATH; IT MAY TAIL CALL */
-    ret = write_path(ctx, cached_path, buffer, tail_call);
+    cursor_t cursor = { .buffer = buffer, .offset = &pm->u.syscall_info.data.exec_info.buffer_length };
+    ret = write_path(ctx, cached_path, &cursor, tail_call);
 
     // reset skips back to 0. This will automatically update it in the
     // map so no need to do a bpf_map_update_elem.
@@ -161,7 +162,7 @@ static __always_inline void exit_exec(struct pt_regs *ctx, process_message_type_
     // but still emit a warning afterwards
     error_info_t info = {0};
     info.tailcall = tail_call;
-    set_local_warning(PMW_TAIL_CALL_MAX, info);
+    set_local_warning(W_TAIL_CALL_MAX, info);
 
  EmitWarning:;
     // TODO: send discard event if pm->u.syscall_info.data.exec_info.event_id != 0?
@@ -206,7 +207,8 @@ static __always_inline void process_pwd(struct pt_regs *ctx)
 
  Pwd:;
     /* WRITE PATH; IT MAY TAIL CALL */
-    ret = write_path(ctx, cached_path, buffer, SYS_EXEC_PWD);
+    cursor_t cursor = { .buffer = buffer, .offset = &pm->u.syscall_info.data.exec_info.buffer_length };
+    ret = write_path(ctx, cached_path, &cursor, SYS_EXEC_PWD);
 
  Done:;
     /* PUSH THE EVENT AND RESET */

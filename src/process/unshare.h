@@ -35,8 +35,8 @@ static __always_inline void enter_unshare(struct pt_regs *ctx, int flags)
       process_message_t pm = {0};
       pm.type = PM_WARNING;
       pm.u.warning_info.pid_tgid = pid_tgid;
-      pm.u.warning_info.message_type = PM_UNSHARE;
-      pm.u.warning_info.code = PMW_UPDATE_MAP_ERROR;
+      pm.u.warning_info.message_type.process = PM_UNSHARE;
+      pm.u.warning_info.code = W_UPDATE_MAP_ERROR;
       pm.u.warning_info.info.err = ret;
 
       push_message(ctx, &pm);
@@ -73,7 +73,7 @@ static __always_inline void exit_unshare(struct pt_regs *ctx, pprocess_message_t
  EventMismatch:;
   error_info_t info = {0};
   info.stored_pid_tgid = event.pid_tgid;
-  set_local_warning(PMW_PID_TGID_MISMATCH, info);
+  set_local_warning(W_PID_TGID_MISMATCH, info);
 
  EmitWarning:;
   push_warning(ctx, pm, PM_UNSHARE);

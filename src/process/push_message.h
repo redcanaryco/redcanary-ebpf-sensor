@@ -1,4 +1,5 @@
 #include "buffer.h"
+#include "warning.h"
 
 #pragma once
 
@@ -30,4 +31,17 @@ static __always_inline int push_flexible_message(struct pt_regs *ctx, pprocess_m
     // know that dynamic_size will never be 0 so this is safe.
     u64 size_to_send = ((dynamic_size - 1) & (MAX_PERCPU_BUFFER - 1)) + 1;
     return bpf_perf_event_output(ctx, &process_events, BPF_F_CURRENT_CPU, ev, size_to_send);
+}
+
+// pushes a warning to the process_events perfmap for the current CPU.
+static __always_inline int push_warning(struct pt_regs *ctx, pprocess_message_t pm,
+                                        process_message_type_t pm_type)
+{
+    pm->type = PM_WARNING;
+    message_type_t m_type;
+    m_type.process = pm_type;
+
+    load_warning_info(&pm->u.warning_info, m_type);
+
+    return push_message(ctx, pm);
 }

@@ -12,6 +12,14 @@ typedef struct
     char buf[MAX_PERCPU_BUFFER];
 } buf_t;
 
+// a type that points to a buffer and the current write position within
+// that buffer
+typedef struct
+{
+    buf_t *buffer;
+    u32 *offset;
+} cursor_t;
+
 // A per cpu buffer that can hold more data than allowed in the
 // stack. Used to collect data of variable length such as a string.
 struct bpf_map_def SEC("maps/buffers") buffers = {
