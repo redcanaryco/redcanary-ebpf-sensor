@@ -131,15 +131,22 @@ static __always_inline void enter_mkdir(struct pt_regs *ctx)
 static __always_inline void store_dentry(struct pt_regs *ctx, void *dentry)
 {
     u64 pid_tgid = bpf_get_current_pid_tgid();
-    error_info_t info = {0};
 
     load_event(incomplete_mkdirs, pid_tgid, incomplete_mkdir_t);
-    event.target_dentry = dentry;
+    if (event.target_dentry == NULL)
+        event.target_dentry = dentry;
     bpf_map_update_elem(&incomplete_mkdirs, &pid_tgid, &event, BPF_ANY);
+    return;
 
-    EventMismatch:
-    info.stored_pid_tgid = event.pid_tgid;
-    set_local_warning(W_PID_TGID_MISMATCH, info);
+    EventMismatch:;
+    file_message_t fm = {0};
+    fm.type = FM_WARNING;
+    fm.u.warning.pid_tgid = pid_tgid;
+    fm.u.warning.message_type.file = FM_CREATE;
+    fm.u.warning.code = W_PID_TGID_MISMATCH;
+    fm.u.warning.info.stored_pid_tgid = event.pid_tgid;
+
+    push_file_message(ctx, &fm);
     return;
 
     NoEvent:
