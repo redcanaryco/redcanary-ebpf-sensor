@@ -133,9 +133,10 @@ static __always_inline void store_dentry(struct pt_regs *ctx, void *dentry)
     u64 pid_tgid = bpf_get_current_pid_tgid();
 
     load_event(incomplete_mkdirs, pid_tgid, incomplete_mkdir_t);
-    if (event.target_dentry == NULL)
+    if (event.target_dentry == NULL) {
         event.target_dentry = dentry;
-    bpf_map_update_elem(&incomplete_mkdirs, &pid_tgid, &event, BPF_ANY);
+        bpf_map_update_elem(&incomplete_mkdirs, &pid_tgid, &event, BPF_ANY);
+    }
     return;
 
     EventMismatch:;
