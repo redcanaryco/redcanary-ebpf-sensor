@@ -12,7 +12,7 @@
 #include "process/path.h"
 #include "process/warning.h"
 
-// The map where process event messages get emitted to
+// The map where file event messages get emitted to
 struct bpf_map_def SEC("maps/file_events") file_events = {
     .type = BPF_MAP_TYPE_PERF_EVENT_ARRAY,
     .key_size = sizeof(u32),
