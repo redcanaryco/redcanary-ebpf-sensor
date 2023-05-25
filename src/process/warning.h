@@ -1,10 +1,8 @@
 #pragma once
 
-#include "push_message.h"
-
 typedef struct
 {
-    process_message_warning_t code;
+    warning_t code;
     error_info_t info;
 } local_warning_t;
 
@@ -19,28 +17,24 @@ struct bpf_map_def SEC("maps/warning") percpu_warning = {
     .namespace = "",
 };
 
-// pushes a warning to the process_events perfmap for the current CPU.
-static __always_inline int push_warning(struct pt_regs *ctx, pprocess_message_t pm,
-                                        process_message_type_t pm_type)
+// Load warning info from the perfmap of the current CPU into the warning variant of some
+// message type
+static __always_inline void load_warning_info(warning_info_t *wi, message_type_t m_type)
 {
-    pm->type = PM_WARNING;
-
     u32 key = 0;
     local_warning_t *warning = (local_warning_t *)bpf_map_lookup_elem(&percpu_warning, &key);
     if (warning != NULL) {
-        pm->u.warning_info.code = warning->code;
-        pm->u.warning_info.info = warning->info;
+        wi->code = warning->code;
+        wi->info = warning->info;
         // reset it so we don't accidentally re-use the same code/info in a new warning
         *warning = (local_warning_t){0};
     }
 
-    pm->u.warning_info.pid_tgid = bpf_get_current_pid_tgid();
-    pm->u.warning_info.message_type = pm_type;
-
-    return push_message(ctx, pm);
+    wi->pid_tgid = bpf_get_current_pid_tgid();
+    wi->message_type = m_type;
 }
 
-static __always_inline int set_empty_local_warning(process_message_warning_t code)
+static __always_inline int set_empty_local_warning(warning_t code)
 {
     local_warning_t warning = {0};
     warning.code = code;
@@ -48,7 +42,7 @@ static __always_inline int set_empty_local_warning(process_message_warning_t cod
     return bpf_map_update_elem(&percpu_warning, &key, &warning, BPF_ANY);
 }
 
-static __always_inline int set_local_warning(process_message_warning_t code, error_info_t info)
+static __always_inline int set_local_warning(warning_t code, error_info_t info)
 {
     local_warning_t warning = {0};
     warning.code = code;

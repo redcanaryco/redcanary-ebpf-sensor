@@ -79,21 +79,22 @@ typedef enum
 
 typedef enum
 {
-    PMW_UNSPEC,
-    PMW_BUFFER_FULL,
-    PMW_TAIL_CALL_MAX,
-    PMW_UPDATE_MAP_ERROR,
-    PMW_PID_TGID_MISMATCH,
-    PMW_UNEXPECTED,
-    PMW_READ_PATH_STRING,
-    PMW_READ_ARGV,
-    PMW_READING_FIELD,
-    PMW_ARGV_INCONSISTENT,
-    PMW_PTR_FIELD_READ,
-    PMW_NULL_FIELD,
-    PMW_INTERP_MISMATCH,
-    PMW_INTERP_SLOT,
-} process_message_warning_t;
+    W_UNSPEC,
+    W_BUFFER_FULL,
+    W_TAIL_CALL_MAX,
+    W_UPDATE_MAP_ERROR,
+    W_PID_TGID_MISMATCH,
+    W_UNEXPECTED,
+    W_READ_PATH_STRING,
+    W_READ_ARGV,
+    W_READING_FIELD,
+    W_ARGV_INCONSISTENT,
+    W_PTR_FIELD_READ,
+    W_NULL_FIELD,
+    W_INTERP_MISMATCH,
+    W_INTERP_SLOT,
+    W_NO_DENTRY,
+} warning_t;
 
 typedef enum
 {
@@ -110,6 +111,22 @@ typedef enum
     PM_WARNING,
     PM_SCRIPT,
 } process_message_type_t;
+
+typedef enum
+{
+    FM_UNSPEC,
+    FM_CREATE,
+    FM_DELETE,
+    FM_MODIFY,
+    FM_RENAME,
+    FM_WARNING,
+} file_message_type_t;
+
+typedef union
+{
+    process_message_type_t process;
+    file_message_type_t file;
+} message_type_t;
 
 #define COMMON_FIELDS                           \
     u32 pid;                                    \
@@ -216,6 +233,20 @@ typedef struct
 
 typedef struct
 {
+    u32 uid;
+    u32 gid;
+    u32 mode;
+} file_ownership_t;
+
+typedef enum 
+{
+    LINK_NONE,
+    LINK_SYMBOLIC,
+    LINK_HARD,
+} file_link_type_t; 
+
+typedef struct
+{
     u32 child_pid;
     u64 flags;
 } clone_info_t;
@@ -300,6 +331,7 @@ typedef enum
     RET_SYS_EXECVEAT,
     RET_SYS_EXECVE,
     SYS_EXEC_PWD,
+    RET_DO_MKDIRAT,
     HANDLE_PWD,
 } tail_call_slot_t;
 
@@ -317,8 +349,8 @@ typedef union
 
 typedef struct
 {
-    process_message_warning_t code;
-    process_message_type_t message_type;
+    warning_t code;
+    message_type_t message_type;
     u64 pid_tgid;
     error_info_t info;
 } warning_info_t;
@@ -344,6 +376,41 @@ typedef struct
     // not allowed inside union
     char strings[];
 } process_message_t, *pprocess_message_t;
+
+typedef struct
+{
+    u32 pid;
+    u64 mono_ns;
+    u32 buffer_len;
+    file_info_t target;
+    file_ownership_t target_owner;
+    union {
+        struct {
+            file_link_type_t source_link;
+        } create;
+        struct {
+            file_ownership_t before_owner;
+        } modify;
+        struct {
+            file_info_t source;
+            file_info_t overwr;
+            file_ownership_t overwr_owner;
+        } rename;
+    } u;
+} file_action_t;
+
+typedef union
+{
+    file_action_t action;
+    warning_info_t warning;
+} file_message_data_t;
+
+typedef struct
+{
+    file_message_type_t type;
+    file_message_data_t u;
+    char strings[];
+} file_message_t, *pfile_message_t;
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5,3,0)
 // clone3 args are not available in sched.h until 5.3, and we build against 4.4

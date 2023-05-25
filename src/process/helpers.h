@@ -10,7 +10,7 @@ static __always_inline u32* get_offset(u64 field) {
     if (offset == NULL) {
         error_info_t info = {0};
         info.offset_crc = field;
-        set_local_warning(PMW_READING_FIELD, info);
+        set_local_warning(W_READING_FIELD, info);
     }
 
     return offset;
@@ -36,7 +36,7 @@ static __always_inline int read_field(void *base, u64 field, void *dst, size_t s
     if (ret < 0) {
         error_info_t info = {0};
         info.offset_crc = field;
-        set_local_warning(PMW_PTR_FIELD_READ, info);
+        set_local_warning(W_PTR_FIELD_READ, info);
     }
 
     return ret;
@@ -51,7 +51,7 @@ static __always_inline void* read_field_ptr(void *base, u64 field) {
     if (dst == NULL) {
         error_info_t info = {0};
         info.offset_crc = field;
-        set_local_warning(PMW_NULL_FIELD, info);
+        set_local_warning(W_NULL_FIELD, info);
     }
 
     return dst;
@@ -101,7 +101,7 @@ static __always_inline int fill_syscall(syscall_info_t *syscall_info, void *ts, 
         if (bpf_probe_read(&luid, sizeof(luid), ts + *offset) < 0) {
             error_info_t info = {0};
             info.offset_crc = offset_key;
-            set_local_warning(PMW_PTR_FIELD_READ, info);
+            set_local_warning(W_PTR_FIELD_READ, info);
 
             return -1;
         }

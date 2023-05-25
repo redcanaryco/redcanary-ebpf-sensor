@@ -40,6 +40,9 @@ const u64 CRC_PATH_MNT = 0x88c40f5cf27266ae;
 /* dentry->d_name */
 const u64 CRC_DENTRY_D_NAME = 0x1b807e513eab1323;
 
+/* dentry->d_inode */
+const u64 CRC_DENTRY_D_INODE = 0x3A4154E1EBE3C516;
+
 /* qstr->hash_len */
 const u64 CRC_QSTR_HASH_LEN = 0xeb88a6081906b367;
 
@@ -60,6 +63,15 @@ const u64 CRC_INODE_FS = 0x61ac74b5c543f248;
 
 /* inode->i_sb */
 const u64 CRC_INODE_I_SB = 0x861dc69e083a70b5;
+
+/* inode->i_mode */
+const u64 CRC_INODE_I_MODE = 0xC3ECA32D8DB5FBC3;
+
+/* inode->i_uid */
+const u64 CRC_INODE_I_UID = 0x70149101D7E8C934;
+
+/* inode->i_gid */
+const u64 CRC_INODE_I_GID = 0x5353E0ECE03150E1;
 
 /* super_block->s_dev */
 const u64 CRC_SBLOCK_S_DEV = 0xb1c03bec387e1aca;
