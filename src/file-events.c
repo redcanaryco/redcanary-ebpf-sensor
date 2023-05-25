@@ -59,7 +59,18 @@ static __always_inline int push_file_warning(struct pt_regs *ctx, file_message_t
 static __always_inline int extract_file_info_owner(void *ptr, file_info_t *file_info, file_ownership_t *file_owner)
 {
     void *d_inode = read_field_ptr(ptr, CRC_DENTRY_D_INODE);
-    if (d_inode == NULL) return -1;
+    if (d_inode == NULL) {
+        // TODO: Once we are confident we can ignore dentries without inodes, return a "filter me" value
+        // Right now we are only aware of this happening with mkdir in cgroupfs
+        // Set some invalid values so that we can still resolve the path and see which one it was.
+        file_info->inode = 0;
+        file_info->devmajor = 0;
+        file_info->devminor = 0;
+        file_owner->uid = 0;
+        file_owner->gid = 0;
+        file_owner->mode = 0;
+        return 0;
+    }
 
     void *i_sb = read_field_ptr(d_inode, CRC_INODE_I_SB);
     if (i_sb == NULL) return -1;
@@ -172,6 +183,10 @@ static __always_inline void exit_mkdir(struct pt_regs *ctx, tail_call_slot_t tai
 
     u64 pid_tgid = bpf_get_current_pid_tgid();
     load_event(incomplete_mkdirs, pid_tgid, incomplete_mkdir_t);
+    if (event.target_dentry == NULL) {
+        set_empty_local_warning(W_NO_DENTRY);
+        goto EmitWarning;
+    }
     ret = extract_file_info_owner(event.target_dentry, &fm->u.action.target, &fm->u.action.target_owner);
     if (ret < 0) goto EmitWarning;
 
@@ -190,6 +205,8 @@ static __always_inline void exit_mkdir(struct pt_regs *ctx, tail_call_slot_t tai
 
     write_null_char(cursor.buffer, cursor.offset);
     push_flexible_file_message(ctx, fm, *cursor.offset);
+    // My attempts to call bpf_map_delete_elem() so far have caused the verifier to fail it
+    // so just rely on the LRU functionality to keep the map from getting too big
     return;
 
     EventMismatch:
