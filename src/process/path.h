@@ -5,6 +5,10 @@
 // maximum segments we can read from a d_path before doing a tail call
 #define MAX_PATH_SEGMENTS_NOTAIL 25
 
+#ifndef USE_PATH_FILTER
+#define USE_PATH_FILTER 0
+#endif
+
 typedef struct
 {
     // the dentry to the next path segment
@@ -12,20 +16,24 @@ typedef struct
     // the virtual fs mount where the path is mounted
     void *vfsmount;
     // filter state machine state; init to 0 for filtering, -1 for none
+#if USE_PATH_FILTER
     int filter_state;
     // filter match tag; filled by filter when a match is found
-    char filter_tag[MAX_TAG];
+    int filter_tag;
+#endif
 } cached_path_t;
 
+#if USE_PATH_FILTER
 // A table containing state transitions for a path parsing filter
 struct bpf_map_def SEC("maps/filter_transitions") filter_transitions = {
     .type = BPF_MAP_TYPE_HASH,
     .key_size = sizeof(filter_key_t),
     .value_size = sizeof(filter_value_t),
-    .max_entries = 2048,
+    .max_entries = 4096,
     .pinning = 0,
     .namespace = "",
 };
+#endif
 
 // A per cpu cache of dentry so we can hold it across tail calls.
 struct bpf_map_def SEC("maps/percpu_path") percpu_path = {
@@ -44,22 +52,23 @@ static __always_inline void init_cached_path(cached_path_t *cached_path, void *p
 
     // cached_path->vfsmount = path->mnt;
     cached_path->vfsmount = read_field_ptr(path, CRC_PATH_MNT);
-
+#if USE_PATH_FILTER
     // no filtering by default
     cached_path->filter_state = -1;
+#endif
 }
 
+#if USE_PATH_FILTER
 static __always_inline void init_filtered_cached_path(cached_path_t *cached_path, void *dentry, void *vfsmount)
 {
-    char empty_tag[MAX_TAG] = {0};
-
     cached_path->next_dentry = dentry;
     cached_path->vfsmount = vfsmount;
     // set the filter machine at the start state;
     cached_path->filter_state = 0;
     // clear the filter tag
-    bpf_probe_read(cached_path->filter_tag, MAX_TAG, empty_tag);
+    cached_path->filter_tag = -1;
 }
+#endif
 
 // writes '\0' into the buffer; checks and updates the offset
 static __always_inline void write_null_char(buf_t *buffer, u32 *offset)
@@ -152,7 +161,7 @@ static __always_inline int write_path(struct pt_regs *ctx, cached_path_t *cached
     bpf_probe_read(&mnt_root, sizeof(mnt_root), cached_path->vfsmount + mnt_root_offset);
 
     int ret = 0;
-
+#if USE_PATH_FILTER
     filter_key_t key = {0};           // the main key storage for filter transition lookups
     filter_value_t *val = NULL;
 
@@ -164,6 +173,7 @@ static __always_inline int write_path(struct pt_regs *ctx, cached_path_t *cached
 
     // Init the retry_key's path string, which is always the same
     retry_key.path_segment[0] = '*';
+#endif
 
 // Anything we add to this for-loop will be repeated
 // MAX_PATH_SEGMENTS_NOTAIL so be very careful of going over the max
@@ -199,6 +209,7 @@ static __always_inline int write_path(struct pt_regs *ctx, cached_path_t *cached
         if (bpf_probe_read(&offset, sizeof(offset), dentry + name) < 0)
             goto NameError;
 
+#if USE_PATH_FILTER
         // Path filtering, only if the filter is active
         if (cached_path->filter_state >= 0) {
             val = NULL;
@@ -217,6 +228,7 @@ static __always_inline int write_path(struct pt_regs *ctx, cached_path_t *cached
             // Terminate the filter lookup if there was no value at either key
             cached_path->filter_state = val ? val->next_state : -1;
         }
+#endif
 
         // NAME_MAX doesn't include null character; so +1 to take it
         // into account. Not all systems enforce NAME_MAX so
@@ -239,6 +251,7 @@ static __always_inline int write_path(struct pt_regs *ctx, cached_path_t *cached
     if (bpf_probe_read(&offset, sizeof(offset), cached_path->next_dentry + name) < 0)
             goto NameError;
 
+#if USE_PATH_FILTER
     // If the filter is still active, it must match on the first try to succeed
     if (cached_path->filter_state >= 0) {
         val = NULL;
@@ -249,13 +262,14 @@ static __always_inline int write_path(struct pt_regs *ctx, cached_path_t *cached
             val = (filter_value_t *)bpf_map_lookup_elem(&filter_transitions, &key);
         }
         // A successful lookup here is only a match if the tag is not an empty string
-        if (val && val->filter_tag[0]) {
+        if (val && val->tag > 0) {
             cached_path->filter_state = val->next_state;
-            bpf_probe_read_str(cached_path->filter_tag, MAX_TAG, val->filter_tag);
+            cached_path->filter_tag = val->tag;
         } else {
             cached_path->filter_state = -1;
         }
     }
+#endif
 
     ret = write_string((char *)offset, buf->buffer, buf->offset, NAME_MAX + 1);
     if (ret < 0) goto WriteError;

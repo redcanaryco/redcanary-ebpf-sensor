@@ -383,10 +383,9 @@ typedef struct {
     int current_state;
 } filter_key_t;
 
-#define MAX_TAG 8
 typedef struct {
     int next_state;
-    char filter_tag[MAX_TAG];
+    int tag;
 } filter_value_t;
 
 typedef struct
@@ -396,7 +395,7 @@ typedef struct
     u32 buffer_len;
     file_info_t target;
     file_ownership_t target_owner;
-    char filter_tag[MAX_TAG];
+    u32 tag;
     union {
         struct {
             file_link_type_t source_link;
