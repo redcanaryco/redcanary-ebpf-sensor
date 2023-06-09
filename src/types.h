@@ -377,6 +377,17 @@ typedef struct
     char strings[];
 } process_message_t, *pprocess_message_t;
 
+#define MAX_PATH_SEG 64
+typedef struct {
+    char path_segment[MAX_PATH_SEG];
+    int current_state;
+} filter_key_t;
+
+typedef struct {
+    int next_state;
+    int tag;
+} filter_value_t;
+
 typedef struct
 {
     u32 pid;
@@ -384,6 +395,7 @@ typedef struct
     u32 buffer_len;
     file_info_t target;
     file_ownership_t target_owner;
+    u32 tag;
     union {
         struct {
             file_link_type_t source_link;
