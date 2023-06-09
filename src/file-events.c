@@ -100,7 +100,8 @@ static __always_inline int extract_file_info_owner(void *ptr, file_info_t *file_
 typedef struct {
   u64 pid_tgid;
   u64 start_ktime_ns;
-  void *target_dentry;
+  void *target_vfsmount;     // vfsmount of the containing directory
+  void *target_dentry;  // dentry of the new directory
 } incomplete_mkdir_t;
 
 // A map of mkdirs that have started (a kprobe) but are yet to finish
@@ -139,13 +140,14 @@ static __always_inline void enter_mkdir(struct pt_regs *ctx)
     return;
 }
 
-static __always_inline void store_dentry(struct pt_regs *ctx, void *dentry)
+static __always_inline void store_dentry(struct pt_regs *ctx, void *path, void *dentry)
 {
     u64 pid_tgid = bpf_get_current_pid_tgid();
 
     load_event(incomplete_mkdirs, pid_tgid, incomplete_mkdir_t);
     if (event.target_dentry == NULL) {
         event.target_dentry = dentry;
+        event.target_vfsmount = read_field_ptr(path, CRC_PATH_MNT);
         bpf_map_update_elem(&incomplete_mkdirs, &pid_tgid, &event, BPF_ANY);
     }
     return;
@@ -183,7 +185,7 @@ static __always_inline void exit_mkdir(struct pt_regs *ctx, tail_call_slot_t tai
 
     u64 pid_tgid = bpf_get_current_pid_tgid();
     load_event(incomplete_mkdirs, pid_tgid, incomplete_mkdir_t);
-    if (event.target_dentry == NULL) {
+    if (event.target_dentry == NULL || event.target_vfsmount == NULL) {
         set_empty_local_warning(W_NO_DENTRY);
         goto EmitWarning;
     }
@@ -196,17 +198,20 @@ static __always_inline void exit_mkdir(struct pt_regs *ctx, tail_call_slot_t tai
     fm->u.action.buffer_len = sizeof(file_message_t);
     fm->u.action.u.create.source_link = LINK_NONE;
 
-    cached_path->next_dentry = event.target_dentry;
+    init_filtered_cached_path(cached_path, event.target_dentry, event.target_vfsmount);
 
     ResolveName:
     ret = write_path(ctx, cached_path, &cursor, tail_call);
-    cached_path->next_dentry = NULL;
     if (ret < 0) goto EmitWarning;
+    if (cached_path->filter_state <= 0) goto NoEvent; // Didn't match watched path filter
 
-    write_null_char(cursor.buffer, cursor.offset);
+    bpf_probe_read_str(fm->u.action.filter_tag, MAX_TAG, cached_path->filter_tag);
     push_flexible_file_message(ctx, fm, *cursor.offset);
     // My attempts to call bpf_map_delete_elem() so far have caused the verifier to fail it
     // so just rely on the LRU functionality to keep the map from getting too big
+    write_null_char(cursor.buffer, cursor.offset);
+    // lookup tail calls completed; ensure we re-init cached_path next call
+    cached_path->next_dentry = NULL;
     return;
 
     EventMismatch:
@@ -215,9 +220,9 @@ static __always_inline void exit_mkdir(struct pt_regs *ctx, tail_call_slot_t tai
 
     EmitWarning:
     push_file_warning(ctx, fm, FM_CREATE);
-    return;
 
     NoEvent:
+    cached_path->next_dentry = NULL;
     return;
 }
 
@@ -232,9 +237,10 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_mkdirat) {
     enter_mkdir(ctx);
     return 0;
 }
-SEC("kprobe/security_inode_mkdir")
-int BPF_KPROBE(security_inode_mkdir, struct inode *dir, struct dentry *dentry, umode_t mode) {
-    store_dentry(ctx, (void *)dentry);
+
+SEC("kprobe/security_path_mkdir")
+int BPF_KPROBE(security_path_mkdir, const struct path *dir, struct dentry *dentry, umode_t mode) {
+    store_dentry(ctx, (void *)dir, (void *)dentry);
     return 0;
 }
 
