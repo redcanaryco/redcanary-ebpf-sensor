@@ -1,5 +1,10 @@
 #pragma once
 
+#import "../bpf_helpers.h"
+#import "../common.h"
+#import "../offsets.h"
+#import "./helpers.h"
+
 // TODO: make programs for newer kernels where we can use higher values
 
 // maximum segments we can read from a d_path before doing a tail call
@@ -224,7 +229,7 @@ static __always_inline int write_path(struct pt_regs *ctx, cached_path_t *cached
                 // The retry_key always uses the same path segment string so we don't need to reset
                 retry_key.current_state = cached_path->filter_state;
                 val = (filter_value_t *)bpf_map_lookup_elem(&filter_transitions, &retry_key);
-            } 
+            }
             // Terminate the filter lookup if there was no value at either key
             cached_path->filter_state = val ? val->next_state : -1;
         }
@@ -262,7 +267,7 @@ static __always_inline int write_path(struct pt_regs *ctx, cached_path_t *cached
             val = (filter_value_t *)bpf_map_lookup_elem(&filter_transitions, &key);
         }
         // A successful lookup here is only a match if the tag is not an empty string
-        if (val && val->tag > 0) {
+        if (val && val->tag >= 0) {
             cached_path->filter_state = val->next_state;
             cached_path->filter_tag = val->tag;
         } else {

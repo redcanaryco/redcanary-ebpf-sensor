@@ -1,7 +1,7 @@
+#pragma once
+
 #include "buffer.h"
 #include "warning.h"
-
-#pragma once
 
 // The map where process event messages get emitted to
 struct bpf_map_def SEC("maps/process_events") process_events = {

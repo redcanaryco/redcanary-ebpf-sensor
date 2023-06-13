@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0+
 
-// Configure path.h to include filter code 
-#define USE_PATH_FILTER 1 
+// Configure path.h to include filter code
+#define USE_PATH_FILTER 1
 
 #include <linux/kconfig.h>
 #include <linux/version.h>
