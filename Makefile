@@ -23,6 +23,7 @@ CFLAGS += \
 	-Wno-gnu-variable-sized-type-not-at-end \
 	-Wno-sometimes-uninitialized \
 	-Wno-tautological-compare \
+        -Wmissing-braces \
 	-fno-stack-protector \
 	-Xclang -disable-llvm-passes \
 	-O2
