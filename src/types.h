@@ -238,12 +238,12 @@ typedef struct
     u32 mode;
 } file_ownership_t;
 
-typedef enum 
+typedef enum
 {
     LINK_NONE,
     LINK_SYMBOLIC,
     LINK_HARD,
-} file_link_type_t; 
+} file_link_type_t;
 
 typedef struct
 {
@@ -379,8 +379,8 @@ typedef struct
 
 #define MAX_PATH_SEG 64
 typedef struct {
-    char path_segment[MAX_PATH_SEG];
     int current_state;
+    char path_segment[MAX_PATH_SEG];
 } filter_key_t;
 
 typedef struct {
