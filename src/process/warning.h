@@ -1,5 +1,8 @@
 #pragma once
 
+#import "../bpf_helpers.h"
+#import "../types.h"
+
 typedef struct
 {
     warning_t code;

@@ -1,5 +1,7 @@
 #pragma once
 
+#import "../bpf_helpers.h"
+
 // maximum size of each buffer (since they may have flexible arrays at
 // the end)
 #define MAX_PERCPU_BUFFER (1 << 15) // 32 KB
