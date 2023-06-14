@@ -1,8 +1,8 @@
 #include <linux/kconfig.h>
 #include <linux/uio.h>
 #include <uapi/linux/ptrace.h>
-#include "common.h"
-#include "types.h"
+#include "common/common.h"
+#include "common/types.h"
 
 struct bpf_map_def SEC("maps/pam_hash") pam_hash = {
     .type = BPF_MAP_TYPE_HASH,

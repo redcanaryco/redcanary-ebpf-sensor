@@ -1,5 +1,5 @@
-#include "buffer.h"
-#include "../types.h"
+#include "../common/buffer.h"
+#include "../common/types.h"
 
 // 256 is BINPRM_BUF_SIZE starting on kernels 5.1+.
 #define BINPRM_BUF_SIZE 256

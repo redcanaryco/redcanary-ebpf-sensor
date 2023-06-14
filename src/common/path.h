@@ -1,9 +1,9 @@
 #pragma once
 
-#import "../bpf_helpers.h"
-#import "../common.h"
-#import "../offsets.h"
-#import "./helpers.h"
+#include "bpf_helpers.h"
+#include "common.h"
+#include "offsets.h"
+#include "helpers.h"
 
 // TODO: make programs for newer kernels where we can use higher values
 

@@ -4,11 +4,11 @@
 #include <uapi/linux/ptrace.h>
 #include <linux/uio.h>
 #include <linux/fcntl.h>
-#include "bpf_helpers.h"
-#include "types.h"
-#include "offsets.h"
-#include "repeat.h"
-#include "common.h"
+#include "common/bpf_helpers.h"
+#include "common/types.h"
+#include "common/offsets.h"
+#include "common/repeat.h"
+#include "common/common.h"
 
 typedef struct
 {
