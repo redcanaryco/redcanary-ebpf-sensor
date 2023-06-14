@@ -3,8 +3,8 @@
 #include "../common/buffer.h"
 #include "../common/warning.h"
 
-// The map where process event messages get emitted to
-struct bpf_map_def SEC("maps/process_events") process_events = {
+// The map where file event messages get emitted to
+struct bpf_map_def SEC("maps/file_events") file_events = {
     .type = BPF_MAP_TYPE_PERF_EVENT_ARRAY,
     .key_size = sizeof(u32),
     .value_size = sizeof(u32),
@@ -13,10 +13,10 @@ struct bpf_map_def SEC("maps/process_events") process_events = {
     .namespace = "",
 };
 
-// pushes a message to the process_events perfmap for the current CPU.
-static __always_inline int push_message(struct pt_regs *ctx, pprocess_message_t pm)
+// pushes a message to the file_events perfmap for the current CPU.
+static __always_inline int push_file_message(struct pt_regs *ctx, file_message_t *fm)
 {
-    return bpf_perf_event_output(ctx, &process_events, BPF_F_CURRENT_CPU, pm, sizeof(*pm));
+    return bpf_perf_event_output(ctx, &file_events, BPF_F_CURRENT_CPU, fm, sizeof(*fm));
 }
 
 // pushes a message with an extra `dynamic_size` number of bytes. It
@@ -24,24 +24,24 @@ static __always_inline int push_message(struct pt_regs *ctx, pprocess_message_t 
 // is a *bug* if dynamic_size here is larger than MAX_PERCPU_BUFFER
 // and it will cause the number of bytes to to dynamic_size %
 // MAX_PERCPU_BUFFER.
-static __always_inline int push_flexible_message(struct pt_regs *ctx, pprocess_message_t ev, u64 dynamic_size)
+static __always_inline int push_flexible_file_message(struct pt_regs *ctx, file_message_t *ev, u64 dynamic_size)
 {
     // The -1 and +1 logic is here to prevent a buffer that is exactly
     // MAX_PERCPU_BUFFER size to become 0 due to the bitwise AND. We
     // know that dynamic_size will never be 0 so this is safe.
     u64 size_to_send = ((dynamic_size - 1) & (MAX_PERCPU_BUFFER - 1)) + 1;
-    return bpf_perf_event_output(ctx, &process_events, BPF_F_CURRENT_CPU, ev, size_to_send);
+    return bpf_perf_event_output(ctx, &file_events, BPF_F_CURRENT_CPU, ev, size_to_send);
 }
 
 // pushes a warning to the process_events perfmap for the current CPU.
-static __always_inline int push_warning(struct pt_regs *ctx, pprocess_message_t pm,
-                                        process_message_type_t pm_type)
+static __always_inline int push_file_warning(struct pt_regs *ctx, file_message_t *fm,
+                                             file_message_type_t fm_type)
 {
-    pm->type = PM_WARNING;
+    fm->type = FM_WARNING;
     message_type_t m_type;
-    m_type.process = pm_type;
+    m_type.file = fm_type;
 
-    load_warning_info(&pm->u.warning_info, m_type);
+    load_warning_info(&fm->u.warning, m_type);
 
-    return push_message(ctx, pm);
+    return push_file_message(ctx, fm);
 }

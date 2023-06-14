@@ -4,9 +4,9 @@
 #include <uapi/linux/udp.h>
 #include <uapi/linux/ip.h>
 #include <uapi/linux/in.h>
-#include "types.h"
-#include "offsets.h"
-#include "common.h"
+#include "common/types.h"
+#include "common/offsets.h"
+#include "common/common.h"
 
 typedef void *_skbuff;
 typedef void *_sock;

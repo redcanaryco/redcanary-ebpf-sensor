@@ -1,7 +1,7 @@
 #pragma once
 
-#import "../bpf_helpers.h"
-#import "../types.h"
+#include "types.h"
+#include "bpf_helpers.h"
 
 typedef struct
 {

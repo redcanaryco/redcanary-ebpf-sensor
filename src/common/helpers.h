@@ -1,6 +1,7 @@
 #pragma once
 
-#include "push_message.h"
+#include "types.h"
+#include "common.h"
 #include "warning.h"
 
 /// Returns the offset to a field. If not found the current CPU's
