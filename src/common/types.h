@@ -235,7 +235,7 @@ typedef struct
 {
     u32 uid;
     u32 gid;
-    u32 mode;
+    u16 mode;
 } file_ownership_t;
 
 typedef enum

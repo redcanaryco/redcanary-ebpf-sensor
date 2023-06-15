@@ -1,6 +1,7 @@
 #pragma once
 
 #include "bpf_helpers.h"
+#include "buffer.h"
 #include "common.h"
 #include "offsets.h"
 #include "helpers.h"
