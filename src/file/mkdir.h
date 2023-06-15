@@ -2,6 +2,7 @@
 
 #include "push_file_message.h"
 #include "dentry.h"
+#include "common/path.h"
 
 typedef struct {
   u64 pid_tgid;
@@ -130,4 +131,3 @@ static __always_inline void exit_mkdir(struct pt_regs *ctx, tail_call_slot_t tai
     cached_path->next_dentry = NULL;
     return;
 }
-
