@@ -21,8 +21,8 @@ typedef struct
     void *next_dentry;
     // the virtual fs mount where the path is mounted
     void *vfsmount;
-    // filter state machine state; init to 0 for filtering, -1 for none
 #if USE_PATH_FILTER
+    // filter state machine state; init to 0 for filtering, -1 for none
     int filter_state;
     // filter match tag; filled by filter when a match is found
     int filter_tag;

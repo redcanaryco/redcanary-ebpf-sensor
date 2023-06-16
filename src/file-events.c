@@ -3,19 +3,10 @@
 // Configure path.h to include filter code
 #define USE_PATH_FILTER 1
 
-#include <linux/kconfig.h>
-#include <linux/version.h>
-#include <linux/fs.h>
+#include <asm/ptrace.h>
+#include <linux/path.h>
 
 #include "common/bpf_helpers.h"
-#include "common/types.h"
-#include "common/offsets.h"
-#include "common/common.h"
-#include "common/helpers.h"
-#include "common/buffer.h"
-#include "common/path.h"
-#include "common/warning.h"
-
 #include "file/mkdir.h"
 
 SEC("kprobe/sys_mkdir")

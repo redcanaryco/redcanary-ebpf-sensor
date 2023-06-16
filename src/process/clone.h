@@ -1,5 +1,9 @@
 #pragma once
 
+#include <linux/kconfig.h>
+#include <linux/sched.h>
+#include <asm/ptrace.h>
+
 #include "../common/helpers.h"
 #include "push_message.h"
 

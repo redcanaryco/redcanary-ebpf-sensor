@@ -518,6 +518,8 @@ static __always_inline typeof(name(0)) ____##name(struct pt_regs *ctx, ##args)
  *  - (parm5) regs[4]
  */
 
+#define u64 unsigned long long
+
 struct _x64_pt_regs
 {
 	u64 r15;
