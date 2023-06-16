@@ -3,6 +3,8 @@
 #include "../common/types.h"
 #include "../common/helpers.h"
 
+// fill file_info and file_owner fields from fields on the passed in dentry pointer
+// the file_owner pointer may be null if you do not want to get those values
 static __always_inline int extract_file_info_owner(void *dentry, file_info_t *file_info, file_ownership_t *file_owner)
 {
     void *d_inode = read_field_ptr(dentry, CRC_DENTRY_D_INODE);
@@ -32,6 +34,8 @@ static __always_inline int extract_file_info_owner(void *dentry, file_info_t *fi
 
     file_info->devmajor = MAJOR(i_dev);
     file_info->devminor = MINOR(i_dev);
+
+    if (file_owner == NULL) return 0;
 
     // uid/gid/mode
     if (read_field(d_inode, CRC_INODE_I_UID, &file_owner->uid, sizeof(file_owner->uid)) < 0)
