@@ -97,6 +97,19 @@ check all the sections at the same time.
 eBPF programs can branch (but not jump back!) so make sure to check
 that none of the branches go over the 4096 instructions limit.
 
+# Development with clangd
+
+If clangd is used as the LSP, compile commands can be easily generated with:
+
+```bash
+bear -- make dev
+```
+
+After that `clangd` should be able to pickup the created
+`compile_commands.json`. A config exists in `.clangd` to further tweak
+in case the compile commands are not enough for clangd to have a
+successful build.
+
 # Licensing
 
 Please note, these programs are mostly licensed under GPL, which is

@@ -1,0 +1,15 @@
+---
+If:
+  PathMatch: src/common/bpf_helpers\.h
+Diagnostics:
+  Suppress: -Wunused-variable
+
+---
+CompileFlags:
+  Add: -ferror-limit=0
+
+---
+If:
+  PathMatch: src/file/.*\.h
+CompileFlags:
+  Add: -DUSE_PATH_FILTER=1

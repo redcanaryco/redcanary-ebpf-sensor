@@ -1,8 +1,9 @@
 #pragma once
 
+#include <asm/ptrace.h>
+
 #include "../common/common.h"
 #include "../common/helpers.h"
-
 #include "push_message.h"
 
 typedef struct {

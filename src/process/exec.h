@@ -1,10 +1,11 @@
 #pragma once
 
+#include <asm/ptrace.h>
+
 #include "../common/bpf_tracing.h"
 #include "../common/buffer.h"
 #include "../common/helpers.h"
 #include "../common/path.h"
-
 #include "push_message.h"
 #include "script.h"
 
