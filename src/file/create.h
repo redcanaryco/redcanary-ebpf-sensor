@@ -158,10 +158,10 @@ static __always_inline void exit_create(struct pt_regs *ctx)
             init_filtered_cached_path(cached_path, event.source, event.target_vfsmount);
             // don't do the filter logic again if we already matched on target
             if (fm->u.action.tag != -1) cached_path->filter_state = -1;
+            write_null_char(cursor.buffer, cursor.offset);
     }
 
     ResolveSource:
-    write_null_char(cursor.buffer, cursor.offset);
     write_path(ctx, cached_path, &cursor, (tail_call_t){
             .slot = EXIT_CREATE,
             .table = &tail_call_table,
