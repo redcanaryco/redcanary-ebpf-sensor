@@ -45,8 +45,15 @@ int BPF_KPROBE(security_path_mkdir, const struct path *dir, struct dentry *dentr
     return 0;
 }
 
-SEC("kretprobe/ret_do_mkdirat")
-int BPF_KRETPROBE(do_mkdirat, int retval) {
+SEC("kretprobe/ret_sys_mkdir")
+int BPF_KRETPROBE(ret_sys_mkdir, int retval) {
+    if (retval < 0) return 0;
+    bpf_tail_call(ctx, &tail_call_table, EXIT_CREATE);
+    return 0;
+}
+
+SEC("kretprobe/ret_sys_mkdirat")
+int BPF_KRETPROBE(ret_sys_mkdirat, int retval) {
     if (retval < 0) return 0;
     bpf_tail_call(ctx, &tail_call_table, EXIT_CREATE);
     return 0;
