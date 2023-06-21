@@ -14,7 +14,7 @@ struct bpf_map_def SEC("maps/file_events") file_events = {
 };
 
 // pushes a message to the file_events perfmap for the current CPU.
-static __always_inline int push_file_message(struct pt_regs *ctx, file_message_t *fm)
+static __always_inline int push_file_message(void *ctx, file_message_t *fm)
 {
     return bpf_perf_event_output(ctx, &file_events, BPF_F_CURRENT_CPU, fm, sizeof(*fm));
 }
@@ -24,7 +24,7 @@ static __always_inline int push_file_message(struct pt_regs *ctx, file_message_t
 // is a *bug* if dynamic_size here is larger than MAX_PERCPU_BUFFER
 // and it will cause the number of bytes to to dynamic_size %
 // MAX_PERCPU_BUFFER.
-static __always_inline int push_flexible_file_message(struct pt_regs *ctx, file_message_t *ev, u64 dynamic_size)
+static __always_inline int push_flexible_file_message(void *ctx, file_message_t *ev, u64 dynamic_size)
 {
     // The -1 and +1 logic is here to prevent a buffer that is exactly
     // MAX_PERCPU_BUFFER size to become 0 due to the bitwise AND. We
@@ -34,7 +34,7 @@ static __always_inline int push_flexible_file_message(struct pt_regs *ctx, file_
 }
 
 // pushes a warning to the process_events perfmap for the current CPU.
-static __always_inline int push_file_warning(struct pt_regs *ctx, file_message_t *fm,
+static __always_inline int push_file_warning(void *ctx, file_message_t *fm,
                                              file_message_type_t fm_type)
 {
     fm->type = FM_WARNING;

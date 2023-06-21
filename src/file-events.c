@@ -10,6 +10,9 @@
 
 #include "common/bpf_helpers.h"
 #include "file/create.h"
+#include "file/delete.h"
+
+/* START CREATE-LIKE PROBES */
 
 // tail-call-only function to finish and send the create message
 // Stored in index EXIT_CREATE
@@ -106,7 +109,94 @@ int BPF_KRETPROBE(ret_vfs_link, int retval) {
     return 0;
 }
 
+/* END CREATE-LIKE PROBES */
 
+/* START DELETE-LIKE PROBES */
+
+struct syscalls_exit_args {
+    __u64 unused;
+    long __syscall_nr;
+    long ret;
+};
+
+struct syscalls_enter_unlink_args {
+    __u64 unused;
+    long __syscall_nr;
+    const char *pathname;
+};
+
+SEC("tracepoint/sys_enter_unlink")
+int tracepoint__syscalls_sys_enter__unlink(struct syscalls_enter_unlink_args *ctx) {
+    enter_delete(ctx);
+    return 0;
+}
+
+SEC("tracepoint/sys_exit_unlink")
+int tracepoint__syscalls_sys_exit__unlink(struct syscalls_exit_args *ctx) {
+    if (ctx->ret < 0) return 0;
+    bpf_tail_call(ctx, &tp_programs, EXIT_DELETE);
+    return 0;
+}
+
+struct syscalls_enter_unlinkat_args {
+    __u64 unused;
+    long __syscall_nr;
+    long dfd;
+    const char *pathname;
+    long flag;
+};
+
+SEC("tracepoint/sys_enter_unlinkat")
+int tracepoint__syscalls_sys_enter__unlinkat(struct syscalls_enter_unlinkat_args *ctx) {
+    enter_delete(ctx);
+    return 0;
+}
+
+SEC("tracepoint/sys_exit_unlinkat")
+int tracepoint__syscalls_sys_exit__unlinkat(struct syscalls_exit_args *ctx) {
+    if (ctx->ret < 0) return 0;
+    bpf_tail_call(ctx, &tp_programs, EXIT_DELETE);
+    return 0;
+}
+
+SEC("kprobe/security_path_unlink")
+int BPF_KPROBE(security_path_unlink, const struct path *dir, struct dentry *dentry) {
+    store_deleted_dentry(ctx, (void *)dir, dentry);
+    return 0;
+}
+
+struct syscalls_enter_rmdir_args {
+    __u64 unused;
+    long __syscall_nr;
+    const char *pathname;
+};
+
+SEC("tracepoint/sys_enter_rmdir")
+int tracepoint__syscalls_sys_enter__rmdir(struct syscalls_enter_rmdir_args *ctx) {
+    enter_delete(ctx);
+    return 0;
+}
+
+SEC("kprobe/security_path_rmdir")
+int BPF_KPROBE(security_path_rmdir, const struct path *dir, struct dentry *dentry) {
+    store_deleted_dentry(ctx, (void *)dir, dentry);
+    return 0;
+}
+
+SEC("tracepoint/sys_exit_rmdir")
+int tracepoint__syscalls_sys_exit__rmdir(struct syscalls_exit_args *ctx) {
+    if (ctx->ret < 0) return 0;
+    bpf_tail_call(ctx, &tp_programs, EXIT_DELETE);
+    return 0;
+}
+
+SEC("tracepoint/exit_delete")
+int tracepoint__exit_delete(void *ctx) {
+    exit_delete(ctx);
+    return 0;
+}
+
+/* END DELETE-LIKE PROBES */
 
 char _license[] SEC("license") = "GPL";
 uint32_t _version SEC("version") = 0xFFFFFFFE;
