@@ -1,5 +1,6 @@
 #pragma once
 
+#include "common/common.h"
 #include "push_file_message.h"
 #include "dentry.h"
 #include "common/path.h"
@@ -106,7 +107,24 @@ static __always_inline void exit_create(struct pt_regs *ctx)
         set_empty_local_warning(W_NO_DENTRY);
         goto EmitWarning;
     }
-    ret = extract_file_info_owner(event.target_dentry, &fm->u.action.target, &fm->u.action.target_owner);
+
+    void *d_inode = read_field_ptr(event.target_dentry, CRC_DENTRY_D_INODE);
+    if (d_inode == NULL) {
+        // TODO: Once we are confident we can ignore dentries without
+        // inodes then just skip this event. Right now we are only
+        // aware of this happening with mkdir in cgroupfs. Set some
+        // invalid values so that we can still resolve the path and
+        // see which one it was.
+        fm->u.action.target.inode = 0;
+        fm->u.action.target.devmajor = 0;
+        fm->u.action.target.devminor = 0;
+        fm->u.action.target_owner.uid = 0;
+        fm->u.action.target_owner.gid = 0;
+        fm->u.action.target_owner.mode = 0;
+    } else {
+        ret = extract_file_info_owner(d_inode, &fm->u.action.target, &fm->u.action.target_owner);
+    }
+
     if (ret < 0) goto EmitWarning;
 
     fm->type = FM_CREATE;
@@ -118,7 +136,11 @@ static __always_inline void exit_create(struct pt_regs *ctx)
     init_filtered_cached_path(cached_path, event.target_dentry, event.target_vfsmount);
 
     ResolveTarget:
-    ret = write_path(ctx, cached_path, &cursor, EXIT_CREATE);
+    ret = write_path(ctx, cached_path, &cursor,
+                     (tail_call_t){
+                         .slot = EXIT_CREATE,
+                         .table = &tail_call_table,
+                     });
     if (ret < 0) goto EmitWarning;
     fm->u.action.tag = (cached_path->filter_state >= 0) ? cached_path->filter_tag : -1;
     switch (event.link_type) {
@@ -140,7 +162,10 @@ static __always_inline void exit_create(struct pt_regs *ctx)
 
     ResolveSource:
     write_null_char(cursor.buffer, cursor.offset);
-    write_path(ctx, cached_path, &cursor, EXIT_CREATE);
+    write_path(ctx, cached_path, &cursor, (tail_call_t){
+            .slot = EXIT_CREATE,
+            .table = &tail_call_table,
+        });
     if (fm->u.action.tag == -1) {
         if (cached_path->filter_state <= 0) goto NoEvent;
         fm->u.action.tag = cached_path->filter_tag;

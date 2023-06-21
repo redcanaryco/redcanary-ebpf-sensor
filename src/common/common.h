@@ -2,9 +2,24 @@
 
 #include "bpf_helpers.h"
 #include "bpf_tracing.h"
+#include "common/types.h"
 #include "offsets.h"
 
+typedef struct {
+    struct bpf_map_def *table;
+    tail_call_slot_t slot;
+} tail_call_t;
+
 struct bpf_map_def SEC("maps/tail_call_table") tail_call_table = {
+    .type = BPF_MAP_TYPE_PROG_ARRAY,
+    .key_size = sizeof(u32),
+    .value_size = sizeof(u32),
+    .max_entries = 32,
+    .pinning = 0,
+    .namespace = "",
+};
+
+struct bpf_map_def SEC("maps/tp_programs") tp_programs = {
     .type = BPF_MAP_TYPE_PROG_ARRAY,
     .key_size = sizeof(u32),
     .value_size = sizeof(u32),

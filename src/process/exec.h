@@ -6,6 +6,7 @@
 #include "../common/buffer.h"
 #include "../common/helpers.h"
 #include "../common/path.h"
+#include "common/types.h"
 #include "push_message.h"
 #include "script.h"
 
@@ -144,7 +145,10 @@ static __always_inline void exit_exec(struct pt_regs *ctx, process_message_type_
  ExeName:;
     /* WRITE EXE PATH; IT MAY TAIL CALL */
     cursor_t cursor = { .buffer = buffer, .offset = &pm->u.syscall_info.data.exec_info.buffer_length };
-    ret = write_path(ctx, cached_path, &cursor, tail_call);
+    ret = write_path(ctx, cached_path, &cursor, (tail_call_t){
+            .slot = tail_call,
+            .table = &tail_call_table,
+        });
 
     // reset skips back to 0. This will automatically update it in the
     // map so no need to do a bpf_map_update_elem.
@@ -210,7 +214,10 @@ static __always_inline void process_pwd(struct pt_regs *ctx)
  Pwd:;
     /* WRITE PATH; IT MAY TAIL CALL */
     cursor_t cursor = { .buffer = buffer, .offset = &pm->u.syscall_info.data.exec_info.buffer_length };
-    ret = write_path(ctx, cached_path, &cursor, SYS_EXEC_PWD);
+    ret = write_path(ctx, cached_path, &cursor, (tail_call_t){
+            .slot = SYS_EXEC_PWD,
+            .table = &tail_call_table,
+        });
 
  Done:;
     /* PUSH THE EVENT AND RESET */

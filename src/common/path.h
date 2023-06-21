@@ -130,8 +130,8 @@ static __always_inline int write_string(const char *string, buf_t *buffer, u32 *
 // to use path filtering, set cached_path->filter_state to 0 before calling
 // success is indicated by a non-negative return value representing the length of the path
 // a filter match is indicated by a positive cached_path->filter_state upon successful return
-static __always_inline int write_path(struct pt_regs *ctx, cached_path_t *cached_path, cursor_t *buf,
-                                      tail_call_slot_t tail_call)
+static __always_inline int write_path(void *ctx, cached_path_t *cached_path, cursor_t *buf,
+                                      tail_call_t tail_call)
 {
     u32 *offset = get_offset(CRC_DENTRY_D_NAME);
     if (offset == NULL) return -1;
@@ -246,10 +246,10 @@ static __always_inline int write_path(struct pt_regs *ctx, cached_path_t *cached
         if (ret < 0) goto WriteError;
     }
 
-    bpf_tail_call(ctx, &tail_call_table, tail_call);
+    bpf_tail_call(ctx, tail_call.table, tail_call.slot);
 
     error_info_t info = {0};
-    info.tailcall = tail_call;
+    info.tailcall = tail_call.slot;
     set_local_warning(W_TAIL_CALL_MAX, info);
 
     return -1;
