@@ -104,14 +104,7 @@ static __always_inline void exit_delete(void *ctx)
     load_event(incomplete_deletes, pid_tgid, incomplete_delete_t);
     error_info_t info = {0};
 
-    // If the target_dentry wasn't set it means that no path was
-    // actually unlinked - unlink(at) can sometimes "suceed" even for
-    // an error dentry if it was able to get just enough
-    // information. In practice I see this when destroying
-    // containers. We aren't worried about these cases so just skip
-    // it.
-    if (event.target_dentry == NULL) goto NoEvent;
-    if (event.target_vfsmount == NULL) {
+    if (event.target_dentry == NULL || event.target_vfsmount == NULL) {
         set_empty_local_warning(W_NO_DENTRY);
         goto EmitWarning;
     }

@@ -113,41 +113,21 @@ int BPF_KRETPROBE(ret_vfs_link, int retval) {
 
 /* START DELETE-LIKE PROBES */
 
-struct syscalls_enter_unlink_args {
-    __u64 unused;
-    long __syscall_nr;
-    const char *pathname;
-};
-
-struct syscalls_enter_unlinkat_args {
-    __u64 unused;
-    long __syscall_nr;
-    long dfd;
-    const char *pathname;
-    long flag;
-};
-
 struct syscalls_exit_args {
     __u64 unused;
     long __syscall_nr;
     long ret;
 };
 
+struct syscalls_enter_unlink_args {
+    __u64 unused;
+    long __syscall_nr;
+    const char *pathname;
+};
+
 SEC("tracepoint/sys_enter_unlink")
 int tracepoint__syscalls_sys_enter__unlink(struct syscalls_enter_unlink_args *ctx) {
     enter_delete(ctx);
-    return 0;
-}
-
-SEC("tracepoint/sys_enter_unlinkat")
-int tracepoint__syscalls_sys_enter__unlinkat(struct syscalls_enter_unlinkat_args *ctx) {
-    enter_delete(ctx);
-    return 0;
-}
-
-SEC("kprobe/security_path_unlink")
-int BPF_KPROBE(security_path_unlink, const struct path *dir, struct dentry *dentry) {
-    store_deleted_dentry(ctx, (void *)dir, dentry);
     return 0;
 }
 
@@ -158,8 +138,53 @@ int tracepoint__syscalls_sys_exit__unlink(struct syscalls_exit_args *ctx) {
     return 0;
 }
 
+struct syscalls_enter_unlinkat_args {
+    __u64 unused;
+    long __syscall_nr;
+    long dfd;
+    const char *pathname;
+    long flag;
+};
+
+SEC("tracepoint/sys_enter_unlinkat")
+int tracepoint__syscalls_sys_enter__unlinkat(struct syscalls_enter_unlinkat_args *ctx) {
+    enter_delete(ctx);
+    return 0;
+}
+
 SEC("tracepoint/sys_exit_unlinkat")
 int tracepoint__syscalls_sys_exit__unlinkat(struct syscalls_exit_args *ctx) {
+    if (ctx->ret < 0) return 0;
+    bpf_tail_call(ctx, &tp_programs, EXIT_DELETE);
+    return 0;
+}
+
+SEC("kprobe/security_path_unlink")
+int BPF_KPROBE(security_path_unlink, const struct path *dir, struct dentry *dentry) {
+    store_deleted_dentry(ctx, (void *)dir, dentry);
+    return 0;
+}
+
+struct syscalls_enter_rmdir_args {
+    __u64 unused;
+    long __syscall_nr;
+    const char *pathname;
+};
+
+SEC("tracepoint/sys_enter_rmdir")
+int tracepoint__syscalls_sys_enter__rmdir(struct syscalls_enter_rmdir_args *ctx) {
+    enter_delete(ctx);
+    return 0;
+}
+
+SEC("kprobe/security_path_rmdir")
+int BPF_KPROBE(security_path_rmdir, const struct path *dir, struct dentry *dentry) {
+    store_deleted_dentry(ctx, (void *)dir, dentry);
+    return 0;
+}
+
+SEC("tracepoint/sys_exit_rmdir")
+int tracepoint__syscalls_sys_exit__rmdir(struct syscalls_exit_args *ctx) {
     if (ctx->ret < 0) return 0;
     bpf_tail_call(ctx, &tp_programs, EXIT_DELETE);
     return 0;
