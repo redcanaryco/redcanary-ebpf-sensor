@@ -59,7 +59,7 @@ static __always_inline void store_dentry(struct pt_regs *ctx, void *path, void *
     event.target_vfsmount = read_field_ptr(path, CRC_PATH_MNT);
     if (event.target_vfsmount == NULL) goto EmitWarning;
     event.source = source;
-    
+
     bpf_map_update_elem(&incomplete_creates, &pid_tgid, &event, BPF_ANY);
     return;
 
@@ -95,58 +95,56 @@ static __always_inline void exit_create(struct pt_regs *ctx)
     error_info_t info = {0};
 
     u64 pid_tgid = bpf_get_current_pid_tgid();
-    incomplete_create_t *event = bpf_map_lookup_elem(&incomplete_creates, &pid_tgid);
-    if (event == NULL) return;
-    if (event->pid_tgid != pid_tgid) goto EventMismatch;
+    load_event(incomplete_creates, pid_tgid, incomplete_create_t);
 
     if (cached_path->next_dentry != NULL) {
-        if (event->target_dentry == NULL) goto ResolveTarget;
+        if (event.target_dentry != NULL) goto ResolveTarget;
         else goto ResolveSource;
     }
 
-    if (event->target_dentry == NULL || event->target_vfsmount == NULL) {
+    if (event.target_dentry == NULL || event.target_vfsmount == NULL) {
         set_empty_local_warning(W_NO_DENTRY);
         goto EmitWarning;
     }
-    ret = extract_file_info_owner(event->target_dentry, &fm->u.action.target, &fm->u.action.target_owner);
+    ret = extract_file_info_owner(event.target_dentry, &fm->u.action.target, &fm->u.action.target_owner);
     if (ret < 0) goto EmitWarning;
 
     fm->type = FM_CREATE;
-    fm->u.action.pid = event->pid_tgid >> 32;
-    fm->u.action.mono_ns = event->start_ktime_ns;
+    fm->u.action.pid = event.pid_tgid >> 32;
+    fm->u.action.mono_ns = event.start_ktime_ns;
     fm->u.action.buffer_len = sizeof(file_message_t);
-    fm->u.action.u.create.source_link = event->link_type;
+    fm->u.action.u.create.source_link = event.link_type;
 
-    init_filtered_cached_path(cached_path, event->target_dentry, event->target_vfsmount);
+    init_filtered_cached_path(cached_path, event.target_dentry, event.target_vfsmount);
 
     ResolveTarget:
     ret = write_path(ctx, cached_path, &cursor, EXIT_CREATE);
     if (ret < 0) goto EmitWarning;
-    write_null_char(cursor.buffer, cursor.offset);
     fm->u.action.tag = (cached_path->filter_state >= 0) ? cached_path->filter_tag : -1;
-    switch (event->link_type) {
+    switch (event.link_type) {
         case LINK_NONE:
             if (cached_path->filter_state <= 0) goto NoEvent; // Didn't match watched path filter
             else goto FinishMessage;
         case LINK_SYMBOLIC:
             if (cached_path->filter_state <= 0) goto NoEvent; // Didn't match watched path filter
-            write_string(event->source, cursor.buffer, cursor.offset, PATH_MAX);
             write_null_char(cursor.buffer, cursor.offset);
+            write_string(event.source, cursor.buffer, cursor.offset, PATH_MAX);
             goto FinishMessage;
         case LINK_HARD:
-            event->target_dentry = NULL; // mark that we are done with target
-            init_filtered_cached_path(cached_path, event->source, event->target_vfsmount);
+            event.target_dentry = NULL; // mark that we are done with target
+            bpf_map_update_elem(&incomplete_creates, &pid_tgid, &event, BPF_ANY);
+            init_filtered_cached_path(cached_path, event.source, event.target_vfsmount);
             // don't do the filter logic again if we already matched on target
             if (fm->u.action.tag != -1) cached_path->filter_state = -1;
     }
 
     ResolveSource:
+    write_null_char(cursor.buffer, cursor.offset);
     write_path(ctx, cached_path, &cursor, EXIT_CREATE);
-    if (fm->u.action.tag == -1) { 
+    if (fm->u.action.tag == -1) {
         if (cached_path->filter_state <= 0) goto NoEvent;
         fm->u.action.tag = cached_path->filter_tag;
     }
-    write_null_char(cursor.buffer, cursor.offset);
 
     FinishMessage:
     push_flexible_file_message(ctx, fm, *cursor.offset);
@@ -156,7 +154,7 @@ static __always_inline void exit_create(struct pt_regs *ctx)
     return;
 
     EventMismatch:
-    info.stored_pid_tgid = event->pid_tgid;
+    info.stored_pid_tgid = event.pid_tgid;
     set_local_warning(W_PID_TGID_MISMATCH, info);
 
     EmitWarning:
