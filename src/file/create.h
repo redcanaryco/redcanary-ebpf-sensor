@@ -7,29 +7,32 @@
 typedef struct {
   u64 pid_tgid;
   u64 start_ktime_ns;
+  file_link_type_t link_type;
   void *target_vfsmount;  // vfsmount of the containing directory
   void *target_dentry;    // dentry of the new directory
-} incomplete_mkdir_t;
+  void *source;           // dentry for hard link, char for symlink
+} incomplete_create_t;
 
 // A map of mkdirs that have started (a kprobe) but are yet to finish
 // (the kretprobe).
-struct bpf_map_def SEC("maps/incomplete_mkdir") incomplete_mkdirs = {
+struct bpf_map_def SEC("maps/incomplete_creates") incomplete_creates = {
   .type = BPF_MAP_TYPE_LRU_HASH,
   .key_size = sizeof(u64),
-  .value_size = sizeof(incomplete_mkdir_t),
+  .value_size = sizeof(incomplete_create_t),
   .max_entries = 256,
   .pinning = 0,
   .namespace = "",
 };
 
-static __always_inline void enter_mkdir(struct pt_regs *ctx)
+static __always_inline void enter_create(struct pt_regs *ctx, file_link_type_t link_type)
 {
     u64 pid_tgid = bpf_get_current_pid_tgid();
-    incomplete_mkdir_t event = {0};
+    incomplete_create_t event = {0};
     event.pid_tgid = pid_tgid;
     event.start_ktime_ns = bpf_ktime_get_ns();
+    event.link_type = link_type;
 
-    int ret = bpf_map_update_elem(&incomplete_mkdirs, &pid_tgid, &event, BPF_ANY);
+    int ret = bpf_map_update_elem(&incomplete_creates, &pid_tgid, &event, BPF_ANY);
     if (ret < 0)
     {
         file_message_t fm = {0};
@@ -43,18 +46,21 @@ static __always_inline void enter_mkdir(struct pt_regs *ctx)
     }
 }
 
-static __always_inline void store_dentry(struct pt_regs *ctx, void *path, void *dentry)
+// The source parameter should be NULL if there is no source, a dentry for hard links, or a char * for symlink
+static __always_inline void store_dentry(struct pt_regs *ctx, void *path, void *dentry, void *source)
 {
     u64 pid_tgid = bpf_get_current_pid_tgid();
     file_message_t fm = {0};
 
-    load_event(incomplete_mkdirs, pid_tgid, incomplete_mkdir_t);
-    if (event.target_dentry == NULL) {
-        event.target_dentry = dentry;
-        event.target_vfsmount = read_field_ptr(path, CRC_PATH_MNT);
-        if (event.target_vfsmount == NULL) goto EmitWarning;
-        bpf_map_update_elem(&incomplete_mkdirs, &pid_tgid, &event, BPF_ANY);
-    }
+    load_event(incomplete_creates, pid_tgid, incomplete_create_t);
+    if (event.target_dentry != NULL) goto NoEvent;
+
+    event.target_dentry = dentry;
+    event.target_vfsmount = read_field_ptr(path, CRC_PATH_MNT);
+    if (event.target_vfsmount == NULL) goto EmitWarning;
+    event.source = source;
+
+    bpf_map_update_elem(&incomplete_creates, &pid_tgid, &event, BPF_ANY);
     return;
 
     EventMismatch:
@@ -74,7 +80,7 @@ static __always_inline void store_dentry(struct pt_regs *ctx, void *path, void *
     return;
 }
 
-static __always_inline void exit_mkdir(struct pt_regs *ctx, tail_call_slot_t tail_call)
+static __always_inline void exit_create(struct pt_regs *ctx)
 {
     u32 key = 0;
     buf_t *buffer = (buf_t *)bpf_map_lookup_elem(&buffers, &key);
@@ -88,10 +94,14 @@ static __always_inline void exit_mkdir(struct pt_regs *ctx, tail_call_slot_t tai
     int ret = 0;
     error_info_t info = {0};
 
-    if (cached_path->next_dentry != NULL) goto ResolveName;
-
     u64 pid_tgid = bpf_get_current_pid_tgid();
-    load_event(incomplete_mkdirs, pid_tgid, incomplete_mkdir_t);
+    load_event(incomplete_creates, pid_tgid, incomplete_create_t);
+
+    if (cached_path->next_dentry != NULL) {
+        if (event.target_dentry != NULL) goto ResolveTarget;
+        else goto ResolveSource;
+    }
+
     if (event.target_dentry == NULL || event.target_vfsmount == NULL) {
         set_empty_local_warning(W_NO_DENTRY);
         goto EmitWarning;
@@ -103,16 +113,40 @@ static __always_inline void exit_mkdir(struct pt_regs *ctx, tail_call_slot_t tai
     fm->u.action.pid = event.pid_tgid >> 32;
     fm->u.action.mono_ns = event.start_ktime_ns;
     fm->u.action.buffer_len = sizeof(file_message_t);
-    fm->u.action.u.create.source_link = LINK_NONE;
+    fm->u.action.u.create.source_link = event.link_type;
 
     init_filtered_cached_path(cached_path, event.target_dentry, event.target_vfsmount);
 
-    ResolveName:
-    ret = write_path(ctx, cached_path, &cursor, tail_call);
+    ResolveTarget:
+    ret = write_path(ctx, cached_path, &cursor, EXIT_CREATE);
     if (ret < 0) goto EmitWarning;
-    if (cached_path->filter_state <= 0) goto NoEvent; // Didn't match watched path filter
+    fm->u.action.tag = (cached_path->filter_state >= 0) ? cached_path->filter_tag : -1;
+    switch (event.link_type) {
+        case LINK_NONE:
+            if (cached_path->filter_state <= 0) goto NoEvent; // Didn't match watched path filter
+            else goto FinishMessage;
+        case LINK_SYMBOLIC:
+            if (cached_path->filter_state <= 0) goto NoEvent; // Didn't match watched path filter
+            write_null_char(cursor.buffer, cursor.offset);
+            write_string(event.source, cursor.buffer, cursor.offset, PATH_MAX);
+            goto FinishMessage;
+        case LINK_HARD:
+            event.target_dentry = NULL; // mark that we are done with target
+            bpf_map_update_elem(&incomplete_creates, &pid_tgid, &event, BPF_ANY);
+            init_filtered_cached_path(cached_path, event.source, event.target_vfsmount);
+            // don't do the filter logic again if we already matched on target
+            if (fm->u.action.tag != -1) cached_path->filter_state = -1;
+            write_null_char(cursor.buffer, cursor.offset);
+    }
 
-    fm->u.action.tag = cached_path->filter_tag;
+    ResolveSource:
+    write_path(ctx, cached_path, &cursor, EXIT_CREATE);
+    if (fm->u.action.tag == -1) {
+        if (cached_path->filter_state <= 0) goto NoEvent;
+        fm->u.action.tag = cached_path->filter_tag;
+    }
+
+    FinishMessage:
     push_flexible_file_message(ctx, fm, *cursor.offset);
 
     // lookup tail calls completed; ensure we re-init cached_path next call
