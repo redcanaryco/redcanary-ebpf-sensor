@@ -127,9 +127,7 @@ static __always_inline void exit_delete(void *ctx)
     if (ret < 0) goto EmitWarning;
     fm->u.action.tag = (cached_path->filter_state >= 0) ? cached_path->filter_tag : -1;
     if (cached_path->filter_state <= 0) goto NoEvent; // Didn't match watched path filter
-    else goto FinishMessage;
 
- FinishMessage:
     push_flexible_file_message(ctx, fm, *cursor.offset);
 
     // lookup tail calls completed; ensure we re-init cached_path next call
