@@ -331,7 +331,7 @@ typedef enum
     RET_SYS_EXECVEAT,
     RET_SYS_EXECVE,
     SYS_EXEC_PWD,
-    EXIT_CREATE,
+    EXIT_SYMLINK,
     HANDLE_PWD,
     FILE_PATHS,
 } tail_call_slot_t;

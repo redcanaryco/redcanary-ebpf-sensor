@@ -22,10 +22,9 @@ struct syscalls_exit_args {
 
 /* START CREATE-LIKE PROBES */
 
-// tail-call-only function to finish and send the create message
-// Stored in index EXIT_CREATE
-SEC("kprobe/exit_create")
-int kprobe__exit_create(struct pt_regs *ctx) {
+// tail-call-only function to finish and send the symlink message
+SEC("kprobe/exit_symlink")
+int kprobe__exit_symlink(struct pt_regs *ctx) {
     exit_symlink(ctx);
     return 0;
 }
@@ -55,14 +54,14 @@ int BPF_KPROBE(security_path_mkdir, const struct path *dir, struct dentry *dentr
 SEC("tracepoint/sys_exit_mkdir")
 int tracepoint__syscalls_sys_exit__mkdir(struct syscalls_exit_args *ctx) {
     if (ctx->ret < 0) return 0;
-    prepare_create(ctx, LINK_NONE);
+    exit_create(ctx, LINK_NONE);
     return 0;
 }
 
 SEC("tracepoint/sys_exit_mkdirat")
 int tracepoint__syscalls_sys_exit__mkdirat(struct syscalls_exit_args *ctx) {
     if (ctx->ret < 0) return 0;
-    prepare_create(ctx, LINK_NONE);
+    exit_create(ctx, LINK_NONE);
     return 0;
 }
 
@@ -91,7 +90,7 @@ int BPF_KPROBE(security_path_symlink, const struct path *dir, struct dentry *den
 SEC("kretprobe/ret_vfs_symlink")
 int BPF_KRETPROBE(ret_vfs_symlink, int retval) {
     if (retval < 0) return 0;
-    bpf_tail_call(ctx, &tail_call_table, EXIT_CREATE);
+    bpf_tail_call(ctx, &tail_call_table, EXIT_SYMLINK);
     return 0;
 }
 
@@ -120,14 +119,14 @@ int BPF_KPROBE(security_path_link, struct dentry *old_dentry, const struct path 
 SEC("tracepoint/sys_exit_link")
 int tracepoint__syscalls_sys_exit__link(struct syscalls_exit_args *ctx) {
     if (ctx->ret < 0) return 0;
-    prepare_create(ctx, LINK_HARD);
+    exit_create(ctx, LINK_HARD);
     return 0;
 }
 
 SEC("tracepoint/sys_exit_linkat")
 int tracepoint__syscalls_sys_exit__linkat(struct syscalls_exit_args *ctx) {
     if (ctx->ret < 0) return 0;
-    prepare_create(ctx, LINK_HARD);
+    exit_create(ctx, LINK_HARD);
     return 0;
 }
 
@@ -144,7 +143,7 @@ int tracepoint__syscalls_sys_enter__unlink(void *ctx) {
 SEC("tracepoint/sys_exit_unlink")
 int tracepoint__syscalls_sys_exit__unlink(struct syscalls_exit_args *ctx) {
     if (ctx->ret < 0) return 0;
-    prepare_delete(ctx);
+    exit_delete(ctx);
     return 0;
 }
 
@@ -157,7 +156,7 @@ int tracepoint__syscalls_sys_enter__unlinkat(void *ctx) {
 SEC("tracepoint/sys_exit_unlinkat")
 int tracepoint__syscalls_sys_exit__unlinkat(struct syscalls_exit_args *ctx) {
     if (ctx->ret < 0) return 0;
-    prepare_delete(ctx);
+    exit_delete(ctx);
     return 0;
 }
 
@@ -182,7 +181,7 @@ int BPF_KPROBE(security_path_rmdir, const struct path *dir, struct dentry *dentr
 SEC("tracepoint/sys_exit_rmdir")
 int tracepoint__syscalls_sys_exit__rmdir(struct syscalls_exit_args *ctx) {
     if (ctx->ret < 0) return 0;
-    prepare_delete(ctx);
+    exit_delete(ctx);
     return 0;
 }
 
@@ -199,7 +198,7 @@ int tracepoint__syscalls_sys_enter__chmod(void *ctx) {
 SEC("tracepoint/sys_exit_chmod")
 int tracepoint__syscalls_sys_exit__chmod(struct syscalls_exit_args *ctx) {
     if (ctx->ret < 0) return 0;
-    prepare_modify(ctx);
+    exit_modify(ctx);
     return 0;
 }
 
@@ -212,7 +211,7 @@ int tracepoint__syscalls_sys_enter__fchmod(void *ctx) {
 SEC("tracepoint/sys_exit_fchmod")
 int tracepoint__syscalls_sys_exit__fchmod(struct syscalls_exit_args *ctx) {
     if (ctx->ret < 0) return 0;
-    prepare_modify(ctx);
+    exit_modify(ctx);
     return 0;
 }
 
@@ -225,7 +224,7 @@ int tracepoint__syscalls_sys_enter__fchmodat(void *ctx) {
 SEC("tracepoint/sys_exit_fchmodat")
 int tracepoint__syscalls_sys_exit__fchmodat(struct syscalls_exit_args *ctx) {
     if (ctx->ret < 0) return 0;
-    prepare_modify(ctx);
+    exit_modify(ctx);
     return 0;
 }
 

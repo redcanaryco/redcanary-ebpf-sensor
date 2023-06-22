@@ -131,7 +131,7 @@ static __always_inline void exit_symlink(struct pt_regs *ctx)
  ResolveTarget:
     ret = write_path(ctx, cached_path, &cursor,
                      (tail_call_t){
-                         .slot = EXIT_CREATE,
+                         .slot = EXIT_SYMLINK,
                          .table = &tail_call_table,
                      });
     if (ret < 0) goto EmitWarning;
@@ -157,7 +157,7 @@ static __always_inline void exit_symlink(struct pt_regs *ctx)
     return;
 }
 
-static __always_inline void prepare_create(void *ctx, file_link_type_t link_type)
+static __always_inline void exit_create(void *ctx, file_link_type_t link_type)
 {
     u32 key = 0;
     buf_t *buffer = (buf_t *)bpf_map_lookup_elem(&buffers, &key);
