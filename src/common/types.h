@@ -333,7 +333,7 @@ typedef enum
     SYS_EXEC_PWD,
     EXIT_CREATE,
     HANDLE_PWD,
-    EXIT_DELETE,
+    FILE_PATHS,
 } tail_call_slot_t;
 
 typedef union
