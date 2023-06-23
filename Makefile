@@ -1,6 +1,6 @@
 SHELL=/bin/bash -o pipefail
 
-ARCH ?= x86_64
+ARCH ?= $(shell uname -p)
 OBJDIR ?= build/$(ARCH)
 SRC = src
 SRCS = $(wildcard $(SRC)/*.c)
@@ -103,6 +103,6 @@ all: depends check_headers $(OBJDIR) wrapper no_wrapper
 	@:
 
 dev:
-	KERNEL_HEADER_VERSION=$(shell uname -r) CLANG_VER=14 $(MAKE) check_headers $(OBJDIR) wrapper no_wrapper
+	KERNEL_HEADER_VERSION=$(shell uname -r) CLANG_VER=14 $(MAKE) $(OBJDIR) wrapper no_wrapper
 
 .PHONY: all realclean clean ebpf ebpf_verifier depends check_headers
