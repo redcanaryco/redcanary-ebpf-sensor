@@ -178,7 +178,7 @@ static __always_inline void exit_create(void *ctx, file_link_type_t link_type)
     }
 
     // not using read_field_ptr because we expect that `inode` could
-    // be NULL for kernel pseudo filessytems such as cgroupfs. We
+    // be NULL for kernel pseudo filesystems such as cgroupfs. We
     // still want to error if we fail to read the field; we just don't
     // want to error for the field being NULL
     void *inode = NULL;
