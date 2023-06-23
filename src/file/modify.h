@@ -83,7 +83,7 @@ static __always_inline void store_modified_dentry(struct pt_regs *ctx, void *pat
     return;
  }
 
-static __always_inline void prepare_modify(void *ctx)
+static __always_inline void exit_modify(void *ctx)
 {
     u32 key = 0;
     buf_t *buffer = (buf_t *)bpf_map_lookup_elem(&buffers, &key);

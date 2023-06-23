@@ -83,7 +83,7 @@ static __always_inline void store_deleted_dentry(struct pt_regs *ctx, void *path
     return;
 }
 
-static __always_inline void prepare_delete(void *ctx)
+static __always_inline void exit_delete(void *ctx)
 {
     u32 key = 0;
     buf_t *buffer = (buf_t *)bpf_map_lookup_elem(&buffers, &key);

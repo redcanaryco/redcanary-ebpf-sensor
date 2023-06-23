@@ -28,6 +28,10 @@ typedef struct
     int filter_state;
     // filter match tag; filled by filter when a match is found
     int filter_tag;
+    // the next path to process after next_dentry has been *fully* resolved
+    void *next_path;
+    // a cache of the vfsmount before any of the changes done by `write_path`
+    void *original_vfsmount;
 #endif
 } cached_path_t;
 
@@ -75,6 +79,8 @@ static __always_inline void init_filtered_cached_path(cached_path_t *cached_path
     cached_path->filter_state = 0;
     // clear the filter tag
     cached_path->filter_tag = -1;
+    cached_path->next_path = NULL;
+    cached_path->original_vfsmount = vfsmount;
 }
 #endif
 
