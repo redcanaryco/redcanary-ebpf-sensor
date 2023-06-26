@@ -12,25 +12,25 @@ typedef struct {
     void *target_vfsmount;  // vfsmount of the containing directory
     void *target_dentry;    // dentry of the opened object
     file_ownership_t before_owner; // ownership prior to any changes
-} incomplete_open_t;
+} incomplete_modify_t;
 
-struct bpf_map_def SEC("maps/incomplete_opens") incomplete_opens = {
+struct bpf_map_def SEC("maps/incomplete_modifies") incomplete_modifies = {
     .type = BPF_MAP_TYPE_LRU_HASH,
     .key_size = sizeof(u64),
-    .value_size = sizeof(incomplete_open_t),
+    .value_size = sizeof(incomplete_modify_t),
     .max_entries = 256,
     .pinning = 0,
     .namespace = "",
 };
 
-static __always_inline void enter_open(void *ctx)
+static __always_inline void enter_modify(void *ctx)
 {
     u64 pid_tgid = bpf_get_current_pid_tgid();
-    incomplete_open_t event = {0};
+    incomplete_modify_t event = {0};
     event.pid_tgid = pid_tgid;
     event.start_ktime_ns = bpf_ktime_get_ns();
 
-    int ret = bpf_map_update_elem(&incomplete_opens, &pid_tgid, &event, BPF_ANY);
+    int ret = bpf_map_update_elem(&incomplete_modifies, &pid_tgid, &event, BPF_ANY);
     if (ret < 0)
         {
             file_message_t fm = {0};
@@ -49,7 +49,7 @@ static __always_inline void store_modified_dentry(struct pt_regs *ctx, void *pat
     u64 pid_tgid = bpf_get_current_pid_tgid();
     file_message_t fm = {0};
 
-    load_event(incomplete_opens, pid_tgid, incomplete_open_t);
+    load_event(incomplete_modifies, pid_tgid, incomplete_modify_t);
     if (event.target_dentry != NULL) goto NoEvent;
 
     event.target_dentry = read_field_ptr(path, CRC_PATH_DENTRY);
@@ -63,7 +63,7 @@ static __always_inline void store_modified_dentry(struct pt_regs *ctx, void *pat
         goto EmitWarning;
     }
 
-    bpf_map_update_elem(&incomplete_opens, &pid_tgid, &event, BPF_ANY);
+    bpf_map_update_elem(&incomplete_modifies, &pid_tgid, &event, BPF_ANY);
     return;
 
  EventMismatch:
@@ -95,7 +95,7 @@ static __always_inline void exit_modify(void *ctx)
     file_message_t *fm = (file_message_t *)buffer;
     error_info_t info = {0};
     u64 pid_tgid = bpf_get_current_pid_tgid();
-    load_event(incomplete_opens, pid_tgid, incomplete_open_t);
+    load_event(incomplete_modifies, pid_tgid, incomplete_modify_t);
 
     if (event.target_dentry == NULL || event.target_vfsmount == NULL) {
         set_empty_local_warning(W_NO_DENTRY);

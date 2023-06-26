@@ -15,6 +15,7 @@
 #include "file/delete.h"
 #include "file/modify.h"
 #include "file/rename.h"
+#include "file/open.h"
 
 struct syscalls_exit_args
 {
@@ -153,6 +154,50 @@ int tracepoint__syscalls_sys_exit__linkat(struct syscalls_exit_args *ctx)
     return 0;
 }
 
+//
+// mknod
+//
+
+SEC("tracepoint/sys_enter_mknod")
+int tracepoint__syscalls_sys_enter__mknod(void *ctx)
+{
+    enter_create(ctx);
+    return 0;
+}
+
+SEC("tracepoint/sys_enter_mknodat")
+int tracepoint__syscalls_sys_enter__mknodat(void *ctx)
+{
+    enter_create(ctx);
+    return 0;
+}
+
+SEC("kprobe/security_path_mknod")
+int BPF_KPROBE(security_path_mknod, const struct path *dir, struct dentry *dentry, umode_t mode, unsigned int dev)
+{
+    cache_dentry(ctx);
+    store_dentry(ctx, (void *)dir, (void *)dentry, NULL);
+    return 0;
+}
+
+SEC("tracepoint/sys_exit_mknod")
+int tracepoint__syscalls_sys_exit__mknod(struct syscalls_exit_args *ctx)
+{
+    if (ctx->ret < 0)
+        return 0;
+    exit_create(ctx, LINK_NONE);
+    return 0;
+}
+
+SEC("tracepoint/sys_exit_mknodat")
+int tracepoint__syscalls_sys_exit__mknodat(struct syscalls_exit_args *ctx)
+{
+    if (ctx->ret < 0)
+        return 0;
+    exit_create(ctx, LINK_NONE);
+    return 0;
+}
+
 /* END CREATE-LIKE PROBES */
 
 /* START DELETE-LIKE PROBES */
@@ -226,7 +271,7 @@ int tracepoint__syscalls_sys_exit__rmdir(struct syscalls_exit_args *ctx)
 SEC("tracepoint/sys_enter_chmod")
 int tracepoint__syscalls_sys_enter__chmod(void *ctx)
 {
-    enter_open(ctx);
+    enter_modify(ctx);
     return 0;
 }
 
@@ -242,7 +287,7 @@ int tracepoint__syscalls_sys_exit__chmod(struct syscalls_exit_args *ctx)
 SEC("tracepoint/sys_enter_fchmod")
 int tracepoint__syscalls_sys_enter__fchmod(void *ctx)
 {
-    enter_open(ctx);
+    enter_modify(ctx);
     return 0;
 }
 
@@ -258,7 +303,7 @@ int tracepoint__syscalls_sys_exit__fchmod(struct syscalls_exit_args *ctx)
 SEC("tracepoint/sys_enter_fchmodat")
 int tracepoint__syscalls_sys_enter__fchmodat(void *ctx)
 {
-    enter_open(ctx);
+    enter_modify(ctx);
     return 0;
 }
 
@@ -285,7 +330,7 @@ int BPF_KPROBE(security_path_chmod, const struct path *path, umode_t mode)
 SEC("tracepoint/sys_enter_chown")
 int tracepoint__syscalls_sys_enter__chown(void *ctx)
 {
-    enter_open(ctx);
+    enter_modify(ctx);
     return 0;
 }
 
@@ -301,7 +346,7 @@ int tracepoint__syscalls_sys_exit__chown(struct syscalls_exit_args *ctx)
 SEC("tracepoint/sys_enter_lchown")
 int tracepoint__syscalls_sys_enter__lchown(void *ctx)
 {
-    enter_open(ctx);
+    enter_modify(ctx);
     return 0;
 }
 
@@ -317,7 +362,7 @@ int tracepoint__syscalls_sys_exit__lchown(struct syscalls_exit_args *ctx)
 SEC("tracepoint/sys_enter_fchown")
 int tracepoint__syscalls_sys_enter__fchown(void *ctx)
 {
-    enter_open(ctx);
+    enter_modify(ctx);
     return 0;
 }
 
@@ -333,7 +378,7 @@ int tracepoint__syscalls_sys_exit__fchown(struct syscalls_exit_args *ctx)
 SEC("tracepoint/sys_enter_fchownat")
 int tracepoint__syscalls_sys_enter__fchownat(void *ctx)
 {
-    enter_open(ctx);
+    enter_modify(ctx);
     return 0;
 }
 
