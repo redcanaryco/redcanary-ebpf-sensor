@@ -12,9 +12,10 @@
 typedef struct {
     u64 pid_tgid;
     u64 start_ktime_ns;
-    void *target_vfsmount;  // vfsmount of the containing directory
-    void *target_dentry;    // dentry of the removed object
-    void *target_inode;     // inode of the removed object
+    void *target_vfsmount;      // vfsmount of the containing directory
+    void *target_dentry;        // dentry of the removed object
+    file_ownership_t ownership; // ownership data prior to inode deletion
+    file_info_t target;         // target info prior to inode deletion
 } incomplete_delete_t;
 
 struct bpf_map_def SEC("maps/incomplete_deletes") incomplete_deletes = {
@@ -59,9 +60,13 @@ static __always_inline void store_deleted_dentry(struct pt_regs *ctx, void *path
     event.target_vfsmount = read_field_ptr(path, CRC_PATH_MNT);
     if (event.target_vfsmount == NULL) goto EmitWarning;
     // After deletion dentries become "negative" dentries and no
-    // longer have an inode
-    event.target_inode = read_field_ptr(dentry, CRC_DENTRY_D_INODE);
-    if (event.target_inode == NULL) goto EmitWarning;
+    // longer have an inode. Furthermore, some filesystems (e.g., xfs)
+    // are more aggressive about inode destruction and clear fields
+    // such as file mode early
+    void *d_inode = read_field_ptr(dentry, CRC_DENTRY_D_INODE);
+    if (d_inode == NULL) goto EmitWarning;
+    int ret = extract_file_info_owner(d_inode, &event.target, &event.ownership);
+    if (ret < 0) goto EmitWarning;
 
     bpf_map_update_elem(&incomplete_deletes, &pid_tgid, &event, BPF_ANY);
     return;
@@ -102,13 +107,12 @@ static __always_inline void exit_delete(void *ctx)
         goto EmitWarning;
     }
 
-    int ret = extract_file_info_owner(event.target_inode, &fm->u.action.target, &fm->u.action.target_owner);
-    if (ret < 0) goto EmitWarning;
-
     fm->type = FM_DELETE;
     fm->u.action.pid = event.pid_tgid >> 32;
     fm->u.action.mono_ns = event.start_ktime_ns;
     fm->u.action.buffer_len = sizeof(file_message_t);
+    fm->u.action.target = event.target;
+    fm->u.action.target_owner = event.ownership;
 
     init_filtered_cached_path(cached_path, event.target_dentry, event.target_vfsmount);
 
