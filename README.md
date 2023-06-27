@@ -1,7 +1,7 @@
 # redcanary-ebpf-sensor
 
 This project consists of a variety of eBPF applications aimed at gathering events
-of interest for [Red Canary's Cloud Workload Protection](https://redcanary.com/products/cloud-workload-protection/)
+of interest for [Red Canary's Linux EDR](https://redcanary.com/products/linux-edr/)
 product.
 
 These applications do not use [BCC](https://github.com/iovisor/bcc) to build. The
