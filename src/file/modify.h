@@ -12,6 +12,7 @@ typedef struct {
     void *target_vfsmount;  // vfsmount of the containing directory
     void *target_dentry;    // dentry of the opened object
     file_ownership_t before_owner; // ownership prior to any changes
+    bool is_created;
 } incomplete_modify_t;
 
 struct bpf_map_def SEC("maps/incomplete_modifies") incomplete_modifies = {
@@ -43,6 +44,39 @@ static __always_inline void enter_modify(void *ctx)
             push_file_message(ctx, &fm);
         }
 }
+
+static __always_inline void store_open_create_dentry(struct pt_regs *ctx, void *dir, void *dentry)
+{
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+    file_message_t fm = {0};
+
+    load_event(incomplete_modifies, pid_tgid, incomplete_modify_t);
+    if (event.target_dentry != NULL) goto NoEvent;
+
+    event.target_dentry = dentry;
+    event.target_vfsmount = read_field_ptr(dir, CRC_PATH_MNT);
+    event.is_created = true;
+    if (event.target_vfsmount == NULL) goto EmitWarning;
+
+    bpf_map_update_elem(&incomplete_modifies, &pid_tgid, &event, BPF_ANY);
+    return;
+
+ EventMismatch:
+    fm.type = FM_WARNING;
+    fm.u.warning.pid_tgid = pid_tgid;
+    fm.u.warning.message_type.file = FM_CREATE;
+    fm.u.warning.code = W_PID_TGID_MISMATCH;
+    fm.u.warning.info.stored_pid_tgid = event.pid_tgid;
+
+    push_file_message(ctx, &fm);
+    return;
+
+ EmitWarning:
+    push_file_warning(ctx, &fm, FM_CREATE);
+
+ NoEvent:
+    return;
+ }
 
 static __always_inline void store_modified_dentry(struct pt_regs *ctx, void *path)
 {
@@ -108,11 +142,15 @@ static __always_inline void exit_modify(void *ctx)
     int ret = extract_file_info_owner(inode, &fm->u.action.target, &fm->u.action.target_owner);
     if (ret < 0) goto EmitWarning;
 
-    fm->type = FM_MODIFY;
+    if (event.is_created) {
+        fm->type = FM_CREATE;
+    } else {
+        fm->type = FM_MODIFY;
+        fm->u.action.u.modify.before_owner = event.before_owner;
+    }
     fm->u.action.pid = event.pid_tgid >> 32;
     fm->u.action.mono_ns = event.start_ktime_ns;
     fm->u.action.buffer_len = sizeof(file_message_t);
-    fm->u.action.u.modify.before_owner = event.before_owner;
 
     init_filtered_cached_path(cached_path, event.target_dentry, event.target_vfsmount);
 
@@ -127,6 +165,7 @@ static __always_inline void exit_modify(void *ctx)
     set_local_warning(W_PID_TGID_MISMATCH, info);
 
  EmitWarning:
+    bpf_printk("exit_modify: Emitting warning\n");
     push_file_warning(ctx, fm, FM_MODIFY);
 
  NoEvent:

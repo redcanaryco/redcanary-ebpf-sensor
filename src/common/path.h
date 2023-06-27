@@ -238,8 +238,10 @@ static __always_inline int write_path(void *ctx, cached_path_t *cached_path, cur
 #pragma unroll MAX_PATH_SEGMENTS_NOTAIL
     for (int i = 0; i < MAX_PATH_SEGMENTS_NOTAIL; i++)
     {
+        bpf_printk("path segments count: %d \n", i);
         if (cached_path->next_dentry == mnt_root)
         {
+            bpf_printk("in mnt_root check: %d \n");
             if (mnt == mnt_parent) goto AtGlobalRoot;
 
             // we are done with the path but not with its mount
@@ -262,9 +264,12 @@ static __always_inline int write_path(void *ctx, cached_path_t *cached_path, cur
         bpf_probe_read(&cached_path->next_dentry, sizeof(cached_path->next_dentry), cached_path->next_dentry + dentry_parent);
 
         if (dentry == cached_path->next_dentry) goto AtGlobalRoot;
-
-        if (bpf_probe_read(&offset, sizeof(offset), dentry + name) < 0)
+        bpf_printk("dentry ptr: %p | offset: %d\n", dentry, name);
+        if (bpf_probe_read(&offset, sizeof(offset), dentry + name) < 0) {
+            bpf_printk("bpf_probe_read failed reading using CRC_QSTR_NAME offset\n");
             goto NameError;
+        }
+
 
 #if USE_PATH_FILTER
         // Path filtering, only if the filter is active
@@ -305,8 +310,10 @@ static __always_inline int write_path(void *ctx, cached_path_t *cached_path, cur
 
  AtGlobalRoot:;
     // let's not forget to write the global root (might be a / or the memfd name)
-    if (bpf_probe_read(&offset, sizeof(offset), cached_path->next_dentry + name) < 0)
-            goto NameError;
+    if (bpf_probe_read(&offset, sizeof(offset), cached_path->next_dentry + name) < 0) {
+        bpf_printk("bpf_probe_read failed AtGlobalRoot\n");
+        goto NameError;
+    }
 
 #if USE_PATH_FILTER
     // If the filter is still active, it must match on the first try to succeed
