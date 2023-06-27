@@ -380,7 +380,7 @@ static __always_inline void filemod_paths(void *ctx)
     if (cached_path->next_path)
     {
         int filter_tag = cached_path->filter_tag;
-        init_filtered_cached_path(cached_path, cached_path->next_path, cached_path->vfsmount);
+        init_filtered_cached_path(cached_path, cached_path->next_path, cached_path->original_vfsmount);
         // avoid further filtering if already succeeded on this path
         if (filter_tag >= 0)
         {
