@@ -45,6 +45,10 @@ static __always_inline void enter_modify(void *ctx)
         }
 }
 
+// This method is called when a file is created by passing through security_path_mknod. It stores the dentry
+// and vfsmount of the created file in the incomplete_modifies map with a `is_created` flag.
+// If the file is created in a directory that is monitored we can reuse this information during an
+// open trace to mark the open event appropriately as either a modify or create.
 static __always_inline void store_open_create_dentry(struct pt_regs *ctx, void *dir, void *dentry)
 {
     u64 pid_tgid = bpf_get_current_pid_tgid();

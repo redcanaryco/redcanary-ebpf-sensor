@@ -176,7 +176,6 @@ int tracepoint__syscalls_sys_enter__mknodat(void *ctx)
 SEC("kprobe/security_path_mknod")
 int BPF_KPROBE(security_path_mknod, const struct path *dir, struct dentry *dentry, umode_t mode, unsigned int dev)
 {
-
     store_open_create_dentry(ctx, (void *)dir, (void *)dentry);
     return 0;
 }
@@ -462,30 +461,42 @@ int BPF_KPROBE(security_path_rename, const struct path *old_dir, struct dentry *
 /* BEGIN OPEN-LIKE PROBES */
 
 SEC("tracepoint/sys_enter_open")
-int tracepoint__syscalls_sys_enter__open(void *ctx)
+int tracepoint__syscalls_sys_enter__open(struct syscalls_enter_open_args *ctx)
 {
-    enter_modify(ctx);
+    if (is_write_open(ctx->flags)) {
+        enter_modify(ctx);
+        return 0;
+    }
     return 0;
 }
 
 SEC("tracepoint/sys_enter_openat")
-int tracepoint__syscalls_sys_enter__openat(void *ctx)
+int tracepoint__syscalls_sys_enter__openat(struct syscalls_enter_openat_args *ctx)
 {
-    enter_modify(ctx);
+    if (is_write_open(ctx->flags)) {
+        enter_modify(ctx);
+        return 0;
+    }
     return 0;
 }
 
 SEC("tracepoint/sys_enter_openat2")
-int tracepoint__syscalls_sys_enter__openat2(void *ctx)
+int tracepoint__syscalls_sys_enter__openat2(struct syscalls_enter_openat2_args *ctx)
 {
-    enter_modify(ctx);
+    if (is_write_open(ctx->how->flags)) {
+        enter_modify(ctx);
+        return 0;
+    }
     return 0;
 }
 
 SEC("tracepoint/sys_enter_open_by_handle_at")
-int tracepoint__syscalls_sys_enter_open_by_handle_at(void *ctx)
+int tracepoint__syscalls_sys_enter_open_by_handle_at(struct syscalls_enter_open_by_handle_at_args *ctx)
 {
-    enter_modify(ctx);
+    if (is_write_open(ctx->flags)) {
+        enter_modify(ctx);
+        return 0;
+    }
     return 0;
 }
 
