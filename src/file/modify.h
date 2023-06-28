@@ -165,7 +165,6 @@ static __always_inline void exit_modify(void *ctx)
     set_local_warning(W_PID_TGID_MISMATCH, info);
 
  EmitWarning:
-    bpf_printk("exit_modify: Emitting warning\n");
     push_file_warning(ctx, fm, FM_MODIFY);
 
  NoEvent:

@@ -464,7 +464,6 @@ int BPF_KPROBE(security_path_rename, const struct path *old_dir, struct dentry *
 SEC("tracepoint/sys_enter_open")
 int tracepoint__syscalls_sys_enter__open(void *ctx)
 {
-    bpf_printk("---open enter---\n");
     enter_modify(ctx);
     return 0;
 }
@@ -472,7 +471,6 @@ int tracepoint__syscalls_sys_enter__open(void *ctx)
 SEC("tracepoint/sys_enter_openat")
 int tracepoint__syscalls_sys_enter__openat(void *ctx)
 {
-    bpf_printk("---openat enter---\n");
     enter_modify(ctx);
     return 0;
 }
@@ -480,7 +478,6 @@ int tracepoint__syscalls_sys_enter__openat(void *ctx)
 SEC("tracepoint/sys_enter_openat2")
 int tracepoint__syscalls_sys_enter__openat2(void *ctx)
 {
-    bpf_printk("---openat2 enter---\n");
     enter_modify(ctx);
     return 0;
 }
@@ -488,7 +485,6 @@ int tracepoint__syscalls_sys_enter__openat2(void *ctx)
 SEC("tracepoint/sys_enter_open_by_handle_at")
 int tracepoint__syscalls_sys_enter_open_by_handle_at(void *ctx)
 {
-    bpf_printk("---open_by_handle enter---\n");
     enter_modify(ctx);
     return 0;
 }
@@ -496,16 +492,13 @@ int tracepoint__syscalls_sys_enter_open_by_handle_at(void *ctx)
 SEC("kprobe/security_file_open")
 int BPF_KPROBE(security_file_open, void *file)
 {
-    bpf_printk("---security_file_open enter---\n");
-    void *path = read_field_ptr(file, CRC_FILE_F_PATH);
+    void *path = ptr_to_field(file, CRC_FILE_F_PATH);
     if (path == NULL)
     {
-        bpf_printk("---security_file_open path is null---\n");
         file_message_t fm = {0};
         push_file_warning(ctx, &fm, FM_MODIFY);
         return 0;
     }
-
     store_modified_dentry(ctx, path);
     return 0;
 }
@@ -513,7 +506,6 @@ int BPF_KPROBE(security_file_open, void *file)
 SEC("tracepoint/sys_exit_open")
 int tracepoint__syscalls_sys_exit__open(struct syscalls_exit_args *ctx)
 {
-    bpf_printk("---open exit---\n");
     if (ctx->ret < 0)
         return 0;
     exit_modify(ctx);
@@ -523,7 +515,6 @@ int tracepoint__syscalls_sys_exit__open(struct syscalls_exit_args *ctx)
 SEC("tracepoint/sys_exit_openat")
 int tracepoint__syscalls_sys_exit__openat(struct syscalls_exit_args *ctx)
 {
-    bpf_printk("---openat exit---\n");
     if (ctx->ret < 0)
         return 0;
     exit_modify(ctx);
@@ -533,7 +524,6 @@ int tracepoint__syscalls_sys_exit__openat(struct syscalls_exit_args *ctx)
 SEC("tracepoint/sys_exit_openat2")
 int tracepoint__syscalls_sys_exit__openat2(struct syscalls_exit_args *ctx)
 {
-    bpf_printk("---openat2 exit---\n");
     if (ctx->ret < 0)
         return 0;
     exit_modify(ctx);
@@ -543,7 +533,6 @@ int tracepoint__syscalls_sys_exit__openat2(struct syscalls_exit_args *ctx)
 SEC("tracepoint/sys_exit_open_by_handle_at")
 int tracepoint__syscalls_sys_exit__open_by_handle_at(struct syscalls_exit_args *ctx)
 {
-    bpf_printk("---open_by_handle exit---\n");
     if (ctx->ret < 0)
         return 0;
     exit_modify(ctx);
