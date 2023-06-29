@@ -262,6 +262,7 @@ static __always_inline int write_path(void *ctx, cached_path_t *cached_path, cur
         bpf_probe_read(&cached_path->next_dentry, sizeof(cached_path->next_dentry), cached_path->next_dentry + dentry_parent);
 
         if (dentry == cached_path->next_dentry) goto AtGlobalRoot;
+
         if (bpf_probe_read(&offset, sizeof(offset), dentry + name) < 0)
             goto NameError;
 
@@ -305,7 +306,7 @@ static __always_inline int write_path(void *ctx, cached_path_t *cached_path, cur
  AtGlobalRoot:;
     // let's not forget to write the global root (might be a / or the memfd name)
     if (bpf_probe_read(&offset, sizeof(offset), cached_path->next_dentry + name) < 0)
-        goto NameError;
+            goto NameError;
 
 #if USE_PATH_FILTER
     // If the filter is still active, it must match on the first try to succeed

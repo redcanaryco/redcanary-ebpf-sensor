@@ -467,6 +467,8 @@ int tracepoint__syscalls_sys_enter__open(struct syscalls_enter_open_args *ctx)
         enter_modify(ctx);
         return 0;
     }
+    u64 pid_tid = bpf_get_current_pid_tgid();
+    bpf_map_delete_elem(&incomplete_modifies, &pid_tid);
     return 0;
 }
 
@@ -477,6 +479,8 @@ int tracepoint__syscalls_sys_enter__openat(struct syscalls_enter_openat_args *ct
         enter_modify(ctx);
         return 0;
     }
+    u64 pid_tid = bpf_get_current_pid_tgid();
+    bpf_map_delete_elem(&incomplete_modifies, &pid_tid);
     return 0;
 }
 
@@ -489,6 +493,8 @@ int tracepoint__syscalls_sys_enter__openat2(struct syscalls_enter_openat2_args *
         enter_modify(ctx);
         return 0;
     }
+    u64 pid_tid = bpf_get_current_pid_tgid();
+    bpf_map_delete_elem(&incomplete_modifies, &pid_tid);
     return 0;
 }
 
@@ -499,6 +505,8 @@ int tracepoint__syscalls_sys_enter_open_by_handle_at(struct syscalls_enter_open_
         enter_modify(ctx);
         return 0;
     }
+    u64 pid_tid = bpf_get_current_pid_tgid();
+    bpf_map_delete_elem(&incomplete_modifies, &pid_tid);
     return 0;
 }
 
