@@ -131,6 +131,47 @@ static __always_inline int write_string(const char *string, buf_t *buffer, u32 *
     }
 }
 
+static __always_inline int write_segment(void *ctx, cached_path_t *cached_path, cursor_t *buf, void *name) {
+#if USE_PATH_FILTER
+    // Path filtering, only if the filter is active
+    if (cached_path->filter_state >= 0) {
+        filter_key_t key = {0};           // the main key storage for filter transition lookups
+        filter_value_t *val = NULL;
+        key.current_state = cached_path->filter_state;
+        if (bpf_probe_read_str(&key.path_segment, MAX_PATH_SEG, name) > 0) {
+            val = (filter_value_t *)bpf_map_lookup_elem(&filter_transitions, &key);
+        }
+        // One retry with "*" path element if not found
+        if (val == NULL) {
+            filter_key_t retry_key = {0};     // a separate key for retries, to cut down on strcopy
+            retry_key.path_segment[0] = '*';
+            // The retry_key always uses the same path segment string so we don't need to reset
+            retry_key.current_state = cached_path->filter_state;
+            val = (filter_value_t *)bpf_map_lookup_elem(&filter_transitions, &retry_key);
+        }
+        // Terminate the filter lookup if there was no value at either key
+        cached_path->filter_state = val ? val->next_state : -1;
+    }
+#endif
+
+    // NAME_MAX doesn't include null character; so +1 to take it
+    // into account. Not all systems enforce NAME_MAX so
+    // truncation may happen per path segment. TODO: emit
+    // truncation metrics to see if we need to care about this.
+    int ret = write_string((char *)name, buf->buffer, buf->offset, NAME_MAX + 1);
+    if (ret < 0) goto WriteError;
+    return 0;
+
+ WriteError:;
+    if (ret == -W_UNEXPECTED) {
+        set_empty_local_warning(W_READ_PATH_STRING);
+    } else {
+        set_empty_local_warning(-ret);
+    }
+
+    return -1;
+}
+
 // writes a d_path into a buffer - tail calling if necessary
 // cached_path needs to be initialized with the dentry + vfsmount of the path to resolve
 // to use path filtering, set cached_path->filter_state to 0 before calling

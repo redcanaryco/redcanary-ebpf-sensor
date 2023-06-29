@@ -405,7 +405,6 @@ typedef struct
             file_ownership_t before_owner;
         } modify;
         struct {
-            file_info_t source;
             file_info_t overwr;
             file_ownership_t overwr_owner;
         } rename;
