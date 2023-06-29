@@ -552,6 +552,46 @@ int tracepoint__syscalls_sys_exit__open_by_handle_at(struct syscalls_exit_args *
     return 0;
 }
 
+
+SEC("tracepoint/sys_enter_creat")
+int tracepoint__syscalls_sys_enter_creat(void *ctx)
+{
+    enter_create(ctx);
+    return 0;
+}
+
+SEC("tracepoint/sys_exit_creat")
+int tracepoint__syscalls_sys_exit__creat(struct syscalls_exit_args *ctx)
+{
+    if (ctx->ret < 0)
+        return 0;
+    exit_create(ctx, LINK_NONE);
+    return 0;
+}
+
+SEC("tracepoint/sys_enter_truncate")
+int tracepoint__syscalls_sys_enter_truncate(void *ctx)
+{
+    enter_modify(ctx);
+    return 0;
+}
+
+SEC("kprobe/security_path_truncate")
+int BPF_KPROBE(security_path_truncate, const struct path *path)
+{
+    store_modified_dentry(ctx, (void *)path);
+    return 0;
+}
+
+SEC("tracepoint/sys_exit_truncate")
+int tracepoint__syscalls_sys_exit__truncate(struct syscalls_exit_args *ctx)
+{
+    if (ctx->ret < 0)
+        return 0;
+    exit_modify(ctx);
+    return 0;
+}
+
 /* END OPEN-LIKE PROBES */
 
 static __always_inline void filemod_paths(void *ctx)
