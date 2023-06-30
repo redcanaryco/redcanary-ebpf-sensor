@@ -564,7 +564,9 @@ int tracepoint__syscalls_sys_exit__open_by_handle_at(struct syscalls_exit_args *
 SEC("tracepoint/sys_enter_creat")
 int tracepoint__syscalls_sys_enter_creat(void *ctx)
 {
-    enter_create(ctx);
+    // creat is equivalent to calling open with O_CREAT | O_WRONLY | O_TRUNC
+    // If we see a creat, we should treat it as a write open
+    enter_modify(ctx);
     return 0;
 }
 
@@ -573,7 +575,7 @@ int tracepoint__syscalls_sys_exit__creat(struct syscalls_exit_args *ctx)
 {
     if (ctx->ret < 0)
         return 0;
-    exit_create(ctx, LINK_NONE);
+    exit_modify(ctx);
     return 0;
 }
 
