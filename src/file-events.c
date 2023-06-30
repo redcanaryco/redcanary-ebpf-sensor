@@ -14,6 +14,7 @@
 #include "file/create.h"
 #include "file/delete.h"
 #include "file/modify.h"
+#include "file/rename.h"
 
 struct syscalls_exit_args
 {
@@ -354,6 +355,65 @@ int BPF_KPROBE(security_path_chown, const struct path *path, uid_t uid, gid_t gi
 
 /* END CHOWN-LIKE PROBES */
 
+/* START RENAME PROBES */
+
+SEC("tracepoint/sys_enter_rename")
+int tracepoint__syscalls_sys_enter__rename(void *ctx)
+{
+    enter_rename(ctx);
+    return 0;
+}
+
+SEC("tracepoint/sys_exit_rename")
+int tracepoint__syscalls_sys_exit__rename(struct syscalls_exit_args *ctx)
+{
+    if (ctx->ret < 0)
+        return 0;
+    exit_rename(ctx);
+    return 0;
+}
+
+SEC("tracepoint/sys_enter_renameat")
+int tracepoint__syscalls_sys_enter__renameat(void *ctx)
+{
+    enter_rename(ctx);
+    return 0;
+}
+
+SEC("tracepoint/sys_exit_renameat")
+int tracepoint__syscalls_sys_exit__renameat(struct syscalls_exit_args *ctx)
+{
+    if (ctx->ret < 0)
+        return 0;
+    exit_rename(ctx);
+    return 0;
+}
+
+SEC("tracepoint/sys_enter_renameat2")
+int tracepoint__syscalls_sys_enter__renameat2(void *ctx)
+{
+    enter_rename(ctx);
+    return 0;
+}
+
+SEC("tracepoint/sys_exit_renameat2")
+int tracepoint__syscalls_sys_exit__renameat2(struct syscalls_exit_args *ctx)
+{
+    if (ctx->ret < 0)
+        return 0;
+    exit_rename(ctx);
+    return 0;
+}
+
+SEC("kprobe/security_path_rename")
+int BPF_KPROBE(security_path_rename, const struct path *old_dir, struct dentry *old_dentry, const struct path *new_dir, struct dentry *new_dentry)
+{
+    store_renamed_dentries(ctx, (void *)old_dir, old_dentry, (void *)new_dir, new_dentry);
+    return 0;
+}
+
+/* END RENAME PROBES */
+
 static __always_inline void filemod_paths(void *ctx)
 {
     u32 key = 0;
@@ -388,23 +448,53 @@ static __always_inline void filemod_paths(void *ctx)
             cached_path->filter_tag = filter_tag;
         }
         write_null_char(buffer, cursor.offset);
+
+        if (fm->type == FM_RENAME) {
+            u64 pid_tgid = bpf_get_current_pid_tgid();
+            rename_name_t *name = bpf_map_lookup_elem(&rename_names, &pid_tgid);
+            if (name == NULL) goto NoEvent;
+            if (name->pid_tgid != pid_tgid) goto EventMismatch;
+            // if there is a rename_name then write that first
+            write_segment(ctx, cached_path, &cursor, name->name);
+            goto RenameFinished;
+
+        EventMismatch:
+            fm->type = FM_WARNING;
+            fm->u.warning.pid_tgid = pid_tgid;
+            fm->u.warning.message_type.file = FM_RENAME;
+            fm->u.warning.code = W_PID_TGID_MISMATCH;
+            fm->u.warning.info.stored_pid_tgid = name->pid_tgid;
+
+            push_file_message(ctx, fm);
+            goto Done;
+
+        NoEvent:
+            fm->type = FM_WARNING;
+            fm->u.warning.pid_tgid = pid_tgid;
+            fm->u.warning.message_type.file = FM_RENAME;
+            fm->u.warning.code = W_UNEXPECTED; // ?
+
+            push_file_message(ctx, fm);
+            goto Done;
+
+        RenameFinished:;
+        }
+
         bpf_tail_call(ctx, &tp_programs, FILE_PATHS);
         // if the tail call fails - let it fall through; we'll send what we have
     }
 
     if (cached_path->filter_tag < 0)
-        goto NoEvent; // Didn't match watched path filter
+        goto Done; // Didn't match watched path filter
 
     fm->u.action.tag = cached_path->filter_tag;
     push_flexible_file_message(ctx, fm, *cursor.offset);
-    // lookup tail calls completed; ensure we re-init cached_path next call
-    cached_path->next_dentry = NULL;
-    return;
+    goto Done;
 
 EmitWarning:
     push_file_warning(ctx, fm, fm->type);
 
-NoEvent:
+Done:
     // lookup tail calls completed; ensure we re-init cached_path next call
     cached_path->next_dentry = NULL;
     return;
