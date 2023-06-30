@@ -8,6 +8,7 @@
 #include <linux/kconfig.h>
 #include <asm/ptrace.h>
 #include <linux/path.h>
+#include <linux/fs.h>
 
 #include "common/bpf_helpers.h"
 #include "common/types.h"
@@ -15,6 +16,7 @@
 #include "file/delete.h"
 #include "file/modify.h"
 #include "file/rename.h"
+#include "file/open.h"
 
 struct syscalls_exit_args
 {
@@ -153,6 +155,49 @@ int tracepoint__syscalls_sys_exit__linkat(struct syscalls_exit_args *ctx)
     return 0;
 }
 
+//
+// mknod
+//
+
+SEC("tracepoint/sys_enter_mknod")
+int tracepoint__syscalls_sys_enter__mknod(void *ctx)
+{
+    enter_modify(ctx);
+    return 0;
+}
+
+SEC("tracepoint/sys_enter_mknodat")
+int tracepoint__syscalls_sys_enter__mknodat(void *ctx)
+{
+    enter_modify(ctx);
+    return 0;
+}
+
+SEC("kprobe/security_path_mknod")
+int BPF_KPROBE(security_path_mknod, const struct path *dir, struct dentry *dentry, umode_t mode, unsigned int dev)
+{
+    store_open_create_dentry(ctx, (void *)dir, (void *)dentry);
+    return 0;
+}
+
+SEC("tracepoint/sys_exit_mknod")
+int tracepoint__syscalls_sys_exit__mknod(struct syscalls_exit_args *ctx)
+{
+    if (ctx->ret < 0)
+        return 0;
+    exit_modify(ctx);
+    return 0;
+}
+
+SEC("tracepoint/sys_exit_mknodat")
+int tracepoint__syscalls_sys_exit__mknodat(struct syscalls_exit_args *ctx)
+{
+    if (ctx->ret < 0)
+        return 0;
+    exit_modify(ctx);
+    return 0;
+}
+
 /* END CREATE-LIKE PROBES */
 
 /* START DELETE-LIKE PROBES */
@@ -226,7 +271,7 @@ int tracepoint__syscalls_sys_exit__rmdir(struct syscalls_exit_args *ctx)
 SEC("tracepoint/sys_enter_chmod")
 int tracepoint__syscalls_sys_enter__chmod(void *ctx)
 {
-    enter_open(ctx);
+    enter_modify(ctx);
     return 0;
 }
 
@@ -242,7 +287,7 @@ int tracepoint__syscalls_sys_exit__chmod(struct syscalls_exit_args *ctx)
 SEC("tracepoint/sys_enter_fchmod")
 int tracepoint__syscalls_sys_enter__fchmod(void *ctx)
 {
-    enter_open(ctx);
+    enter_modify(ctx);
     return 0;
 }
 
@@ -258,7 +303,7 @@ int tracepoint__syscalls_sys_exit__fchmod(struct syscalls_exit_args *ctx)
 SEC("tracepoint/sys_enter_fchmodat")
 int tracepoint__syscalls_sys_enter__fchmodat(void *ctx)
 {
-    enter_open(ctx);
+    enter_modify(ctx);
     return 0;
 }
 
@@ -285,7 +330,7 @@ int BPF_KPROBE(security_path_chmod, const struct path *path, umode_t mode)
 SEC("tracepoint/sys_enter_chown")
 int tracepoint__syscalls_sys_enter__chown(void *ctx)
 {
-    enter_open(ctx);
+    enter_modify(ctx);
     return 0;
 }
 
@@ -301,7 +346,7 @@ int tracepoint__syscalls_sys_exit__chown(struct syscalls_exit_args *ctx)
 SEC("tracepoint/sys_enter_lchown")
 int tracepoint__syscalls_sys_enter__lchown(void *ctx)
 {
-    enter_open(ctx);
+    enter_modify(ctx);
     return 0;
 }
 
@@ -317,7 +362,7 @@ int tracepoint__syscalls_sys_exit__lchown(struct syscalls_exit_args *ctx)
 SEC("tracepoint/sys_enter_fchown")
 int tracepoint__syscalls_sys_enter__fchown(void *ctx)
 {
-    enter_open(ctx);
+    enter_modify(ctx);
     return 0;
 }
 
@@ -333,7 +378,7 @@ int tracepoint__syscalls_sys_exit__fchown(struct syscalls_exit_args *ctx)
 SEC("tracepoint/sys_enter_fchownat")
 int tracepoint__syscalls_sys_enter__fchownat(void *ctx)
 {
-    enter_open(ctx);
+    enter_modify(ctx);
     return 0;
 }
 
@@ -413,6 +458,151 @@ int BPF_KPROBE(security_path_rename, const struct path *old_dir, struct dentry *
 }
 
 /* END RENAME PROBES */
+/* BEGIN OPEN-LIKE PROBES */
+
+SEC("tracepoint/sys_enter_open")
+int tracepoint__syscalls_sys_enter__open(struct syscalls_enter_open_args *ctx)
+{
+    if (is_write_open(ctx->flags)) {
+        enter_modify(ctx);
+        return 0;
+    }
+    u64 pid_tid = bpf_get_current_pid_tgid();
+    bpf_map_delete_elem(&incomplete_modifies, &pid_tid);
+    return 0;
+}
+
+SEC("tracepoint/sys_enter_openat")
+int tracepoint__syscalls_sys_enter__openat(struct syscalls_enter_openat_args *ctx)
+{
+    if (is_write_open(ctx->flags)) {
+        enter_modify(ctx);
+        return 0;
+    }
+    u64 pid_tid = bpf_get_current_pid_tgid();
+    bpf_map_delete_elem(&incomplete_modifies, &pid_tid);
+    return 0;
+}
+
+SEC("tracepoint/sys_enter_openat2")
+int tracepoint__syscalls_sys_enter__openat2(struct syscalls_enter_openat2_args *ctx)
+{
+    u64 flags = 0;
+    bpf_probe_read(&flags, sizeof(flags), &ctx->how->flags);
+    if (is_write_open(flags)) {
+        enter_modify(ctx);
+        return 0;
+    }
+    u64 pid_tid = bpf_get_current_pid_tgid();
+    bpf_map_delete_elem(&incomplete_modifies, &pid_tid);
+    return 0;
+}
+
+SEC("tracepoint/sys_enter_open_by_handle_at")
+int tracepoint__syscalls_sys_enter_open_by_handle_at(struct syscalls_enter_open_by_handle_at_args *ctx)
+{
+    if (is_write_open(ctx->flags)) {
+        enter_modify(ctx);
+        return 0;
+    }
+    u64 pid_tid = bpf_get_current_pid_tgid();
+    bpf_map_delete_elem(&incomplete_modifies, &pid_tid);
+    return 0;
+}
+
+SEC("kprobe/security_file_open")
+int BPF_KPROBE(security_file_open, void *file)
+{
+    void *path = ptr_to_field(file, CRC_FILE_F_PATH);
+    if (path == NULL)
+    {
+        file_message_t fm = {0};
+        push_file_warning(ctx, &fm, FM_MODIFY);
+        return 0;
+    }
+    store_modified_dentry(ctx, path);
+    return 0;
+}
+
+SEC("tracepoint/sys_exit_open")
+int tracepoint__syscalls_sys_exit__open(struct syscalls_exit_args *ctx)
+{
+    if (ctx->ret < 0)
+        return 0;
+    exit_modify(ctx);
+    return 0;
+}
+
+SEC("tracepoint/sys_exit_openat")
+int tracepoint__syscalls_sys_exit__openat(struct syscalls_exit_args *ctx)
+{
+    if (ctx->ret < 0)
+        return 0;
+    exit_modify(ctx);
+    return 0;
+}
+
+SEC("tracepoint/sys_exit_openat2")
+int tracepoint__syscalls_sys_exit__openat2(struct syscalls_exit_args *ctx)
+{
+    if (ctx->ret < 0)
+        return 0;
+    exit_modify(ctx);
+    return 0;
+}
+
+SEC("tracepoint/sys_exit_open_by_handle_at")
+int tracepoint__syscalls_sys_exit__open_by_handle_at(struct syscalls_exit_args *ctx)
+{
+    if (ctx->ret < 0)
+        return 0;
+    exit_modify(ctx);
+    return 0;
+}
+
+
+SEC("tracepoint/sys_enter_creat")
+int tracepoint__syscalls_sys_enter_creat(void *ctx)
+{
+    // creat is equivalent to calling open with O_CREAT | O_WRONLY | O_TRUNC
+    // If we see a creat, we should treat it as a write open
+    enter_modify(ctx);
+    return 0;
+}
+
+SEC("tracepoint/sys_exit_creat")
+int tracepoint__syscalls_sys_exit__creat(struct syscalls_exit_args *ctx)
+{
+    if (ctx->ret < 0)
+        return 0;
+    exit_modify(ctx);
+    return 0;
+}
+
+SEC("tracepoint/sys_enter_truncate")
+int tracepoint__syscalls_sys_enter_truncate(void *ctx)
+{
+    enter_modify(ctx);
+    return 0;
+}
+
+SEC("kprobe/security_path_truncate")
+int BPF_KPROBE(security_path_truncate, const struct path *path)
+{
+    store_modified_dentry(ctx, (void *)path);
+    return 0;
+}
+
+SEC("tracepoint/sys_exit_truncate")
+int tracepoint__syscalls_sys_exit__truncate(struct syscalls_exit_args *ctx)
+{
+    if (ctx->ret < 0)
+        return 0;
+    exit_modify(ctx);
+    return 0;
+}
+
+/* END OPEN-LIKE PROBES */
 
 static __always_inline void filemod_paths(void *ctx)
 {

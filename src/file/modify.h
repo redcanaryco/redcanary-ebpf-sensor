@@ -12,25 +12,26 @@ typedef struct {
     void *target_vfsmount;  // vfsmount of the containing directory
     void *target_dentry;    // dentry of the opened object
     file_ownership_t before_owner; // ownership prior to any changes
-} incomplete_open_t;
+    bool is_created;
+} incomplete_modify_t;
 
-struct bpf_map_def SEC("maps/incomplete_opens") incomplete_opens = {
+struct bpf_map_def SEC("maps/incomplete_modifies") incomplete_modifies = {
     .type = BPF_MAP_TYPE_LRU_HASH,
     .key_size = sizeof(u64),
-    .value_size = sizeof(incomplete_open_t),
+    .value_size = sizeof(incomplete_modify_t),
     .max_entries = 256,
     .pinning = 0,
     .namespace = "",
 };
 
-static __always_inline void enter_open(void *ctx)
+static __always_inline void enter_modify(void *ctx)
 {
     u64 pid_tgid = bpf_get_current_pid_tgid();
-    incomplete_open_t event = {0};
+    incomplete_modify_t event = {0};
     event.pid_tgid = pid_tgid;
     event.start_ktime_ns = bpf_ktime_get_ns();
 
-    int ret = bpf_map_update_elem(&incomplete_opens, &pid_tgid, &event, BPF_ANY);
+    int ret = bpf_map_update_elem(&incomplete_modifies, &pid_tgid, &event, BPF_ANY);
     if (ret < 0)
         {
             file_message_t fm = {0};
@@ -44,12 +45,49 @@ static __always_inline void enter_open(void *ctx)
         }
 }
 
+// This method is called when a file is created by passing through security_path_mknod. It stores the dentry
+// and vfsmount of the created file in the incomplete_modifies map with a `is_created` flag.
+// If the file is created in a directory that is monitored we can reuse this information during an
+// open trace to mark the open event appropriately as either a modify or create.
+static __always_inline void store_open_create_dentry(struct pt_regs *ctx, void *dir, void *dentry)
+{
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+    file_message_t fm = {0};
+
+    load_event(incomplete_modifies, pid_tgid, incomplete_modify_t);
+    if (event.target_dentry != NULL) goto NoEvent;
+
+    event.target_dentry = dentry;
+    event.target_vfsmount = read_field_ptr(dir, CRC_PATH_MNT);
+    event.is_created = true;
+    if (event.target_vfsmount == NULL) goto EmitWarning;
+
+    bpf_map_update_elem(&incomplete_modifies, &pid_tgid, &event, BPF_ANY);
+    return;
+
+ EventMismatch:
+    fm.type = FM_WARNING;
+    fm.u.warning.pid_tgid = pid_tgid;
+    fm.u.warning.message_type.file = FM_CREATE;
+    fm.u.warning.code = W_PID_TGID_MISMATCH;
+    fm.u.warning.info.stored_pid_tgid = event.pid_tgid;
+
+    push_file_message(ctx, &fm);
+    return;
+
+ EmitWarning:
+    push_file_warning(ctx, &fm, FM_CREATE);
+
+ NoEvent:
+    return;
+ }
+
 static __always_inline void store_modified_dentry(struct pt_regs *ctx, void *path)
 {
     u64 pid_tgid = bpf_get_current_pid_tgid();
     file_message_t fm = {0};
 
-    load_event(incomplete_opens, pid_tgid, incomplete_open_t);
+    load_event(incomplete_modifies, pid_tgid, incomplete_modify_t);
     if (event.target_dentry != NULL) goto NoEvent;
 
     event.target_dentry = read_field_ptr(path, CRC_PATH_DENTRY);
@@ -63,7 +101,7 @@ static __always_inline void store_modified_dentry(struct pt_regs *ctx, void *pat
         goto EmitWarning;
     }
 
-    bpf_map_update_elem(&incomplete_opens, &pid_tgid, &event, BPF_ANY);
+    bpf_map_update_elem(&incomplete_modifies, &pid_tgid, &event, BPF_ANY);
     return;
 
  EventMismatch:
@@ -95,7 +133,7 @@ static __always_inline void exit_modify(void *ctx)
     file_message_t *fm = (file_message_t *)buffer;
     error_info_t info = {0};
     u64 pid_tgid = bpf_get_current_pid_tgid();
-    load_event(incomplete_opens, pid_tgid, incomplete_open_t);
+    load_event(incomplete_modifies, pid_tgid, incomplete_modify_t);
 
     if (event.target_dentry == NULL || event.target_vfsmount == NULL) {
         set_empty_local_warning(W_NO_DENTRY);
@@ -108,11 +146,15 @@ static __always_inline void exit_modify(void *ctx)
     int ret = extract_file_info_owner(inode, &fm->u.action.target, &fm->u.action.target_owner);
     if (ret < 0) goto EmitWarning;
 
-    fm->type = FM_MODIFY;
+    if (event.is_created) {
+        fm->type = FM_CREATE;
+    } else {
+        fm->type = FM_MODIFY;
+        fm->u.action.u.modify.before_owner = event.before_owner;
+    }
     fm->u.action.pid = event.pid_tgid >> 32;
     fm->u.action.mono_ns = event.start_ktime_ns;
     fm->u.action.buffer_len = sizeof(file_message_t);
-    fm->u.action.u.modify.before_owner = event.before_owner;
 
     init_filtered_cached_path(cached_path, event.target_dentry, event.target_vfsmount);
 
