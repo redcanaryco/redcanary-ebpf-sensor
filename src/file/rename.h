@@ -13,12 +13,13 @@
 typedef struct {
     u64 pid_tgid;
     u64 start_ktime_ns;
-    void *target_vfsmount;
-    void *target_dentry;
-    void *source_dentry;
-    void *source_parent_dentry;
-    file_ownership_t overwr_owner;
-    file_info_t overwr;
+    void *vfsmount;                     // vfsmount of the source AND the destination.
+    void *source_dentry;                // dentry of the file we are
+                                        // moving. By the time we exit
+                                        // the name + parent will be the target name + parent
+    void *source_parent_dentry;         // The directory we are moving from
+    file_ownership_t overwr_owner;      // The owner of the overwritten file
+    file_info_t overwr;                 // Metadata of the overwritten file
 } incomplete_rename_t;
 
 typedef struct {
@@ -76,9 +77,8 @@ static __always_inline void store_renamed_dentries(struct pt_regs *ctx,
     file_message_t fm = {0};
 
     load_event(incomplete_renames, pid_tgid, incomplete_rename_t);
-    if (event.target_dentry != NULL) goto NoEvent;
+    if (event.source_dentry != NULL) goto NoEvent;
 
-    event.target_dentry = new_dentry;
     event.source_dentry = old_dentry;
     event.source_parent_dentry = read_field_ptr(old_dentry, CRC_DENTRY_D_PARENT);
     if (event.source_parent_dentry == NULL) goto EmitWarning;
@@ -96,13 +96,13 @@ static __always_inline void store_renamed_dentries(struct pt_regs *ctx,
         goto EmitWarning;
     }
 
-    event.target_vfsmount = read_field_ptr(new_dir, CRC_PATH_MNT);
-    if (event.target_vfsmount == NULL) goto EmitWarning;
+    event.vfsmount = read_field_ptr(new_dir, CRC_PATH_MNT);
+    if (event.vfsmount == NULL) goto EmitWarning;
 
     // if the new_dentry already has an inode it means that we are replacing it
     // TODO: what about whiteouts? Will they have an inode?
     void *d_inode = NULL;
-    ret = read_field(event.target_dentry, CRC_DENTRY_D_INODE, &d_inode, sizeof(d_inode));
+    ret = read_field(new_dentry, CRC_DENTRY_D_INODE, &d_inode, sizeof(d_inode));
     if (ret < 0) goto EmitWarning;
     if (d_inode != NULL) {
         ret = extract_file_info_owner(d_inode, &event.overwr, &event.overwr_owner);
@@ -143,7 +143,7 @@ static __always_inline void exit_rename(void *ctx)
     u64 pid_tgid = bpf_get_current_pid_tgid();
     load_event(incomplete_renames, pid_tgid, incomplete_rename_t);
 
-    if (event.target_dentry == NULL || event.target_vfsmount == NULL) {
+    if (event.source_dentry == NULL || event.vfsmount == NULL) {
         set_empty_local_warning(W_NO_DENTRY);
         goto EmitWarning;
     }
@@ -160,7 +160,7 @@ static __always_inline void exit_rename(void *ctx)
     fm->u.action.u.rename.overwr = event.overwr;
     fm->u.action.u.rename.overwr_owner = event.overwr_owner;
 
-    init_filtered_cached_path(cached_path, event.target_dentry, event.target_vfsmount);
+    init_filtered_cached_path(cached_path, event.source_dentry, event.vfsmount);
     cached_path->next_path = event.source_parent_dentry;
 
     bpf_tail_call(ctx, &tp_programs, FILE_PATHS);
