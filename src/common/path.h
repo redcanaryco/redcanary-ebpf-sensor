@@ -162,7 +162,7 @@ static __always_inline int write_segment(void *ctx, cached_path_t *cached_path, 
     if (ret < 0) goto WriteError;
     return 0;
 
- WriteError:;
+ WriteError:
     if (ret == -W_UNEXPECTED) {
         set_empty_local_warning(W_READ_PATH_STRING);
     } else {
