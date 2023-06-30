@@ -131,6 +131,8 @@ static __always_inline int write_string(const char *string, buf_t *buffer, u32 *
     }
 }
 
+// Writes the single path segment (name) into the buffer. Potentially
+// updating any filter state if `USE_PATH_FILTER` is defined
 static __always_inline int write_segment(void *ctx, cached_path_t *cached_path, cursor_t *buf, void *name) {
 #if USE_PATH_FILTER
     // Path filtering, only if the filter is active
