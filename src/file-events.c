@@ -659,12 +659,7 @@ static __always_inline void filemod_paths(void *ctx)
             goto Done;
 
         NoEvent:
-            fm->type = FM_WARNING;
-            fm->u.warning.pid_tgid = pid_tgid;
-            fm->u.warning.message_type.file = FM_RENAME;
-            fm->u.warning.code = W_UNEXPECTED; // ?
-
-            push_file_message(ctx, fm);
+            // Either the map disappeared or the element aged out so we just ignore it.
             goto Done;
 
         RenameFinished:;
