@@ -31,16 +31,16 @@ struct bpf_map_def SEC("maps/incomplete_renames") incomplete_renames = {
     .type = BPF_MAP_TYPE_LRU_HASH,
     .key_size = sizeof(u64),
     .value_size = sizeof(incomplete_rename_t),
-    .max_entries = 256,
+    .max_entries = 512,
     .pinning = 0,
     .namespace = "",
 };
 
-struct bpf_map_def SEC("maps/incomplete_renames") rename_names = {
+struct bpf_map_def SEC("maps/rename_names") rename_names = {
     .type = BPF_MAP_TYPE_LRU_HASH,
     .key_size = sizeof(u64),
     .value_size = sizeof(rename_name_t),
-    .max_entries = 256,
+    .max_entries = 512,
     .pinning = 0,
     .namespace = "",
 };
@@ -50,23 +50,27 @@ static __always_inline void enter_rename(void *ctx)
     u64 pid_tgid = bpf_get_current_pid_tgid();
     rename_name_t rename_name = {0};
     rename_name.pid_tgid = pid_tgid;
-    bpf_map_update_elem(&rename_names, &pid_tgid, &rename_name, BPF_ANY);
+    int ret = bpf_map_update_elem(&rename_names, &pid_tgid, &rename_name, BPF_ANY);
+    if (ret < 0) goto EmitWarning;
+
     incomplete_rename_t event = {0};
     event.pid_tgid = pid_tgid;
     event.start_ktime_ns = bpf_ktime_get_ns();
 
-    int ret = bpf_map_update_elem(&incomplete_renames, &pid_tgid, &event, BPF_ANY);
-    if (ret < 0)
-        {
-            file_message_t fm = {0};
-            fm.type = FM_WARNING;
-            fm.u.warning.pid_tgid = pid_tgid;
-            fm.u.warning.message_type.file = FM_RENAME;
-            fm.u.warning.code = W_UPDATE_MAP_ERROR;
-            fm.u.warning.info.err = ret;
+    ret = bpf_map_update_elem(&incomplete_renames, &pid_tgid, &event, BPF_ANY);
+    if (ret < 0) goto EmitWarning;
 
-            push_file_message(ctx, &fm);
-        }
+    return;
+
+ EmitWarning:;
+    file_message_t fm = {0};
+    fm.type = FM_WARNING;
+    fm.u.warning.pid_tgid = pid_tgid;
+    fm.u.warning.message_type.file = FM_RENAME;
+    fm.u.warning.code = W_UPDATE_MAP_ERROR;
+    fm.u.warning.info.err = ret;
+
+    push_file_message(ctx, &fm);
 }
 
 static __always_inline void store_renamed_dentries(struct pt_regs *ctx,

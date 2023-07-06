@@ -22,7 +22,7 @@ struct bpf_map_def SEC("maps/incomplete_deletes") incomplete_deletes = {
     .type = BPF_MAP_TYPE_LRU_HASH,
     .key_size = sizeof(u64),
     .value_size = sizeof(incomplete_delete_t),
-    .max_entries = 256,
+    .max_entries = 512,
     .pinning = 0,
     .namespace = "",
 };

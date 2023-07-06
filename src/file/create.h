@@ -23,7 +23,7 @@ struct bpf_map_def SEC("maps/incomplete_creates") incomplete_creates = {
   .type = BPF_MAP_TYPE_LRU_HASH,
   .key_size = sizeof(u64),
   .value_size = sizeof(incomplete_create_t),
-  .max_entries = 256,
+  .max_entries = 512,
   .pinning = 0,
   .namespace = "",
 };
