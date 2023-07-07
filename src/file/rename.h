@@ -152,10 +152,21 @@ static __always_inline void exit_rename(void *ctx)
         goto EmitWarning;
     }
 
-    void *d_inode = read_field_ptr(event.source_dentry, CRC_DENTRY_D_INODE);
-    if (d_inode == NULL) goto EmitWarning;
-    int ret = extract_file_info_owner(d_inode, &fm->u.action.target, &fm->u.action.target_owner);
+    void *d_inode = NULL;
+    int ret = read_field(event.source_dentry, CRC_DENTRY_D_INODE, &d_inode, sizeof(d_inode));
     if (ret < 0) goto EmitWarning;
+    if (d_inode != NULL) {
+        ret = extract_file_info_owner(d_inode, &fm->u.action.target, &fm->u.action.target_owner);
+        if (ret < 0) goto EmitWarning;
+    } else {
+        // if the target dentry has no inode it means that it was either deleted or not set.
+        // zero out the file_info and file_ownership to indicate that but submit the event anyway
+        // only if it is a filtered path and handle it in userspace
+        file_info_t blank_info = {0};
+        file_ownership_t blank_owner = {0};
+        fm->u.action.target = blank_info;
+        fm->u.action.target_owner = blank_owner;
+    }
 
     fm->type = FM_RENAME;
     fm->u.action.pid = event.pid_tgid >> 32;
