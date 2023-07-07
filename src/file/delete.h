@@ -102,10 +102,7 @@ static __always_inline void exit_delete(void *ctx)
     u64 pid_tgid = bpf_get_current_pid_tgid();
     load_event(incomplete_deletes, pid_tgid, incomplete_delete_t);
 
-    if (event.target_dentry == NULL || event.target_vfsmount == NULL) {
-        set_empty_local_warning(W_NO_DENTRY);
-        goto EmitWarning;
-    }
+    if (event.target_dentry == NULL || event.target_vfsmount == NULL) goto NoEvent;
 
     fm->type = FM_DELETE;
     fm->u.action.pid = event.pid_tgid >> 32;

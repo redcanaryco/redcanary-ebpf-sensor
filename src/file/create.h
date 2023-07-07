@@ -104,10 +104,7 @@ static __always_inline void exit_symlink(struct pt_regs *ctx)
         goto ResolveTarget;
     }
 
-    if (event.target_dentry == NULL || event.target_vfsmount == NULL) {
-        set_empty_local_warning(W_NO_DENTRY);
-        goto EmitWarning;
-    }
+    if (event.target_dentry == NULL || event.target_vfsmount == NULL) goto NoEvent;
 
     // not using read_field_ptr because we expect that `inode` could
     // be NULL in overlayfs as it gets called twice (recursively) and
@@ -172,10 +169,7 @@ static __always_inline void exit_create(void *ctx, file_link_type_t link_type)
     u64 pid_tgid = bpf_get_current_pid_tgid();
     load_event(incomplete_creates, pid_tgid, incomplete_create_t);
 
-    if (event.target_dentry == NULL || event.target_vfsmount == NULL) {
-        set_empty_local_warning(W_NO_DENTRY);
-        goto EmitWarning;
-    }
+    if (event.target_dentry == NULL || event.target_vfsmount == NULL) goto NoEvent;
 
     void *inode = NULL;
     if (link_type == LINK_HARD) {
