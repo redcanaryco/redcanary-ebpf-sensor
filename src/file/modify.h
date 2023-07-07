@@ -135,10 +135,7 @@ static __always_inline void exit_modify(void *ctx)
     u64 pid_tgid = bpf_get_current_pid_tgid();
     load_event(incomplete_modifies, pid_tgid, incomplete_modify_t);
 
-    if (event.target_dentry == NULL || event.target_vfsmount == NULL) {
-        set_empty_local_warning(W_NO_DENTRY);
-        goto EmitWarning;
-    }
+    if (event.target_dentry == NULL || event.target_vfsmount == NULL) goto NoEvent;
 
     void *inode = read_field_ptr(event.target_dentry, CRC_DENTRY_D_INODE);
     if (inode == NULL) goto EmitWarning;

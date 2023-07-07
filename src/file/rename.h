@@ -147,10 +147,7 @@ static __always_inline void exit_rename(void *ctx)
     u64 pid_tgid = bpf_get_current_pid_tgid();
     load_event(incomplete_renames, pid_tgid, incomplete_rename_t);
 
-    if (event.source_dentry == NULL || event.vfsmount == NULL) {
-        set_empty_local_warning(W_NO_DENTRY);
-        goto EmitWarning;
-    }
+    if (event.source_dentry == NULL || event.vfsmount == NULL) goto NoEvent;
 
     void *d_inode = NULL;
     int ret = read_field(event.source_dentry, CRC_DENTRY_D_INODE, &d_inode, sizeof(d_inode));

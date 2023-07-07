@@ -93,7 +93,6 @@ typedef enum
     W_NULL_FIELD,
     W_INTERP_MISMATCH,
     W_INTERP_SLOT,
-    W_NO_DENTRY,
 } warning_t;
 
 typedef enum
