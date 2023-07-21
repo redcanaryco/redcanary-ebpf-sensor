@@ -74,7 +74,7 @@ static __always_inline void exit_exec(struct pt_regs *ctx, process_message_type_
     pm->type = pm_type;
     pm->u.syscall_info.retcode = retcode;
     pm->u.syscall_info.data.exec_info.cgroup_id = cgroup_id;
-    if (extract_file_info(exe, &pm->u.syscall_info.data.exec_info.file_info) < 0) goto EmitWarning;
+    if (file_info_from_file(exe, &pm->u.syscall_info.data.exec_info.file_info) < 0) goto EmitWarning;
 
     // TODO: handle error
     bpf_get_current_comm(&pm->u.syscall_info.data.exec_info.comm, sizeof(pm->u.syscall_info.data.exec_info.comm));

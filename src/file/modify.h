@@ -1,3 +1,5 @@
+#pragma once
+
 #include "common/bpf_helpers.h"
 #include "common/common.h"
 #include "common/helpers.h"
@@ -93,11 +95,8 @@ static __always_inline void store_modified_dentry(struct pt_regs *ctx, void *pat
     event.target_dentry = read_field_ptr(path, CRC_PATH_DENTRY);
     event.target_vfsmount = read_field_ptr(path, CRC_PATH_MNT);
     if (event.target_vfsmount == NULL) goto EmitWarning;
-    // After deletion dentries become "negative" dentries and no
-    // longer have an inode
-    void *inode = read_field_ptr(event.target_dentry, CRC_DENTRY_D_INODE);
-    if (inode == NULL) goto EmitWarning;
-    if (extract_file_owner(inode, &event.before_owner) < 0) {
+
+    if (file_from_dentry(event.target_dentry, NULL, &event.before_owner) < 0) {
         goto EmitWarning;
     }
 
@@ -137,11 +136,9 @@ static __always_inline void exit_modify(void *ctx)
 
     if (event.target_dentry == NULL || event.target_vfsmount == NULL) goto NoEvent;
 
-    void *inode = read_field_ptr(event.target_dentry, CRC_DENTRY_D_INODE);
-    if (inode == NULL) goto EmitWarning;
-
-    int ret = extract_file_info_owner(inode, &fm->u.action.target, &fm->u.action.target_owner);
-    if (ret < 0) goto EmitWarning;
+    if (file_from_dentry(event.target_dentry, &fm->u.action.target, &fm->u.action.target_owner) < 0) {
+        goto EmitWarning;
+    }
 
     if (event.is_created) {
         fm->type = FM_CREATE;

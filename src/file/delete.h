@@ -63,9 +63,7 @@ static __always_inline void store_deleted_dentry(struct pt_regs *ctx, void *path
     // longer have an inode. Furthermore, some filesystems (e.g., xfs)
     // are more aggressive about inode destruction and clear fields
     // such as file mode early
-    void *d_inode = read_field_ptr(dentry, CRC_DENTRY_D_INODE);
-    if (d_inode == NULL) goto EmitWarning;
-    int ret = extract_file_info_owner(d_inode, &event.target, &event.ownership);
+    int ret = file_from_dentry(dentry, &event.target, &event.ownership);
     if (ret < 0) goto EmitWarning;
 
     bpf_map_update_elem(&incomplete_deletes, &pid_tgid, &event, BPF_ANY);

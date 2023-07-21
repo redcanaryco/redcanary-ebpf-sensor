@@ -114,7 +114,7 @@ static __always_inline void exit_symlink(struct pt_regs *ctx)
     if (ret < 0) goto EmitWarning;
     if (d_inode == NULL) goto NoEvent;
 
-    ret = extract_file_info_owner(d_inode, &fm->u.action.target, &fm->u.action.target_owner);
+    ret = file_and_owner_from_ino(d_inode, &fm->u.action.target, &fm->u.action.target_owner);
     if (ret < 0) goto EmitWarning;
 
     fm->type = FM_CREATE;
@@ -189,7 +189,7 @@ static __always_inline void exit_create(void *ctx, file_link_type_t link_type)
         if (inode == NULL) goto NoEvent;
     }
 
-    int ret = extract_file_info_owner(inode, &fm->u.action.target, &fm->u.action.target_owner);
+    int ret = file_and_owner_from_ino(inode, &fm->u.action.target, &fm->u.action.target_owner);
     if (ret < 0) goto EmitWarning;
 
     fm->type = FM_CREATE;
