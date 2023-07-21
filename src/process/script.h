@@ -117,7 +117,7 @@ static __always_inline void enter_script(struct pt_regs *ctx, void *bprm) {
     goto EmitWarning;
   }
 
-  if (extract_file_info(file, new_interpreter) < 0) goto EmitWarning;
+  if (file_info_from_file(file, new_interpreter) < 0) goto EmitWarning;
   relative_file_info_t rel_interpreter = {0};
   rel_interpreter.pid = pid;
   rel_interpreter.interpreter = *new_interpreter;
@@ -172,7 +172,7 @@ static __always_inline void enter_script(struct pt_regs *ctx, void *bprm) {
 
   event = (script_t){0};
   event.pid = pid;
-  if (extract_file_info(file, &event.file.identity) < 0) goto EmitWarning;
+  if (file_info_from_file(file, &event.file.identity) < 0) goto EmitWarning;
 
   char dev[] = "/dev/fd/";
   char truncated_filename[sizeof(dev)] = {0};
