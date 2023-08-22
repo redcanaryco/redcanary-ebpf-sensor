@@ -172,24 +172,25 @@ static __always_inline void exit_create(void *ctx, file_link_type_t link_type)
     if (event.target_dentry == NULL || event.target_vfsmount == NULL) goto NoEvent;
 
     void *inode = NULL;
+    int ret = 0;
     if (link_type == LINK_HARD) {
         // in overlayfs (maybe also other filesystems?) the target
         // dentry we captured during the security path may not be
         // assigned an inode during hardlinks since the real dentry
         // exists elsewhere with the same inode as the source
-        inode = read_field_ptr(event.source, CRC_DENTRY_D_INODE);
-        if (inode == NULL) goto EmitWarning;
+        ret = file_from_dentry(event.source, &fm->u.action.target, &fm->u.action.target_owner);
     } else {
-        // not using read_field_ptr because we expect that `inode`
-        // could be NULL for kernel pseudo filesystems such as
-        // cgroupfs. We still want to error if we fail to read the
-        // field; we just don't want to error for the field being NULL
-        int ret = read_field(event.target_dentry, CRC_DENTRY_D_INODE, &inode, sizeof(inode));
+        // `inode` could be NULL for kernel pseudo filesystems such as
+        // cgroupfs. We don't care about these filesystems so skip if
+        // inode is NULL. There may be false negatives here (inodes
+        // being NULL for other reasons) but in our testing we have
+        // only ever triggered this from cgroupfs
+        ret = read_field(event.target_dentry, CRC_DENTRY_D_INODE, &inode, sizeof(inode));
         if (ret < 0) goto EmitWarning;
         if (inode == NULL) goto NoEvent;
+        ret = file_and_owner_from_ino(inode, &fm->u.action.target, &fm->u.action.target_owner);
     }
 
-    int ret = file_and_owner_from_ino(inode, &fm->u.action.target, &fm->u.action.target_owner);
     if (ret < 0) goto EmitWarning;
 
     fm->type = FM_CREATE;
