@@ -73,7 +73,7 @@ Exit:
 }
 
 SEC("kprobe/sys_setuid")
-int BPF_KPROBE_SYSCALL(kprobe__sys_setuid,
+int BPF_KPROBE_SYSCALL(sys_setuid,
                        u32 ruid)
 {
     DECLARE_CRED_EVENT(SP_SETUID);
@@ -82,14 +82,14 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_setuid,
     return 0;
 }
 
-SEC("kretprobe/sys_setuid")
-int kretprobe__sys_setuid(struct pt_regs *__ctx)
+SEC("kretprobe/ret_sys_setuid")
+int ret_sys_setuid(struct pt_regs *__ctx)
 {
     return dispatch_credentials_event(__ctx);
 }
 
 SEC("kprobe/sys_setgid")
-int BPF_KPROBE_SYSCALL(kprobe__sys_setgid,
+int BPF_KPROBE_SYSCALL(sys_setgid,
                        u32 rgid)
 {
     DECLARE_CRED_EVENT(SP_SETGID);
@@ -98,14 +98,14 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_setgid,
     return 0;
 }
 
-SEC("kretprobe/sys_setgid")
-int kretprobe__sys_setgid(struct pt_regs *__ctx)
+SEC("kretprobe/ret_sys_setgid")
+int ret_sys_setgid(struct pt_regs *__ctx)
 {
     return dispatch_credentials_event(__ctx);
 }
 
 SEC("kprobe/sys_setreuid")
-int BPF_KPROBE_SYSCALL(kprobe__sys_setreuid,
+int BPF_KPROBE_SYSCALL(sys_setreuid,
                        u32 ruid, u32 euid)
 {
     DECLARE_CRED_EVENT(SP_SETREUID);
@@ -115,14 +115,14 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_setreuid,
     return 0;
 }
 
-SEC("kretprobe/sys_setreuid")
-int kretprobe__sys_setreuid(struct pt_regs *__ctx)
+SEC("kretprobe/ret_sys_setreuid")
+int ret_sys_setreuid(struct pt_regs *__ctx)
 {
     return dispatch_credentials_event(__ctx);
 }
 
 SEC("kprobe/sys_setregid")
-int BPF_KPROBE_SYSCALL(kprobe__sys_setregid,
+int BPF_KPROBE_SYSCALL(sys_setregid,
                        u32 rgid, u32 egid)
 {
     DECLARE_CRED_EVENT(SP_SETREGID);
@@ -132,14 +132,14 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_setregid,
     return 0;
 }
 
-SEC("kretprobe/sys_setregid")
-int kretprobe__sys_setregid(struct pt_regs *__ctx)
+SEC("kretprobe/ret_sys_setregid")
+int ret_sys_setregid(struct pt_regs *__ctx)
 {
     return dispatch_credentials_event(__ctx);
 }
 
 SEC("kprobe/sys_setresuid")
-int BPF_KPROBE_SYSCALL(kprobe__sys_setresuid,
+int BPF_KPROBE_SYSCALL(sys_setresuid,
                        u32 ruid, u32 euid, u32 suid)
 {
     DECLARE_CRED_EVENT(SP_SETREUID);
@@ -150,14 +150,14 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_setresuid,
     return 0;
 }
 
-SEC("kretprobe/sys_setresuid")
-int kretprobe__sys_setresuid(struct pt_regs *__ctx)
+SEC("kretprobe/ret_sys_setresuid")
+int ret_sys_setresuid(struct pt_regs *__ctx)
 {
     return dispatch_credentials_event(__ctx);
 }
 
 SEC("kprobe/sys_setresgid")
-int BPF_KPROBE_SYSCALL(kprobe__sys_setresgid,
+int BPF_KPROBE_SYSCALL(sys_setresgid,
                        u32 rgid, u32 egid, u32 sgid)
 {
     DECLARE_CRED_EVENT(SP_SETREGID);
@@ -168,8 +168,8 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_setresgid,
     return 0;
 }
 
-SEC("kretprobe/sys_setresgid")
-int kretprobe__sys_setresgid(struct pt_regs *__ctx)
+SEC("kretprobe/ret_sys_setresgid")
+int ret_sys_setresgid(struct pt_regs *__ctx)
 {
     return dispatch_credentials_event(__ctx);
 }

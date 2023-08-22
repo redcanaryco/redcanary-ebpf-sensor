@@ -29,9 +29,9 @@ struct syscalls_exit_args
 
 // tail-call-only function to finish and send the symlink message
 SEC("kprobe/exit_symlink")
-int kprobe__exit_symlink(struct pt_regs *ctx)
+int exit_symlink(struct pt_regs *ctx)
 {
-    exit_symlink(ctx);
+    _exit_symlink(ctx);
     return 0;
 }
 
@@ -39,15 +39,15 @@ int kprobe__exit_symlink(struct pt_regs *ctx)
 // mkdir probes
 //
 
-SEC("tracepoint/sys_enter_mkdir")
-int tracepoint__syscalls_sys_enter__mkdir(void *ctx)
+SEC("tracepoint/syscalls/sys_enter_mkdir")
+int sys_enter_mkdir(void *ctx)
 {
     enter_create(ctx);
     return 0;
 }
 
-SEC("tracepoint/sys_enter_mkdirat")
-int tracepoint__syscalls_sys_enter__mkdirat(void *ctx)
+SEC("tracepoint/syscalls/sys_enter_mkdirat")
+int sys_enter_mkdirat(void *ctx)
 {
     enter_create(ctx);
     return 0;
@@ -60,8 +60,8 @@ int BPF_KPROBE(security_path_mkdir, const struct path *dir, struct dentry *dentr
     return 0;
 }
 
-SEC("tracepoint/sys_exit_mkdir")
-int tracepoint__syscalls_sys_exit__mkdir(struct syscalls_exit_args *ctx)
+SEC("tracepoint/syscalls/sys_exit_mkdir")
+int sys_exit_mkdir(struct syscalls_exit_args *ctx)
 {
     if (ctx->ret < 0)
         return 0;
@@ -69,8 +69,8 @@ int tracepoint__syscalls_sys_exit__mkdir(struct syscalls_exit_args *ctx)
     return 0;
 }
 
-SEC("tracepoint/sys_exit_mkdirat")
-int tracepoint__syscalls_sys_exit__mkdirat(struct syscalls_exit_args *ctx)
+SEC("tracepoint/syscalls/sys_exit_mkdirat")
+int sys_exit_mkdirat(struct syscalls_exit_args *ctx)
 {
     if (ctx->ret < 0)
         return 0;
@@ -83,14 +83,14 @@ int tracepoint__syscalls_sys_exit__mkdirat(struct syscalls_exit_args *ctx)
 //
 
 SEC("kprobe/sys_symlink")
-int BPF_KPROBE_SYSCALL(kprobe__sys_symlink)
+int BPF_KPROBE_SYSCALL(sys_symlink)
 {
     enter_create(ctx);
     return 0;
 }
 
 SEC("kprobe/sys_symlinkat")
-int BPF_KPROBE_SYSCALL(kprobe__sys_symlinkat)
+int BPF_KPROBE_SYSCALL(sys_symlinkat)
 {
     enter_create(ctx);
     return 0;
@@ -116,15 +116,15 @@ int BPF_KRETPROBE(ret_vfs_symlink, int retval)
 // hard link probes
 //
 
-SEC("tracepoint/sys_enter_link")
-int tracepoint__syscalls_sys_enter__link(void *ctx)
+SEC("tracepoint/syscalls/sys_enter_link")
+int sys_enter_link(void *ctx)
 {
     enter_create(ctx);
     return 0;
 }
 
-SEC("tracepoint/sys_enter_linkat")
-int tracepoint__syscalls_sys_enter__linkat(void *ctx)
+SEC("tracepoint/syscalls/sys_enter_linkat")
+int sys_enter_linkat(void *ctx)
 {
     enter_create(ctx);
     return 0;
@@ -137,8 +137,8 @@ int BPF_KPROBE(security_path_link, struct dentry *old_dentry, const struct path 
     return 0;
 }
 
-SEC("tracepoint/sys_exit_link")
-int tracepoint__syscalls_sys_exit__link(struct syscalls_exit_args *ctx)
+SEC("tracepoint/syscalls/sys_exit_link")
+int sys_exit_link(struct syscalls_exit_args *ctx)
 {
     if (ctx->ret < 0)
         return 0;
@@ -146,8 +146,8 @@ int tracepoint__syscalls_sys_exit__link(struct syscalls_exit_args *ctx)
     return 0;
 }
 
-SEC("tracepoint/sys_exit_linkat")
-int tracepoint__syscalls_sys_exit__linkat(struct syscalls_exit_args *ctx)
+SEC("tracepoint/syscalls/sys_exit_linkat")
+int sys_exit_linkat(struct syscalls_exit_args *ctx)
 {
     if (ctx->ret < 0)
         return 0;
@@ -159,15 +159,15 @@ int tracepoint__syscalls_sys_exit__linkat(struct syscalls_exit_args *ctx)
 // mknod
 //
 
-SEC("tracepoint/sys_enter_mknod")
-int tracepoint__syscalls_sys_enter__mknod(void *ctx)
+SEC("tracepoint/syscalls/sys_enter_mknod")
+int sys_enter_mknod(void *ctx)
 {
     enter_modify(ctx);
     return 0;
 }
 
-SEC("tracepoint/sys_enter_mknodat")
-int tracepoint__syscalls_sys_enter__mknodat(void *ctx)
+SEC("tracepoint/syscalls/sys_enter_mknodat")
+int sys_enter_mknodat(void *ctx)
 {
     enter_modify(ctx);
     return 0;
@@ -180,8 +180,8 @@ int BPF_KPROBE(security_path_mknod, const struct path *dir, struct dentry *dentr
     return 0;
 }
 
-SEC("tracepoint/sys_exit_mknod")
-int tracepoint__syscalls_sys_exit__mknod(struct syscalls_exit_args *ctx)
+SEC("tracepoint/syscalls/sys_exit_mknod")
+int sys_exit_mknod(struct syscalls_exit_args *ctx)
 {
     if (ctx->ret < 0)
         return 0;
@@ -189,8 +189,8 @@ int tracepoint__syscalls_sys_exit__mknod(struct syscalls_exit_args *ctx)
     return 0;
 }
 
-SEC("tracepoint/sys_exit_mknodat")
-int tracepoint__syscalls_sys_exit__mknodat(struct syscalls_exit_args *ctx)
+SEC("tracepoint/syscalls/sys_exit_mknodat")
+int sys_exit_mknodat(struct syscalls_exit_args *ctx)
 {
     if (ctx->ret < 0)
         return 0;
@@ -202,15 +202,15 @@ int tracepoint__syscalls_sys_exit__mknodat(struct syscalls_exit_args *ctx)
 
 /* START DELETE-LIKE PROBES */
 
-SEC("tracepoint/sys_enter_unlink")
-int tracepoint__syscalls_sys_enter__unlink(void *ctx)
+SEC("tracepoint/syscalls/sys_enter_unlink")
+int sys_enter_unlink(void *ctx)
 {
     enter_delete(ctx);
     return 0;
 }
 
-SEC("tracepoint/sys_exit_unlink")
-int tracepoint__syscalls_sys_exit__unlink(struct syscalls_exit_args *ctx)
+SEC("tracepoint/syscalls/sys_exit_unlink")
+int sys_exit_unlink(struct syscalls_exit_args *ctx)
 {
     if (ctx->ret < 0)
         return 0;
@@ -218,15 +218,15 @@ int tracepoint__syscalls_sys_exit__unlink(struct syscalls_exit_args *ctx)
     return 0;
 }
 
-SEC("tracepoint/sys_enter_unlinkat")
-int tracepoint__syscalls_sys_enter__unlinkat(void *ctx)
+SEC("tracepoint/syscalls/sys_enter_unlinkat")
+int sys_enter_unlinkat(void *ctx)
 {
     enter_delete(ctx);
     return 0;
 }
 
-SEC("tracepoint/sys_exit_unlinkat")
-int tracepoint__syscalls_sys_exit__unlinkat(struct syscalls_exit_args *ctx)
+SEC("tracepoint/syscalls/sys_exit_unlinkat")
+int sys_exit_unlinkat(struct syscalls_exit_args *ctx)
 {
     if (ctx->ret < 0)
         return 0;
@@ -241,8 +241,8 @@ int BPF_KPROBE(security_path_unlink, const struct path *dir, struct dentry *dent
     return 0;
 }
 
-SEC("tracepoint/sys_enter_rmdir")
-int tracepoint__syscalls_sys_enter__rmdir(void *ctx)
+SEC("tracepoint/syscalls/sys_enter_rmdir")
+int sys_enter_rmdir(void *ctx)
 {
     enter_delete(ctx);
     return 0;
@@ -255,8 +255,8 @@ int BPF_KPROBE(security_path_rmdir, const struct path *dir, struct dentry *dentr
     return 0;
 }
 
-SEC("tracepoint/sys_exit_rmdir")
-int tracepoint__syscalls_sys_exit__rmdir(struct syscalls_exit_args *ctx)
+SEC("tracepoint/syscalls/sys_exit_rmdir")
+int sys_exit_rmdir(struct syscalls_exit_args *ctx)
 {
     if (ctx->ret < 0)
         return 0;
@@ -268,15 +268,15 @@ int tracepoint__syscalls_sys_exit__rmdir(struct syscalls_exit_args *ctx)
 
 /* START CHMOD-LIKE */
 
-SEC("tracepoint/sys_enter_chmod")
-int tracepoint__syscalls_sys_enter__chmod(void *ctx)
+SEC("tracepoint/syscalls/sys_enter_chmod")
+int sys_enter_chmod(void *ctx)
 {
     enter_modify(ctx);
     return 0;
 }
 
-SEC("tracepoint/sys_exit_chmod")
-int tracepoint__syscalls_sys_exit__chmod(struct syscalls_exit_args *ctx)
+SEC("tracepoint/syscalls/sys_exit_chmod")
+int sys_exit_chmod(struct syscalls_exit_args *ctx)
 {
     if (ctx->ret < 0)
         return 0;
@@ -284,15 +284,15 @@ int tracepoint__syscalls_sys_exit__chmod(struct syscalls_exit_args *ctx)
     return 0;
 }
 
-SEC("tracepoint/sys_enter_fchmod")
-int tracepoint__syscalls_sys_enter__fchmod(void *ctx)
+SEC("tracepoint/syscalls/sys_enter_fchmod")
+int sys_enter_fchmod(void *ctx)
 {
     enter_modify(ctx);
     return 0;
 }
 
-SEC("tracepoint/sys_exit_fchmod")
-int tracepoint__syscalls_sys_exit__fchmod(struct syscalls_exit_args *ctx)
+SEC("tracepoint/syscalls/sys_exit_fchmod")
+int sys_exit_fchmod(struct syscalls_exit_args *ctx)
 {
     if (ctx->ret < 0)
         return 0;
@@ -300,15 +300,15 @@ int tracepoint__syscalls_sys_exit__fchmod(struct syscalls_exit_args *ctx)
     return 0;
 }
 
-SEC("tracepoint/sys_enter_fchmodat")
-int tracepoint__syscalls_sys_enter__fchmodat(void *ctx)
+SEC("tracepoint/syscalls/sys_enter_fchmodat")
+int sys_enter_fchmodat(void *ctx)
 {
     enter_modify(ctx);
     return 0;
 }
 
-SEC("tracepoint/sys_exit_fchmodat")
-int tracepoint__syscalls_sys_exit__fchmodat(struct syscalls_exit_args *ctx)
+SEC("tracepoint/syscalls/sys_exit_fchmodat")
+int sys_exit_fchmodat(struct syscalls_exit_args *ctx)
 {
     if (ctx->ret < 0)
         return 0;
@@ -327,15 +327,15 @@ int BPF_KPROBE(security_path_chmod, const struct path *path, umode_t mode)
 
 /* START CHOWN-LIKE */
 
-SEC("tracepoint/sys_enter_chown")
-int tracepoint__syscalls_sys_enter__chown(void *ctx)
+SEC("tracepoint/syscalls/sys_enter_chown")
+int sys_enter_chown(void *ctx)
 {
     enter_modify(ctx);
     return 0;
 }
 
-SEC("tracepoint/sys_exit_chown")
-int tracepoint__syscalls_sys_exit__chown(struct syscalls_exit_args *ctx)
+SEC("tracepoint/syscalls/sys_exit_chown")
+int sys_exit_chown(struct syscalls_exit_args *ctx)
 {
     if (ctx->ret < 0)
         return 0;
@@ -343,15 +343,15 @@ int tracepoint__syscalls_sys_exit__chown(struct syscalls_exit_args *ctx)
     return 0;
 }
 
-SEC("tracepoint/sys_enter_lchown")
-int tracepoint__syscalls_sys_enter__lchown(void *ctx)
+SEC("tracepoint/syscalls/sys_enter_lchown")
+int sys_enter_lchown(void *ctx)
 {
     enter_modify(ctx);
     return 0;
 }
 
-SEC("tracepoint/sys_exit_lchown")
-int tracepoint__syscalls_sys_exit__lchown(struct syscalls_exit_args *ctx)
+SEC("tracepoint/syscalls/sys_exit_lchown")
+int sys_exit_lchown(struct syscalls_exit_args *ctx)
 {
     if (ctx->ret < 0)
         return 0;
@@ -359,15 +359,15 @@ int tracepoint__syscalls_sys_exit__lchown(struct syscalls_exit_args *ctx)
     return 0;
 }
 
-SEC("tracepoint/sys_enter_fchown")
-int tracepoint__syscalls_sys_enter__fchown(void *ctx)
+SEC("tracepoint/syscalls/sys_enter_fchown")
+int sys_enter_fchown(void *ctx)
 {
     enter_modify(ctx);
     return 0;
 }
 
-SEC("tracepoint/sys_exit_fchown")
-int tracepoint__syscalls_sys_exit__fchown(struct syscalls_exit_args *ctx)
+SEC("tracepoint/syscalls/sys_exit_fchown")
+int sys_exit_fchown(struct syscalls_exit_args *ctx)
 {
     if (ctx->ret < 0)
         return 0;
@@ -375,15 +375,15 @@ int tracepoint__syscalls_sys_exit__fchown(struct syscalls_exit_args *ctx)
     return 0;
 }
 
-SEC("tracepoint/sys_enter_fchownat")
-int tracepoint__syscalls_sys_enter__fchownat(void *ctx)
+SEC("tracepoint/syscalls/sys_enter_fchownat")
+int sys_enter_fchownat(void *ctx)
 {
     enter_modify(ctx);
     return 0;
 }
 
-SEC("tracepoint/sys_exit_fchownat")
-int tracepoint__syscalls_sys_exit__fchownat(struct syscalls_exit_args *ctx)
+SEC("tracepoint/syscalls/sys_exit_fchownat")
+int sys_exit_fchownat(struct syscalls_exit_args *ctx)
 {
     if (ctx->ret < 0)
         return 0;
@@ -402,15 +402,15 @@ int BPF_KPROBE(security_path_chown, const struct path *path, uid_t uid, gid_t gi
 
 /* START RENAME PROBES */
 
-SEC("tracepoint/sys_enter_rename")
-int tracepoint__syscalls_sys_enter__rename(void *ctx)
+SEC("tracepoint/syscalls/sys_enter_rename")
+int sys_enter_rename(void *ctx)
 {
     enter_rename(ctx);
     return 0;
 }
 
-SEC("tracepoint/sys_exit_rename")
-int tracepoint__syscalls_sys_exit__rename(struct syscalls_exit_args *ctx)
+SEC("tracepoint/syscalls/sys_exit_rename")
+int sys_exit_rename(struct syscalls_exit_args *ctx)
 {
     if (ctx->ret < 0)
         return 0;
@@ -418,15 +418,15 @@ int tracepoint__syscalls_sys_exit__rename(struct syscalls_exit_args *ctx)
     return 0;
 }
 
-SEC("tracepoint/sys_enter_renameat")
-int tracepoint__syscalls_sys_enter__renameat(void *ctx)
+SEC("tracepoint/syscalls/sys_enter_renameat")
+int sys_enter_renameat(void *ctx)
 {
     enter_rename(ctx);
     return 0;
 }
 
-SEC("tracepoint/sys_exit_renameat")
-int tracepoint__syscalls_sys_exit__renameat(struct syscalls_exit_args *ctx)
+SEC("tracepoint/syscalls/sys_exit_renameat")
+int sys_exit_renameat(struct syscalls_exit_args *ctx)
 {
     if (ctx->ret < 0)
         return 0;
@@ -434,15 +434,15 @@ int tracepoint__syscalls_sys_exit__renameat(struct syscalls_exit_args *ctx)
     return 0;
 }
 
-SEC("tracepoint/sys_enter_renameat2")
-int tracepoint__syscalls_sys_enter__renameat2(void *ctx)
+SEC("tracepoint/syscalls/sys_enter_renameat2")
+int sys_enter_renameat2(void *ctx)
 {
     enter_rename(ctx);
     return 0;
 }
 
-SEC("tracepoint/sys_exit_renameat2")
-int tracepoint__syscalls_sys_exit__renameat2(struct syscalls_exit_args *ctx)
+SEC("tracepoint/syscalls/sys_exit_renameat2")
+int sys_exit_renameat2(struct syscalls_exit_args *ctx)
 {
     if (ctx->ret < 0)
         return 0;
@@ -460,8 +460,8 @@ int BPF_KPROBE(security_path_rename, const struct path *old_dir, struct dentry *
 /* END RENAME PROBES */
 /* BEGIN OPEN-LIKE PROBES */
 
-SEC("tracepoint/sys_enter_open")
-int tracepoint__syscalls_sys_enter__open(struct syscalls_enter_open_args *ctx)
+SEC("tracepoint/syscalls/sys_enter_open")
+int sys_enter_open(struct syscalls_enter_open_args *ctx)
 {
     if (is_write_open(ctx->flags)) {
         enter_modify(ctx);
@@ -472,8 +472,8 @@ int tracepoint__syscalls_sys_enter__open(struct syscalls_enter_open_args *ctx)
     return 0;
 }
 
-SEC("tracepoint/sys_enter_openat")
-int tracepoint__syscalls_sys_enter__openat(struct syscalls_enter_openat_args *ctx)
+SEC("tracepoint/syscalls/sys_enter_openat")
+int sys_enter_openat(struct syscalls_enter_openat_args *ctx)
 {
     if (is_write_open(ctx->flags)) {
         enter_modify(ctx);
@@ -484,8 +484,8 @@ int tracepoint__syscalls_sys_enter__openat(struct syscalls_enter_openat_args *ct
     return 0;
 }
 
-SEC("tracepoint/sys_enter_openat2")
-int tracepoint__syscalls_sys_enter__openat2(struct syscalls_enter_openat2_args *ctx)
+SEC("tracepoint/syscalls/sys_enter_openat2")
+int sys_enter_openat2(struct syscalls_enter_openat2_args *ctx)
 {
     u64 flags = 0;
     bpf_probe_read(&flags, sizeof(flags), &ctx->how->flags);
@@ -498,8 +498,8 @@ int tracepoint__syscalls_sys_enter__openat2(struct syscalls_enter_openat2_args *
     return 0;
 }
 
-SEC("tracepoint/sys_enter_open_by_handle_at")
-int tracepoint__syscalls_sys_enter_open_by_handle_at(struct syscalls_enter_open_by_handle_at_args *ctx)
+SEC("tracepoint/syscalls/sys_enter_open_by_handle_at")
+int sys_enter_open_by_handle_at(struct syscalls_enter_open_by_handle_at_args *ctx)
 {
     if (is_write_open(ctx->flags)) {
         enter_modify(ctx);
@@ -524,8 +524,8 @@ int BPF_KPROBE(security_file_open, void *file)
     return 0;
 }
 
-SEC("tracepoint/sys_exit_open")
-int tracepoint__syscalls_sys_exit__open(struct syscalls_exit_args *ctx)
+SEC("tracepoint/syscalls/sys_exit_open")
+int sys_exit_open(struct syscalls_exit_args *ctx)
 {
     if (ctx->ret < 0)
         return 0;
@@ -533,8 +533,8 @@ int tracepoint__syscalls_sys_exit__open(struct syscalls_exit_args *ctx)
     return 0;
 }
 
-SEC("tracepoint/sys_exit_openat")
-int tracepoint__syscalls_sys_exit__openat(struct syscalls_exit_args *ctx)
+SEC("tracepoint/syscalls/sys_exit_openat")
+int sys_exit_openat(struct syscalls_exit_args *ctx)
 {
     if (ctx->ret < 0)
         return 0;
@@ -542,8 +542,8 @@ int tracepoint__syscalls_sys_exit__openat(struct syscalls_exit_args *ctx)
     return 0;
 }
 
-SEC("tracepoint/sys_exit_openat2")
-int tracepoint__syscalls_sys_exit__openat2(struct syscalls_exit_args *ctx)
+SEC("tracepoint/syscalls/sys_exit_openat2")
+int sys_exit_openat2(struct syscalls_exit_args *ctx)
 {
     if (ctx->ret < 0)
         return 0;
@@ -551,8 +551,8 @@ int tracepoint__syscalls_sys_exit__openat2(struct syscalls_exit_args *ctx)
     return 0;
 }
 
-SEC("tracepoint/sys_exit_open_by_handle_at")
-int tracepoint__syscalls_sys_exit__open_by_handle_at(struct syscalls_exit_args *ctx)
+SEC("tracepoint/syscalls/sys_exit_open_by_handle_at")
+int sys_exit_open_by_handle_at(struct syscalls_exit_args *ctx)
 {
     if (ctx->ret < 0)
         return 0;
@@ -561,8 +561,8 @@ int tracepoint__syscalls_sys_exit__open_by_handle_at(struct syscalls_exit_args *
 }
 
 
-SEC("tracepoint/sys_enter_creat")
-int tracepoint__syscalls_sys_enter_creat(void *ctx)
+SEC("tracepoint/syscalls/sys_enter_creat")
+int sys_enter_creat(void *ctx)
 {
     // creat is equivalent to calling open with O_CREAT | O_WRONLY | O_TRUNC
     // If we see a creat, we should treat it as a write open
@@ -570,8 +570,8 @@ int tracepoint__syscalls_sys_enter_creat(void *ctx)
     return 0;
 }
 
-SEC("tracepoint/sys_exit_creat")
-int tracepoint__syscalls_sys_exit__creat(struct syscalls_exit_args *ctx)
+SEC("tracepoint/syscalls/sys_exit_creat")
+int sys_exit_creat(struct syscalls_exit_args *ctx)
 {
     if (ctx->ret < 0)
         return 0;
@@ -579,8 +579,8 @@ int tracepoint__syscalls_sys_exit__creat(struct syscalls_exit_args *ctx)
     return 0;
 }
 
-SEC("tracepoint/sys_enter_truncate")
-int tracepoint__syscalls_sys_enter_truncate(void *ctx)
+SEC("tracepoint/syscalls/sys_enter_truncate")
+int sys_enter_truncate(void *ctx)
 {
     enter_modify(ctx);
     return 0;
@@ -593,8 +593,8 @@ int BPF_KPROBE(security_path_truncate, const struct path *path)
     return 0;
 }
 
-SEC("tracepoint/sys_exit_truncate")
-int tracepoint__syscalls_sys_exit__truncate(struct syscalls_exit_args *ctx)
+SEC("tracepoint/syscalls/sys_exit_truncate")
+int sys_exit_truncate(struct syscalls_exit_args *ctx)
 {
     if (ctx->ret < 0)
         return 0;
@@ -604,7 +604,7 @@ int tracepoint__syscalls_sys_exit__truncate(struct syscalls_exit_args *ctx)
 
 /* END OPEN-LIKE PROBES */
 
-static __always_inline void filemod_paths(void *ctx)
+static __always_inline void _filemod_paths(void *ctx)
 {
     u32 key = 0;
     buf_t *buffer = (buf_t *)bpf_map_lookup_elem(&buffers, &key);
@@ -686,9 +686,9 @@ Done:
 }
 
 SEC("tracepoint/filemod_paths")
-int tracepoint__filemod_paths(void *ctx)
+int filemod_paths(void *ctx)
 {
-    filemod_paths(ctx);
+    _filemod_paths(ctx);
     return 0;
 }
 

@@ -103,7 +103,7 @@ int uprobe__read_return_string(struct pt_regs *ctx)
 }
 
 SEC("kprobe/sys_ptrace_write")
-int BPF_KPROBE_SYSCALL(kprobe__sys_ptrace_write,
+int BPF_KPROBE_SYSCALL(sys_ptrace_write,
                        u32 request, u32 target_pid, void *addr)
 {
     syscall_pattern_type_t syscall_pattern = ptrace_syscall_pattern(request);
@@ -130,7 +130,7 @@ Exit:
 }
 
 SEC("kprobe/sys_ptrace")
-int BPF_KPROBE_SYSCALL(kprobe__sys_ptrace,
+int BPF_KPROBE_SYSCALL(sys_ptrace,
                        u32 request, u32 target_pid)
 {
     syscall_pattern_type_t syscall_pattern = ptrace_syscall_pattern(request);
@@ -156,7 +156,7 @@ Exit:
 }
 
 SEC("kprobe/sys_process_vm_writev_5_5")
-int BPF_KPROBE_SYSCALL(kprobe__sys_process_vm_writev_5_5,
+int BPF_KPROBE_SYSCALL(sys_process_vm_writev_5_5,
                        u32 target_pid, piovec_t liov, u32 liovcnt, piovec_t riov, u32 riovcnt)
 {
     DECLARE_EVENT(write_process_memory_event_t, SP_PROCESS_VM_WRITEV);
@@ -180,7 +180,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_process_vm_writev_5_5,
 }
 
 SEC("kprobe/sys_process_vm_writev")
-int BPF_KPROBE_SYSCALL(kprobe__sys_process_vm_writev,
+int BPF_KPROBE_SYSCALL(sys_process_vm_writev,
                        u32 target_pid)
 {
     DECLARE_EVENT(write_process_memory_event_t, SP_PROCESS_VM_WRITEV);
@@ -196,7 +196,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_process_vm_writev,
 }
 
 SEC("kprobe/sys_mprotect")
-int BPF_KPROBE_SYSCALL(kprobe__sys_mprotect,
+int BPF_KPROBE_SYSCALL(sys_mprotect,
                        void *addr, u64 len, u32 prot)
 {
     DECLARE_EVENT(change_memory_permission_event_t, SP_MPROTECT);
