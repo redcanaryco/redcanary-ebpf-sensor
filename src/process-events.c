@@ -18,7 +18,7 @@
 #include "process/unshare.h"
 
 SEC("kprobe/sys_exec_pwd")
-int kprobe__sys_exec_pwd(struct pt_regs *ctx)
+int sys_exec_pwd(struct pt_regs *ctx)
 {
     process_pwd(ctx);
 
@@ -26,7 +26,7 @@ int kprobe__sys_exec_pwd(struct pt_regs *ctx)
 }
 
 SEC("kretprobe/ret_sys_execve")
-int kretprobe__ret_sys_execve(struct pt_regs *ctx)
+int ret_sys_execve(struct pt_regs *ctx)
 {
     exit_exec(ctx, PM_EXECVE, bpf_get_current_cgroup_id(), RET_SYS_EXECVE);
 
@@ -34,7 +34,7 @@ int kretprobe__ret_sys_execve(struct pt_regs *ctx)
 }
 
 SEC("kretprobe/ret_sys_execveat")
-int kretprobe__ret_sys_execveat(struct pt_regs *ctx)
+int ret_sys_execveat(struct pt_regs *ctx)
 {
     exit_exec(ctx, PM_EXECVEAT, bpf_get_current_cgroup_id(), RET_SYS_EXECVEAT);
 
@@ -42,7 +42,7 @@ int kretprobe__ret_sys_execveat(struct pt_regs *ctx)
 }
 
 SEC("kretprobe/ret_sys_execve_pre_4_18")
-int kretprobe__ret_sys_execve_pre_4_18(struct pt_regs *ctx)
+int ret_sys_execve_pre_4_18(struct pt_regs *ctx)
 {
     exit_exec(ctx, PM_EXECVE, 0, RET_SYS_EXECVE);
 
@@ -50,7 +50,7 @@ int kretprobe__ret_sys_execve_pre_4_18(struct pt_regs *ctx)
 }
 
 SEC("kretprobe/ret_sys_execveat_pre_4_18")
-int kretprobe__ret_sys_execveat_pre_4_18(struct pt_regs *ctx)
+int ret_sys_execveat_pre_4_18(struct pt_regs *ctx)
 {
     exit_exec(ctx, PM_EXECVEAT, 0, RET_SYS_EXECVEAT);
 
@@ -59,10 +59,10 @@ int kretprobe__ret_sys_execveat_pre_4_18(struct pt_regs *ctx)
 
 SEC("kprobe/sys_clone_4_8")
 #if defined(__TARGET_ARCH_x86)
-int BPF_KPROBE_SYSCALL(kprobe__sys_clone_4_8, unsigned long flags, void __user *stack,
+int BPF_KPROBE_SYSCALL(sys_clone_4_8, unsigned long flags, void __user *stack,
                        int __user *parent_tid, int __user *child_tid, unsigned long tls)
 #elif defined(__TARGET_ARCH_arm64)
-int BPF_KPROBE_SYSCALL(kprobe__sys_clone_4_8, unsigned long flags, void __user *stack,
+int BPF_KPROBE_SYSCALL(sys_clone_4_8, unsigned long flags, void __user *stack,
                        int __user *parent_tid, unsigned long tls, int __user *child_tid)
 #endif
 {
@@ -72,7 +72,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_clone_4_8, unsigned long flags, void __user *
 }
 
 SEC("kprobe/sys_clone3")
-int BPF_KPROBE_SYSCALL(kprobe__sys_clone3, struct clone_args __user *uargs, size_t size)
+int BPF_KPROBE_SYSCALL(sys_clone3, struct clone_args __user *uargs, size_t size)
 {
     u64 flags = 0;
     bpf_probe_read(&flags, sizeof(u64), &uargs->flags);
@@ -83,7 +83,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_clone3, struct clone_args __user *uargs, size
 }
 
 SEC("kretprobe/ret_sys_clone3")
-int kretprobe__ret_sys_clone3(struct pt_regs *ctx)
+int ret_sys_clone3(struct pt_regs *ctx)
 {
     process_message_t sev = {0};
     exit_clone(ctx, &sev, PM_CLONE3);
@@ -96,7 +96,7 @@ int kretprobe__ret_sys_clone3(struct pt_regs *ctx)
 // tracing fork, clone, etc. It returns early if the task is not a
 // main thread (pid != tid).
 SEC("kprobe/read_pid_task_struct")
-int kprobe__read_pid_task_struct(struct pt_regs *ctx)
+int read_pid_task_struct(struct pt_regs *ctx)
 {
     // get passed in task_struct
     void *ts = (void *)PT_REGS_PARM1(ctx);
@@ -106,7 +106,7 @@ int kprobe__read_pid_task_struct(struct pt_regs *ctx)
 }
 
 SEC("kprobe/sys_fork_4_8")
-int BPF_KPROBE_SYSCALL(kprobe__sys_fork_4_8)
+int BPF_KPROBE_SYSCALL(sys_fork_4_8)
 {
     enter_clone(ctx, PM_FORK, SIGCHLD);
 
@@ -114,7 +114,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_fork_4_8)
 }
 
 SEC("kprobe/sys_vfork_4_8")
-int BPF_KPROBE_SYSCALL(kprobe__sys_vfork_4_8)
+int BPF_KPROBE_SYSCALL(sys_vfork_4_8)
 {
     enter_clone(ctx, PM_VFORK, CLONE_VFORK | CLONE_VM | SIGCHLD);
 
@@ -122,7 +122,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_vfork_4_8)
 }
 
 SEC("kretprobe/ret_sys_clone")
-int kretprobe__ret_sys_clone(struct pt_regs *ctx)
+int ret_sys_clone(struct pt_regs *ctx)
 {
     process_message_t pm = {0};
     exit_clone(ctx, &pm, PM_CLONE);
@@ -130,7 +130,7 @@ int kretprobe__ret_sys_clone(struct pt_regs *ctx)
 }
 
 SEC("kretprobe/ret_sys_fork")
-int kretprobe__ret_sys_fork(struct pt_regs *ctx)
+int ret_sys_fork(struct pt_regs *ctx)
 {
     process_message_t pm = {0};
     exit_clone(ctx, &pm, PM_FORK);
@@ -138,7 +138,7 @@ int kretprobe__ret_sys_fork(struct pt_regs *ctx)
 }
 
 SEC("kretprobe/ret_sys_vfork")
-int kretprobe__ret_sys_vfork(struct pt_regs *ctx)
+int ret_sys_vfork(struct pt_regs *ctx)
 {
     process_message_t pm = {0};
     exit_clone(ctx, &pm, PM_VFORK);
@@ -146,7 +146,7 @@ int kretprobe__ret_sys_vfork(struct pt_regs *ctx)
 }
 
 SEC("kprobe/sys_unshare_4_8")
-int BPF_KPROBE_SYSCALL(kprobe__sys_unshare_4_8, int flags)
+int BPF_KPROBE_SYSCALL(sys_unshare_4_8, int flags)
 {
     enter_unshare(ctx, flags);
 
@@ -154,7 +154,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_unshare_4_8, int flags)
 }
 
 SEC("kretprobe/ret_sys_unshare")
-int kretprobe__ret_sys_unshare(struct pt_regs *ctx)
+int ret_sys_unshare(struct pt_regs *ctx)
 {
     process_message_t pm = {0};
     exit_unshare(ctx, &pm);
@@ -162,7 +162,7 @@ int kretprobe__ret_sys_unshare(struct pt_regs *ctx)
 }
 
 SEC("kprobe/sys_exit")
-int BPF_KPROBE_SYSCALL(kprobe__sys_exit, int status)
+int BPF_KPROBE_SYSCALL(sys_exit, int status)
 {
     u64 pid_tgid = bpf_get_current_pid_tgid();
     u32 pid = pid_tgid >> 32;
@@ -179,7 +179,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_exit, int status)
 }
 
 SEC("kprobe/sys_exit_group")
-int BPF_KPROBE_SYSCALL(kprobe__sys_exit_group, int status)
+int BPF_KPROBE_SYSCALL(sys_exit_group, int status)
 {
     process_message_t pm = {0};
     push_exit(ctx, &pm, PM_EXITGROUP, bpf_get_current_pid_tgid() >> 32);
@@ -188,7 +188,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_exit_group, int status)
 }
 
 SEC("kprobe/sys_execveat")
-int BPF_KPROBE_SYSCALL(kprobe__sys_execveat,
+int BPF_KPROBE_SYSCALL(sys_execveat,
                        int fd, const char __user *filename,
                        const char __user *const __user *argv,
                        const char __user *const __user *envp,
@@ -202,7 +202,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execveat,
 }
 
 SEC("kprobe/sys_execve")
-int BPF_KPROBE_SYSCALL(kprobe__sys_execve,
+int BPF_KPROBE_SYSCALL(sys_execve,
                        const char __user *filename,
                        const char __user *const __user *argv,
                        const char __user *const __user *envp)
@@ -215,7 +215,7 @@ int BPF_KPROBE_SYSCALL(kprobe__sys_execve,
 }
 
 SEC("kprobe/load_script")
-int kprobe__load_script(struct pt_regs *ctx)
+int load_script(struct pt_regs *ctx)
 {
     void *bprm = (void *)PT_REGS_PARM1(ctx);
     enter_script(ctx, bprm);

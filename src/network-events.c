@@ -14,7 +14,7 @@ typedef void *_sock;
 // Just doing a simple 16-bit byte swap
 #define SWAP_U16(x) (((x) >> 8) | ((x) << 8))
 
-struct bpf_map_def SEC("maps/tcp_connect") tcp_connect = {
+struct bpf_map_def SEC("maps/tcp_connect") tcp_connect_data = {
     .type = BPF_MAP_TYPE_LRU_HASH,
     .key_size = sizeof(u32),
     .value_size = sizeof(size_t),
@@ -98,18 +98,18 @@ static __always_inline int push_event(void *ctx, network_event_t *data) {
 }
 
 SEC("kprobe/tcp_connect")
-int kprobe__tcp_connect(struct pt_regs *ctx)
+int tcp_connect(struct pt_regs *ctx)
 {
     _sock sk = (_sock)PT_REGS_PARM1(ctx);
     u32 index = (u32)bpf_get_current_pid_tgid();
 
-    bpf_map_update_elem(&tcp_connect, &index, &sk, BPF_ANY);
+    bpf_map_update_elem(&tcp_connect_data, &index, &sk, BPF_ANY);
 
     return 0;
 }
 
 SEC("kprobe/ip_local_out")
-int kprobe__ip_local_out(struct pt_regs *ctx)
+int ip_local_out(struct pt_regs *ctx)
 {
     _skbuff sk = (_skbuff)PT_REGS_PARM3(ctx);
     u32 index = (u32)bpf_get_current_pid_tgid();
@@ -120,13 +120,13 @@ int kprobe__ip_local_out(struct pt_regs *ctx)
 }
 
 SEC("kprobe/udp_outgoing")
-int kprobe__udp_outgoing(struct pt_regs *ctx)
+int udp_outgoing(struct pt_regs *ctx)
 {
     return save_sock_ptr(ctx, &udp_outgoing_map);
 }
 
 SEC("kretprobe/ret_inet_csk_accept")
-int kretprobe__ret_inet_csk_accept(struct pt_regs *ctx)
+int ret_inet_csk_accept(struct pt_regs *ctx)
 {
     // Get the return value from inet_csk_accept
     unsigned char *sk_base = (unsigned char *)PT_REGS_RC(ctx);
@@ -186,7 +186,7 @@ int kretprobe__ret_inet_csk_accept(struct pt_regs *ctx)
 
 // This handles both IPv4 and IPv6 udp packets
 SEC("kretprobe/ret___skb_recv_udp")
-int kretprobe__ret___skb_recv_udp(struct pt_regs *ctx)
+int ret___skb_recv_udp(struct pt_regs *ctx)
 {
     // Just to be safe 0 out the structs
     network_event_t ev = {0};
@@ -311,7 +311,7 @@ int kretprobe__ret___skb_recv_udp(struct pt_regs *ctx)
 
 // This handles outgoing udp packets
 SEC("kretprobe/ret_udp_outgoing")
-int kretprobe__ret_udp_outgoing(struct pt_regs *ctx)
+int ret_udp_outgoing(struct pt_regs *ctx)
 {
     unsigned char *skb_head = NULL;
     unsigned short transport_header = 0;
@@ -433,7 +433,7 @@ int kretprobe__ret_udp_outgoing(struct pt_regs *ctx)
 }
 
 SEC("kretprobe/ret_tcp_connect")
-int kretprobe__ret_tcp_connect(struct pt_regs *ctx)
+int ret_tcp_connect(struct pt_regs *ctx)
 {
     int ret = PT_REGS_RC(ctx);
     if (ret != 0)
@@ -461,7 +461,7 @@ int kretprobe__ret_tcp_connect(struct pt_regs *ctx)
 
     // if ipv4 do one thing else do the other
 
-    skpp = bpf_map_lookup_elem(&tcp_connect, &index);
+    skpp = bpf_map_lookup_elem(&tcp_connect_data, &index);
     if (skpp == 0) return 0;
 
 
@@ -470,7 +470,7 @@ int kretprobe__ret_tcp_connect(struct pt_regs *ctx)
     unsigned char *skp_base = (unsigned char *)skp;
 
     // only delete after we have gotten the value behind skpp
-    bpf_map_delete_elem(&tcp_connect, &index);
+    bpf_map_delete_elem(&tcp_connect_data, &index);
 
     if (skp_base == NULL)
     {
