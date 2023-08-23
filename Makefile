@@ -74,7 +74,7 @@ $(OBJDIR):
 
 check_headers:
 ifeq ($(ARCH),aarch64)
-	cd $(KERNEL_HEADERS_ROOT) && \
+	-cd $(KERNEL_HEADERS_ROOT) && \
 		make ARCH=arm64 headers_check
 else
 	@:
