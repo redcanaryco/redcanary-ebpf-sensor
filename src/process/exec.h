@@ -4,9 +4,9 @@
 
 #include "../common/bpf_tracing.h"
 #include "../common/buffer.h"
-#include "../common/helpers.h"
+#include "../common/common.h"
 #include "../common/path.h"
-#include "common/types.h"
+#include "../common/types.h"
 #include "push_message.h"
 #include "script.h"
 

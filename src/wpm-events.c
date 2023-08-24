@@ -10,6 +10,18 @@
 #include "common/repeat.h"
 #include "common/common.h"
 
+#define DECLARE_EVENT(TYPE, SP)                \
+    u64 pid_tgid = bpf_get_current_pid_tgid(); \
+    u32 pid = pid_tgid >> 32;                  \
+    u32 tid = pid_tgid & 0xFFFFFFFF;           \
+    u64 mono_ns = bpf_ktime_get_ns();          \
+    TYPE ev = {                                \
+        .syscall_pattern = SP,                 \
+        .pid = pid,                            \
+        .tid = tid,                            \
+        .mono_ns = mono_ns,                    \
+    }
+
 typedef struct
 {
     void *iov_base; /* Starting address */

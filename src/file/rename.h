@@ -2,7 +2,6 @@
 
 #include "common/bpf_helpers.h"
 #include "common/common.h"
-#include "common/helpers.h"
 #include "common/offsets.h"
 #include "common/path.h"
 #include "common/types.h"
