@@ -2,7 +2,6 @@
 
 #include "common/bpf_helpers.h"
 #include "common/common.h"
-#include "common/helpers.h"
 #include "common/offsets.h"
 #include "common/path.h"
 #include "common/types.h"
@@ -94,7 +93,7 @@ static __always_inline void store_renamed_dentries(struct pt_regs *ctx,
     if (name == NULL) goto NoEvent;
     if (name->pid_tgid != pid_tgid) goto EventMismatch;
 
-    int ret = bpf_probe_read_str(&name->name, sizeof(name->name), source_name);
+    int ret = bpf_probe_read_kernel_str(&name->name, sizeof(name->name), source_name);
     if (ret < 0) {
         set_empty_local_warning(W_READ_PATH_STRING);
         goto EmitWarning;

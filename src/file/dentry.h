@@ -1,7 +1,7 @@
 #pragma once
 
+#include "../common/common.h"
 #include "../common/types.h"
-#include "../common/helpers.h"
 
 // fill file_owner fields from fields on the passed in inode pointer
 static __always_inline int file_owner_from_ino(void *d_inode, file_ownership_t *file_owner)

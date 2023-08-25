@@ -2,7 +2,6 @@
 
 #include "../common/buffer.h"
 #include "../common/common.h"
-#include "../common/helpers.h"
 #include "../common/path.h"
 #include "../common/types.h"
 #include "./push_message.h"
@@ -127,7 +126,7 @@ static __always_inline void enter_script(struct pt_regs *ctx, void *bprm) {
   // skip check if sz == BINPRM_BUF_SIZE. If a future kernel increases
   // the value of BINPRM_BUF_SIZE then we may run into truncation but
   // I don't think we need to worry right now.
-  ret = bpf_probe_read_str(&path.path, BINPRM_BUF_SIZE, interp);
+  ret = bpf_probe_read_kernel_str(&path.path, BINPRM_BUF_SIZE, interp);
   if (ret < 0) {
     set_empty_local_warning(W_READ_PATH_STRING);
     goto EmitWarning;
@@ -176,7 +175,7 @@ static __always_inline void enter_script(struct pt_regs *ctx, void *bprm) {
 
   char dev[] = "/dev/fd/";
   char truncated_filename[sizeof(dev)] = {0};
-  int sz = bpf_probe_read_str(truncated_filename, sizeof(dev), filename);
+  int sz = bpf_probe_read_kernel_str(truncated_filename, sizeof(dev), filename);
   int is_dev_fd_file = 0;
   if (sz == sizeof(dev)) {
     is_dev_fd_file = 1;
@@ -201,7 +200,7 @@ static __always_inline void enter_script(struct pt_regs *ctx, void *bprm) {
     // execveat that uses both the dirfd and a *really long*
     // pathname. I rather truncate in this extreme edge case instead
     // of incurring the runtime cost for all the normal cases.
-    ret = bpf_probe_read_str(&path.path, BINPRM_BUF_SIZE, filename);
+    ret = bpf_probe_read_kernel_str(&path.path, BINPRM_BUF_SIZE, filename);
     if (ret < 0) {
       set_empty_local_warning(W_READ_PATH_STRING);
       goto EmitWarning;

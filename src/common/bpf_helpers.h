@@ -273,7 +273,7 @@ static int (*bpf_l4_csum_replace)(void *ctx, int off, int from, int to, int flag
 #define BPF_CORE_READ(src, a)     \
 	({							  \
         typeof((src)->a) __val;   \
-        bpf_probe_read((void *) &__val , sizeof(__val), (&((typeof((src)))(src))->a));  \
+        bpf_probe_read_kernel((void *) &__val , sizeof(__val), (&((typeof((src)))(src))->a));  \
 		__val;					  \
 	})
 
