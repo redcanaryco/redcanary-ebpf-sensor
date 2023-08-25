@@ -175,31 +175,31 @@ int BPF_KRETPROBE(ret___skb_recv_udp, void *skbuff_base)
     if (read_field(skbuff_base, CRC_NETWORK_HDR, &network_header, sizeof(network_header)) < 0) return 0;
 
     __be16 proto = 0;
-    if (bpf_probe_read(&proto, sizeof(proto), (void *)(&eth->h_proto)) < 0) return 0;
+    if (bpf_probe_read_kernel(&proto, sizeof(proto), (void *)(&eth->h_proto)) < 0) return 0;
 
     switch (proto) {
     case 0x8: {
         struct iphdr *ip = (struct iphdr *)(skb_head + network_header);
-        bpf_probe_read(&proto, sizeof(proto), (void *)(&ip->protocol));
+        bpf_probe_read_kernel(&proto, sizeof(proto), (void *)(&ip->protocol));
 
         // If it is not udp we don't care
         if ((proto & 0xff) != IPPROTO_UDP) return 0;
 
         ev.ip_type = AF_INET;
-        bpf_probe_read(&ev.protos.ipv4.dest_addr, sizeof(ev.protos.ipv4.dest_addr), (void *)(&ip->daddr));
-        bpf_probe_read(&ev.protos.ipv4.src_addr, sizeof(ev.protos.ipv4.src_addr), (void *)(&ip->saddr));
+        bpf_probe_read_kernel(&ev.protos.ipv4.dest_addr, sizeof(ev.protos.ipv4.dest_addr), (void *)(&ip->daddr));
+        bpf_probe_read_kernel(&ev.protos.ipv4.src_addr, sizeof(ev.protos.ipv4.src_addr), (void *)(&ip->saddr));
         break;
     }
     case 0xdd86: {
         struct ipv6hdr *ipv6 = (struct ipv6hdr *)(skb_head + network_header);
-        bpf_probe_read(&proto, sizeof(proto), (void *)(&ipv6->nexthdr));
+        bpf_probe_read_kernel(&proto, sizeof(proto), (void *)(&ipv6->nexthdr));
 
         // If it is not udp we don't care
         if ((proto & 0xff) != IPPROTO_UDP) return 0;
 
         ev.ip_type = AF_INET6;
-        bpf_probe_read(&ev.protos.ipv6.dest_addr, sizeof(ev.protos.ipv6.dest_addr), (void *)(&ipv6->daddr));
-        bpf_probe_read(&ev.protos.ipv6.src_addr, sizeof(ev.protos.ipv6.src_addr), (void *)(&ipv6->saddr));
+        bpf_probe_read_kernel(&ev.protos.ipv6.dest_addr, sizeof(ev.protos.ipv6.dest_addr), (void *)(&ipv6->daddr));
+        bpf_probe_read_kernel(&ev.protos.ipv6.src_addr, sizeof(ev.protos.ipv6.src_addr), (void *)(&ipv6->saddr));
         break;
     }
     default:
@@ -210,8 +210,8 @@ int BPF_KRETPROBE(ret___skb_recv_udp, void *skbuff_base)
     if (read_field(skbuff_base, CRC_TRANSPORT_HDR, &transport_header, sizeof(transport_header)) < 0) return 0;
     struct udphdr *udp = (struct udphdr *)(skb_head + transport_header);
 
-    bpf_probe_read(&ev.dest_port, sizeof(ev.dest_port), (void *)(&udp->dest));
-    bpf_probe_read(&ev.src_port, sizeof(ev.src_port), (void *)(&udp->source));
+    bpf_probe_read_kernel(&ev.dest_port, sizeof(ev.dest_port), (void *)(&udp->dest));
+    bpf_probe_read_kernel(&ev.src_port, sizeof(ev.src_port), (void *)(&udp->source));
     ev.src_port = SWAP_U16(ev.src_port);
     ev.dest_port = SWAP_U16(ev.dest_port);
 
@@ -255,38 +255,38 @@ int BPF_KRETPROBE(ret_udp_outgoing, int ret)
     struct udphdr *udp = (struct udphdr *)(skb_head + transport_header);
 
     unsigned char version = 0;
-    bpf_probe_read(&version, sizeof(version), (void *)(ip));
+    bpf_probe_read_kernel(&version, sizeof(version), (void *)(ip));
 
     switch ((version & 0xf0) >> 4) { // Get the upper 4 bits
     case 4: {
         unsigned char proto = 0;
-        bpf_probe_read(&proto, sizeof(proto), (void *)(&ip->protocol));
+        bpf_probe_read_kernel(&proto, sizeof(proto), (void *)(&ip->protocol));
         // If it is not udp we don't care
         if (proto != IPPROTO_UDP) return 0;
 
         ev.ip_type = AF_INET;
-        bpf_probe_read(&ev.protos.ipv4.dest_addr, sizeof(ev.protos.ipv4.dest_addr), (void *)(&ip->daddr));
-        bpf_probe_read(&ev.protos.ipv4.src_addr, sizeof(ev.protos.ipv4.src_addr), (void *)(&ip->saddr));
+        bpf_probe_read_kernel(&ev.protos.ipv4.dest_addr, sizeof(ev.protos.ipv4.dest_addr), (void *)(&ip->daddr));
+        bpf_probe_read_kernel(&ev.protos.ipv4.src_addr, sizeof(ev.protos.ipv4.src_addr), (void *)(&ip->saddr));
         break;
     }
     case 6: {
         struct ipv6hdr *ipv6 = (struct ipv6hdr *)(ip);
         unsigned char proto = 0;
-        bpf_probe_read(&proto, sizeof(proto), (void *)(&ipv6->nexthdr));
+        bpf_probe_read_kernel(&proto, sizeof(proto), (void *)(&ipv6->nexthdr));
         // If it is not udp we don't care
         if (proto != IPPROTO_UDP) return 0;
 
         ev.ip_type = AF_INET6;
-        bpf_probe_read(&ev.protos.ipv6.dest_addr, sizeof(ev.protos.ipv6.dest_addr), (void *)(&ipv6->daddr));
-        bpf_probe_read(&ev.protos.ipv6.src_addr, sizeof(ev.protos.ipv6.src_addr), (void *)(&ipv6->saddr));
+        bpf_probe_read_kernel(&ev.protos.ipv6.dest_addr, sizeof(ev.protos.ipv6.dest_addr), (void *)(&ipv6->daddr));
+        bpf_probe_read_kernel(&ev.protos.ipv6.src_addr, sizeof(ev.protos.ipv6.src_addr), (void *)(&ipv6->saddr));
         break;
     }
     default:
         return 0;
     }
 
-    bpf_probe_read(&ev.dest_port, sizeof(ev.dest_port), (void *)(&udp->dest));
-    bpf_probe_read(&ev.src_port, sizeof(ev.src_port), (void *)(&udp->source));
+    bpf_probe_read_kernel(&ev.dest_port, sizeof(ev.dest_port), (void *)(&udp->dest));
+    bpf_probe_read_kernel(&ev.src_port, sizeof(ev.src_port), (void *)(&udp->source));
     ev.src_port = SWAP_U16(ev.src_port);
     ev.dest_port = SWAP_U16(ev.dest_port);
 
