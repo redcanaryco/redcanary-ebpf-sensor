@@ -118,7 +118,7 @@ static __always_inline int write_string(const char *string, buf_t *buffer, u32 *
     if (*offset > MAX_PERCPU_BUFFER - max_string)
         return -W_BUFFER_FULL;
 
-    int sz = bpf_probe_read_str(&buffer->buf[*offset], max_string, string);
+    int sz = bpf_probe_read_kernel_str(&buffer->buf[*offset], max_string, string);
     if (sz < 0)
     {
         return -W_UNEXPECTED;
@@ -139,7 +139,7 @@ static __always_inline int write_segment(void *ctx, cached_path_t *cached_path, 
         filter_key_t key = {0};           // the main key storage for filter transition lookups
         filter_value_t *val = NULL;
         key.current_state = cached_path->filter_state;
-        if (bpf_probe_read_str(&key.path_segment, MAX_PATH_SEG, name) > 0) {
+        if (bpf_probe_read_kernel_str(&key.path_segment, MAX_PATH_SEG, name) > 0) {
             val = (filter_value_t *)bpf_map_lookup_elem(&filter_transitions, &key);
         }
         // One retry with "*" path element if not found
@@ -213,8 +213,8 @@ static __always_inline int write_path(void *ctx, cached_path_t *cached_path, cur
     void *mnt_parent = NULL;
     void *mnt_root = NULL;
 
-    bpf_probe_read(&mnt_parent, sizeof(mnt_parent), mnt + mnt_parent_offset);
-    bpf_probe_read(&mnt_root, sizeof(mnt_root), cached_path->vfsmount + mnt_root_offset);
+    bpf_probe_read_kernel(&mnt_parent, sizeof(mnt_parent), mnt + mnt_parent_offset);
+    bpf_probe_read_kernel(&mnt_root, sizeof(mnt_root), cached_path->vfsmount + mnt_root_offset);
 
     int ret = 0;
 #if USE_PATH_FILTER
@@ -243,26 +243,26 @@ static __always_inline int write_path(void *ctx, cached_path_t *cached_path, cur
 
             // we are done with the path but not with its mount
             // start appending the path to the mountpoint
-            bpf_probe_read(&cached_path->next_dentry, sizeof(cached_path->next_dentry), mnt + mountpoint_offset);
+            bpf_probe_read_kernel(&cached_path->next_dentry, sizeof(cached_path->next_dentry), mnt + mountpoint_offset);
 
             // allow for nested mounts
             mnt = mnt_parent;
-            bpf_probe_read(&mnt_parent, sizeof(mnt_parent), mnt + mnt_parent_offset);
+            bpf_probe_read_kernel(&mnt_parent, sizeof(mnt_parent), mnt + mnt_parent_offset);
 
             // set what our new mount root is
             cached_path->vfsmount = mnt + mnt_offset;
-            bpf_probe_read(&mnt_root, sizeof(mnt_root), cached_path->vfsmount + mnt_root_offset);
+            bpf_probe_read_kernel(&mnt_root, sizeof(mnt_root), cached_path->vfsmount + mnt_root_offset);
 
             // force a continue early to check if the new path is also at at its root
             continue;
         }
 
         void *dentry = cached_path->next_dentry;
-        bpf_probe_read(&cached_path->next_dentry, sizeof(cached_path->next_dentry), cached_path->next_dentry + dentry_parent);
+        bpf_probe_read_kernel(&cached_path->next_dentry, sizeof(cached_path->next_dentry), cached_path->next_dentry + dentry_parent);
 
         if (dentry == cached_path->next_dentry) goto AtGlobalRoot;
 
-        if (bpf_probe_read(&offset, sizeof(offset), dentry + name) < 0)
+        if (bpf_probe_read_kernel(&offset, sizeof(offset), dentry + name) < 0)
             goto NameError;
 
 #if USE_PATH_FILTER
@@ -270,9 +270,9 @@ static __always_inline int write_path(void *ctx, cached_path_t *cached_path, cur
         if (cached_path->filter_state >= 0) {
             val = NULL;
             // We need to reset at least the whole string storage array each time we use the key
-            bpf_probe_read(&key, sizeof(filter_key_t), &blank_key);
+            bpf_probe_read_kernel(&key, sizeof(filter_key_t), &blank_key);
             key.current_state = cached_path->filter_state;
-            if (bpf_probe_read_str(&key.path_segment, MAX_PATH_SEG, offset) > 0) {
+            if (bpf_probe_read_kernel_str(&key.path_segment, MAX_PATH_SEG, offset) > 0) {
                 val = (filter_value_t *)bpf_map_lookup_elem(&filter_transitions, &key);
             }
             // One retry with "*" path element if not found
@@ -304,7 +304,7 @@ static __always_inline int write_path(void *ctx, cached_path_t *cached_path, cur
 
  AtGlobalRoot:;
     // let's not forget to write the global root (might be a / or the memfd name)
-    if (bpf_probe_read(&offset, sizeof(offset), cached_path->next_dentry + name) < 0)
+    if (bpf_probe_read_kernel(&offset, sizeof(offset), cached_path->next_dentry + name) < 0)
             goto NameError;
 
 #if USE_PATH_FILTER
@@ -312,9 +312,9 @@ static __always_inline int write_path(void *ctx, cached_path_t *cached_path, cur
     if (cached_path->filter_state >= 0) {
         val = NULL;
         // We need to reset at least the string array of the key
-        bpf_probe_read(&key, sizeof(filter_key_t), &blank_key);
+        bpf_probe_read_kernel(&key, sizeof(filter_key_t), &blank_key);
         key.current_state = cached_path->filter_state;
-        if (bpf_probe_read_str(&key.path_segment, MAX_PATH_SEG, offset) > 0) {
+        if (bpf_probe_read_kernel_str(&key.path_segment, MAX_PATH_SEG, offset) > 0) {
             val = (filter_value_t *)bpf_map_lookup_elem(&filter_transitions, &key);
         }
         // A successful lookup here is only a match if the tag is not an empty string
