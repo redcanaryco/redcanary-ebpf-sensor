@@ -89,7 +89,7 @@ static __always_inline int read_field(void *base, u64 field, void *dst, size_t s
     void *ptr_to_ptr = ptr_to_field(base, field);
     if (ptr_to_ptr == NULL) return -1;
 
-    int ret = bpf_probe_read(dst, size, ptr_to_ptr);
+    int ret = bpf_probe_read_kernel(dst, size, ptr_to_ptr);
     if (ret < 0) {
         error_info_t info = {0};
         info.offset_crc = field;
