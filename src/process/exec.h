@@ -105,7 +105,7 @@ static __always_inline void exit_exec(struct pt_regs *ctx, process_message_type_
     // for checking the minimum range of argv_length. Checking for >1
     // is OK because non-empty C strings all use at least 2 bytes.
     if (argv_length > 1) {
-        if (bpf_probe_read(&buffer->buf[offset], argv_length, (void *)arg_start) < 0) {
+        if (bpf_probe_read_user(&buffer->buf[offset], argv_length, (void *)arg_start) < 0) {
             error_info_t info = {0};
             info.argv.start = arg_start;
             info.argv.end = arg_end;
