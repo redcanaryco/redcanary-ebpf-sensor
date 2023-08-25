@@ -488,7 +488,7 @@ SEC("tracepoint/syscalls/sys_enter_openat2")
 int sys_enter_openat2(struct syscalls_enter_openat2_args *ctx)
 {
     u64 flags = 0;
-    bpf_probe_read(&flags, sizeof(flags), &ctx->how->flags);
+    bpf_probe_read_user(&flags, sizeof(flags), &ctx->how->flags);
     if (is_write_open(flags)) {
         enter_modify(ctx);
         return 0;

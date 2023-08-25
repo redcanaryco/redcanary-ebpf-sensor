@@ -75,7 +75,7 @@ SEC("kprobe/sys_clone3")
 int BPF_KPROBE_SYSCALL(sys_clone3, struct clone_args __user *uargs, size_t size)
 {
     u64 flags = 0;
-    bpf_probe_read(&flags, sizeof(u64), &uargs->flags);
+    bpf_probe_read_user(&flags, sizeof(u64), &uargs->flags);
 
     enter_clone(ctx, PM_CLONE3, flags);
 
