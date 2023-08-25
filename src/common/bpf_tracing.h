@@ -548,22 +548,22 @@ struct _aarch64_pt_regs
 #ifdef CONFIG_SYSCALL_WRAPPER
 #define position_syscall_regs()      \
 	struct _x64_pt_regs ___ctx = {}; \
-	bpf_probe_read(&___ctx, sizeof(___ctx), (void *)SYSCALL_PARM1_CORE(ctx));
+	bpf_probe_read_kernel(&___ctx, sizeof(___ctx), (void *)SYSCALL_PARM1_CORE(ctx));
 #else
 #define position_syscall_regs()      \
 	struct _x64_pt_regs ___ctx = {}; \
-	bpf_probe_read(&___ctx, sizeof(___ctx), (void *)ctx);
+	bpf_probe_read_kernel(&___ctx, sizeof(___ctx), (void *)ctx);
 #endif
 #endif
 #ifdef bpf_target_arm64
 #ifdef CONFIG_SYSCALL_WRAPPER
 #define position_syscall_regs()          \
 	struct _aarch64_pt_regs ___ctx = {}; \
-	bpf_probe_read(&___ctx, sizeof(___ctx), (void *)SYSCALL_PARM1_CORE(ctx));
+	bpf_probe_read_kernel(&___ctx, sizeof(___ctx), (void *)SYSCALL_PARM1_CORE(ctx));
 #else
 #define position_syscall_regs()          \
 	struct _aarch64_pt_regs ___ctx = {}; \
-	bpf_probe_read(&___ctx, sizeof(___ctx), (void *)ctx);
+	bpf_probe_read_kernel(&___ctx, sizeof(___ctx), (void *)ctx);
 #endif
 #endif
 
