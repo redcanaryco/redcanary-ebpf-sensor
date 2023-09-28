@@ -1,8 +1,6 @@
 #pragma once
 
-#include <linux/kconfig.h>
-#include <linux/sched.h>
-#include <asm/ptrace.h>
+#include "vmlinux.h"
 
 #include "../common/common.h"
 #include "push_message.h"

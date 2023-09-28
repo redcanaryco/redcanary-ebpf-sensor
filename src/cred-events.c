@@ -1,9 +1,8 @@
-#include <linux/kconfig.h>
-#include <linux/uio.h>
-#include <uapi/linux/ptrace.h>
-#include "common/types.h"
-#include "common/offsets.h"
+#include "vmlinux.h"
+
 #include "common/common.h"
+#include "common/offsets.h"
+#include "common/types.h"
 
 struct bpf_map_def SEC("maps/cred_hash") cred_hash = {
     .type = BPF_MAP_TYPE_HASH,

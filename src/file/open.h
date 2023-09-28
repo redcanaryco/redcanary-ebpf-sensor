@@ -1,4 +1,5 @@
-#include <linux/fs.h>
+#include "vmlinux.h"
+
 #include "common/types.h"
 
 struct syscalls_enter_open_args {
@@ -26,14 +27,6 @@ struct syscalls_enter_openat2_args {
     struct open_how *how;
     size_t usize;
 };
-
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5,6,0)
-struct open_how {
-	__u64 flags;
-	__u64 mode;
-	__u64 resolve;
-};
-#endif
 
 struct syscalls_enter_open_by_handle_at_args {
     __u64 unused;

@@ -1,11 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0+
 
-#include <linux/kconfig.h>
-#include <linux/version.h>
-#include <uapi/linux/bpf.h>
-#include <linux/sched.h>
-#include <linux/uio.h>
-#include <linux/fcntl.h>
+#include "vmlinux.h"
+
 #include "common/bpf_helpers.h"
 #include "common/types.h"
 #include "common/offsets.h"

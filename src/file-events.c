@@ -5,10 +5,7 @@
 // Configure path.h with maximum segments we can read from a d_path before doing a tail call
 #define MAX_PATH_SEGMENTS_NOTAIL 25
 
-#include <linux/kconfig.h>
-#include <asm/ptrace.h>
-#include <linux/path.h>
-#include <linux/fs.h>
+#include "vmlinux.h"
 
 #include "common/bpf_helpers.h"
 #include "common/types.h"

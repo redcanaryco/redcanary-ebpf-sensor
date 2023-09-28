@@ -1,6 +1,6 @@
 #pragma once
 
-#include <asm/ptrace.h>
+#include "vmlinux.h"
 
 #include "../common/common.h"
 #include "push_message.h"

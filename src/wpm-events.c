@@ -1,14 +1,11 @@
-#include <linux/kconfig.h>
-#include <linux/version.h>
-#include <uapi/linux/bpf.h>
-#include <uapi/linux/ptrace.h>
-#include <linux/uio.h>
-#include <linux/fcntl.h>
+#include "vmlinux.h"
+
 #include "common/bpf_helpers.h"
-#include "common/types.h"
+#include "common/common.h"
+#include "common/definitions.h"
 #include "common/offsets.h"
 #include "common/repeat.h"
-#include "common/common.h"
+#include "common/types.h"
 
 #define DECLARE_EVENT(TYPE, SP)                \
     u64 pid_tgid = bpf_get_current_pid_tgid(); \
