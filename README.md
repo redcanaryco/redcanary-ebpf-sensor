@@ -7,8 +7,19 @@ product.
 These applications do not use [BCC](https://github.com/iovisor/bcc) to build. The
 main objective of this design is to have a compile once, run everywhere application.
 
-To build this project run
-`docker-compose run  --rm ebpf make all`
+## Build
+
+To build this project run:
+
+For building both x86_64 and aarch64 architectures
+`docker compose up`
+
+To build either x86_64 or aarch64 architectures
+`docker compose run --rm ebpf-amd make all`
+or
+`docker compose run --rm ebpf-arm make all`
+
+---
 
 A vscode cpp properties files has been included. Make sure to update the include path with the path
 on your local system where the kernel header files are located

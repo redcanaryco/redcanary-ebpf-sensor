@@ -1,6 +1,15 @@
-version: '3'
 services:
-  ebpf:
+  ebpf-amd64:
+    platform: linux/amd64
+    build:
+      dockerfile: ./Dockerfile
+      context: .
+    stdin_open: true
+    tty: true
+    volumes:
+      - .:/src:delegated
+  ebpf-arm64:
+    platform: linux/arm64
     build:
       dockerfile: ./Dockerfile
       context: .
