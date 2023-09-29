@@ -1,7 +1,10 @@
 #pragma once
 
-#include "types.h"
+#include "vmlinux.h"
+
 #include "bpf_helpers.h"
+#include "definitions.h"
+#include "types.h"
 
 typedef struct
 {

@@ -1,6 +1,5 @@
-#include <linux/kconfig.h>
-#include <linux/uio.h>
-#include <uapi/linux/ptrace.h>
+#include "vmlinux.h"
+
 #include "common/common.h"
 #include "common/types.h"
 

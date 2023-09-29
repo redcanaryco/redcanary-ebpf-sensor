@@ -1,6 +1,6 @@
 #pragma once
 
-#include <asm/ptrace.h>
+#include "vmlinux.h"
 
 #include "../common/bpf_tracing.h"
 #include "../common/buffer.h"

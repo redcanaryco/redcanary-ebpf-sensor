@@ -2,37 +2,35 @@
 
 #pragma once
 
-#include <linux/types.h>
-#include <linux/limits.h>
-#include <linux/version.h>
+// do not depend directly on vmlinux.h as this file is our public
+// interface to user-space and hence can be used to create bindings
+// which would make vmlinux.h too heavy weight. Instead manually
+// typedef the needed types
+#ifndef __VMLINUX_H__
+typedef unsigned char __u8;
+typedef short unsigned int __u16;
+typedef unsigned int __u32;
+typedef long long unsigned int __u64;
 
-#define MAX_ADDRESSES 16
-#define TRUE 1
-#define FALSE 0
-
-// Had to add these for some reason
-#define TASK_COMM_LEN 16
+typedef __u8 u8;
 typedef __u16 u16;
+typedef __u32 u32;
+typedef __u64 u64;
 
-#ifndef _UAPI_LINUX_IN6_H
-struct in6_addr
-{
-    union
-    {
-        __u8 u6_addr8[16];
-        __be16 u6_addr16[8];
-        __be32 u6_addr32[4];
-    } in6_u;
+typedef __u16 __be16;
+typedef __u32 __be32;
+
+struct in6_addr {
+	union {
+		__u8 u6_addr8[16];
+		__be16 u6_addr16[8];
+		__be32 u6_addr32[4];
+	} in6_u;
 };
 #endif
 
-#define ETH_ALEN 6
-struct ethhdr
-{
-    unsigned char h_dest[ETH_ALEN];   /* destination eth addr	*/
-    unsigned char h_source[ETH_ALEN]; /* source ether addr	*/
-    __be16 h_proto;                   /* packet type ID field	*/
-} __attribute__((packed));
+#define MAX_ADDRESSES 16
+#define TASK_COMM_LEN 16
 
 typedef enum
 {
@@ -422,23 +420,3 @@ typedef struct
     file_message_data_t u;
     char strings[];
 } file_message_t, *pfile_message_t;
-
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5,3,0)
-// clone3 args are not available in sched.h until 5.3, and we build against 4.4
-struct clone_args
-{
-    __aligned_u64 flags;
-    __aligned_u64 pidfd;
-    __aligned_u64 child_tid;
-    __aligned_u64 parent_tid;
-    __aligned_u64 exit_signal;
-    __aligned_u64 stack;
-    __aligned_u64 stack_size;
-    __aligned_u64 tls;
-    // version 2
-    __aligned_u64 set_tid;
-    __aligned_u64 set_tid_size;
-    // version 3
-    __aligned_u64 cgroup;
-};
-#endif

@@ -1,9 +1,4 @@
-#include <linux/kconfig.h>
-#include <uapi/linux/ptrace.h>
-#include <uapi/linux/ipv6.h>
-#include <uapi/linux/udp.h>
-#include <uapi/linux/ip.h>
-#include <uapi/linux/in.h>
+#include "vmlinux.h"
 
 #include "common/common.h"
 #include "common/offsets.h"

@@ -2,10 +2,6 @@
 
 #pragma once
 
-#include <uapi/linux/bpf.h>
-
-#define BPF_MAP_TYPE_PERCPU_ARRAY 6
-
 #define __BPF_EXT_FUNC_MAPPER(FN)           \
     FN(unspec),                             \
         FN(map_lookup_elem),                \
@@ -262,13 +258,6 @@ struct bpf_map_def
     unsigned int pinning;
     char namespace[BUF_SIZE_MAP_NS];
 };
-
-static int (*bpf_skb_store_bytes)(void *ctx, int off, void *from, int len, int flags) =
-    (void *)BPF_FUNC_skb_store_bytes;
-static int (*bpf_l3_csum_replace)(void *ctx, int off, int from, int to, int flags) =
-    (void *)BPF_FUNC_l3_csum_replace;
-static int (*bpf_l4_csum_replace)(void *ctx, int off, int from, int to, int flags) =
-    (void *)BPF_FUNC_l4_csum_replace;
 
 #define BPF_CORE_READ(src, a)     \
 	({							  \
