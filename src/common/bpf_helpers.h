@@ -2,6 +2,8 @@
 
 #pragma once
 
+#include "vmlinux.h"
+
 #define __BPF_EXT_FUNC_MAPPER(FN)           \
     FN(unspec),                             \
         FN(map_lookup_elem),                \
@@ -273,5 +275,12 @@ struct bpf_map_def
         bpf_trace_printk(____fmt, sizeof(____fmt),      \
                          ##__VA_ARGS__);                \
 })
+
+struct syscalls_exit_args
+{
+    __u64 unused;
+    long __syscall_nr;
+    long ret;
+};
 
 #include "bpf_tracing.h"

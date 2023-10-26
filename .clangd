@@ -3,6 +3,7 @@ If:
   PathMatch: src/common/bpf_helpers\.h
 Diagnostics:
   Suppress: -Wunused-variable
+  UnusedIncludes: None
 
 ---
 CompileFlags:

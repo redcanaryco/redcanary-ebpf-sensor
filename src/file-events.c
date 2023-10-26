@@ -15,13 +15,6 @@
 #include "file/rename.h"
 #include "file/open.h"
 
-struct syscalls_exit_args
-{
-    __u64 unused;
-    long __syscall_nr;
-    long ret;
-};
-
 /* START CREATE-LIKE PROBES */
 
 // tail-call-only function to finish and send the symlink message

@@ -2,7 +2,6 @@
 
 #include "vmlinux.h"
 
-#include "../common/bpf_tracing.h"
 #include "../common/buffer.h"
 #include "../common/common.h"
 #include "../common/path.h"
@@ -10,7 +9,7 @@
 #include "push_message.h"
 #include "script.h"
 
-static __always_inline void exit_exec(struct pt_regs *ctx, process_message_type_t pm_type,
+static __always_inline void exit_exec(struct syscalls_exit_args *ctx, process_message_type_t pm_type,
                                       u64 cgroup_id, tail_call_slot_t tail_call)
 {
     /* SETUP ALL THE VARIABLES THAT WILL BE NEEDED ACCROSS GOTOS */
@@ -31,7 +30,7 @@ static __always_inline void exit_exec(struct pt_regs *ctx, process_message_type_
     /* SANITY CHECKS THAT THE EVENT IS RELEVANT */
 
     // do not emit failed execs
-    int retcode = (int)PT_REGS_RC(ctx);
+    int retcode = ctx->ret;
     if (retcode < 0) return;
 
     pm->u.syscall_info.data.exec_info.event_id = push_scripts(ctx, buffer);
@@ -147,7 +146,7 @@ static __always_inline void exit_exec(struct pt_regs *ctx, process_message_type_
     cursor_t cursor = { .buffer = buffer, .offset = &pm->u.syscall_info.data.exec_info.buffer_length };
     ret = write_path(ctx, cached_path, &cursor, (tail_call_t){
             .slot = tail_call,
-            .table = &tail_call_table,
+            .table = &tp_programs,
         });
 
     // reset skips back to 0. This will automatically update it in the
@@ -159,7 +158,7 @@ static __always_inline void exit_exec(struct pt_regs *ctx, process_message_type_
     write_null_char(buffer, &pm->u.syscall_info.data.exec_info.buffer_length);
 
     /* PROCESS PWD IN A TAIL CALL  */
-    bpf_tail_call(ctx, &tail_call_table, SYS_EXEC_PWD);
+    bpf_tail_call(ctx, &tp_programs, SYS_EXEC_PWD);
 
     // if we fail to tail call we still got quite a bit of information
     // so let's push what we have
@@ -177,7 +176,7 @@ static __always_inline void exit_exec(struct pt_regs *ctx, process_message_type_
     push_warning(ctx, pm, pm_type);
 }
 
-static __always_inline void process_pwd(struct pt_regs *ctx)
+static __always_inline void process_pwd(void *ctx)
 {
   /* SETUP ALL THE VARIABLES THAT WILL BE NEEDED ACCROSS GOTOS */
 
@@ -216,7 +215,7 @@ static __always_inline void process_pwd(struct pt_regs *ctx)
     cursor_t cursor = { .buffer = buffer, .offset = &pm->u.syscall_info.data.exec_info.buffer_length };
     ret = write_path(ctx, cached_path, &cursor, (tail_call_t){
             .slot = SYS_EXEC_PWD,
-            .table = &tail_call_table,
+            .table = &tp_programs,
         });
 
  Done:;

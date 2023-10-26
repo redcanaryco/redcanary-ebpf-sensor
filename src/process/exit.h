@@ -3,7 +3,7 @@
 #include "../common/common.h"
 #include "push_message.h"
 
-static __always_inline void push_exit(struct pt_regs *ctx, pprocess_message_t pm,
+static __always_inline void push_exit(void *ctx, pprocess_message_t pm,
                                       process_message_type_t pm_type, u32 pid)
 {
     void *ts = (void *)bpf_get_current_task();

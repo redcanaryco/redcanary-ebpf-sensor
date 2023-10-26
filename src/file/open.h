@@ -1,6 +1,6 @@
 #include "vmlinux.h"
 
-#include "common/types.h"
+#include "common/definitions.h"
 
 struct syscalls_enter_open_args {
     __u64 unused;

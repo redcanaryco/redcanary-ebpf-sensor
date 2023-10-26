@@ -23,7 +23,7 @@ struct bpf_map_def SEC("maps/incomplete_clone") incomplete_clones = {
 };
 
 // handles the kprobe of clone-like syscalls (fork, vfork, clone, clone3)
-static __always_inline void enter_clone(struct pt_regs *ctx, process_message_type_t pm_type, unsigned long flags)
+static __always_inline void enter_clone(void *ctx, process_message_type_t pm_type, unsigned long flags)
 {
   // we do not care about threads spawning; ignore clones that would
   // share the same thread group as the parent.
@@ -55,12 +55,12 @@ static __always_inline void enter_clone(struct pt_regs *ctx, process_message_typ
 }
 
 // handles the kretprobe of clone-like syscalls (fork, vfork, clone, clone3)
-static __always_inline void exit_clone(struct pt_regs *ctx, pprocess_message_t pm, process_message_type_t pm_type)
+static __always_inline void exit_clone(struct syscalls_exit_args *ctx, pprocess_message_t pm, process_message_type_t pm_type)
 {
   u64 pid_tgid = bpf_get_current_pid_tgid();
   load_event(incomplete_clones, pid_tgid, incomplete_clone_t);
 
-  int retcode = PT_REGS_RC(ctx);
+  int retcode = ctx->ret;
   if (retcode < 0)
     goto Done;
 
