@@ -247,7 +247,7 @@ static __always_inline void enter_script(struct pt_regs *ctx, void *bprm) {
   return;
 }
 
-static __always_inline u64 push_scripts(struct pt_regs *ctx, buf_t *buffer) {
+static __always_inline u64 push_scripts(void *ctx, buf_t *buffer) {
   process_message_t *pm = (process_message_t *)buffer;
   u64 pid_tgid = bpf_get_current_pid_tgid();
   u32 pid = pid_tgid >> 32;

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "vmlinux.h"
+
 #include "bpf_helpers.h"
 
 // maximum size of each buffer (since they may have flexible arrays at

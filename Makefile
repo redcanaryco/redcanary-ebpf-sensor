@@ -1,6 +1,6 @@
 SHELL=/bin/bash -o pipefail
 
-ARCH ?= $(shell uname -p)
+ARCH ?= $(shell uname -m)
 OBJDIR ?= build/$(ARCH)
 SRC = src
 SRCS = $(wildcard $(SRC)/*.c)
@@ -20,6 +20,11 @@ OPT = opt
 LLVM_DIS = llvm-dis
 LLVM = llvm
 LIBCLANG_DEV = libclang-dev
+endif
+
+# If cross-compiling from an M1/M2 Mac then default to aarch64
+ifeq ($(ARCH),arm64)
+ARCH = aarch64
 endif
 
 ifeq ($(ARCH),aarch64)

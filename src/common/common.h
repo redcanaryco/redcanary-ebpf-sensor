@@ -1,7 +1,6 @@
 #pragma once
 
 #include "bpf_helpers.h"
-#include "bpf_tracing.h"
 #include "offsets.h"
 #include "types.h"
 #include "warning.h"
