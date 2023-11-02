@@ -72,15 +72,15 @@ int sys_exit_mkdirat(struct syscalls_exit_args *ctx)
 // symlink probes
 //
 
-SEC("kprobe/sys_symlink")
-int BPF_KPROBE_SYSCALL(sys_symlink)
+SEC("tracepoint/syscalls/sys_enter_symlink")
+int sys_enter_symlink(void *ctx)
 {
     enter_create(ctx);
     return 0;
 }
 
-SEC("kprobe/sys_symlinkat")
-int BPF_KPROBE_SYSCALL(sys_symlinkat)
+SEC("tracepoint/syscalls/sys_enter_symlinkat")
+int sys_enter_symlinkat(void *ctx)
 {
     enter_create(ctx);
     return 0;
@@ -121,7 +121,7 @@ int sys_enter_linkat(void *ctx)
 }
 
 SEC("kprobe/security_path_link")
-int BPF_KPROBE(security_path_link, struct dentry *old_dentry, const struct path *new_dir, struct dentry *new_dentry, unsigned int flags)
+int BPF_KPROBE(security_path_link, struct dentry *old_dentry, const struct path *new_dir, struct dentry *new_dentry)
 {
     store_dentry(ctx, (void *)new_dir, (void *)new_dentry, (void *)old_dentry);
     return 0;
