@@ -3,86 +3,41 @@
 #include "common/bpf_helpers.h"
 #include "common/common.h"
 #include "common/offsets.h"
-#include "common/types.h"
-#include "push_file_message.h"
-#include "dentry.h"
 #include "common/path.h"
+#include "common/types.h"
+#include "dentry.h"
+#include "file/maps.h"
+#include "push_file_message.h"
 
-typedef struct {
-  u64 pid_tgid;
-  u64 start_ktime_ns;
-  void *target_vfsmount;  // vfsmount of the containing directory
-  void *target_dentry;    // dentry of the new directory
-  void *source;           // dentry for hard link, char for symlink
-} incomplete_create_t;
-
-// A map of mkdirs that have started (a kprobe) but are yet to finish
-// (the kretprobe).
-struct bpf_map_def SEC("maps/incomplete_creates") incomplete_creates = {
-  .type = BPF_MAP_TYPE_LRU_HASH,
-  .key_size = sizeof(u64),
-  .value_size = sizeof(incomplete_create_t),
-  .max_entries = 512,
-  .pinning = 0,
-  .namespace = "",
-};
-
-static __always_inline void enter_create(struct pt_regs *ctx)
+static __always_inline void enter_create(void *ctx)
 {
-    u64 pid_tgid = bpf_get_current_pid_tgid();
-    incomplete_create_t event = {0};
-    event.pid_tgid = pid_tgid;
-    event.start_ktime_ns = bpf_ktime_get_ns();
-
-    int ret = bpf_map_update_elem(&incomplete_creates, &pid_tgid, &event, BPF_ANY);
-    if (ret < 0)
-    {
-        file_message_t fm = {0};
-        fm.type = FM_WARNING;
-        fm.u.warning.pid_tgid = pid_tgid;
-        fm.u.warning.message_type.file = FM_CREATE;
-        fm.u.warning.code = W_UPDATE_MAP_ERROR;
-        fm.u.warning.info.err = ret;
-
-        push_file_message(ctx, &fm);
-    }
+    enter_file_message(ctx, FM_CREATE);
 }
 
 // The source parameter should be NULL if there is no source, a dentry for hard links, or a char * for symlink
 static __always_inline void store_dentry(struct pt_regs *ctx, void *path, void *dentry, void *source)
 {
-    u64 pid_tgid = bpf_get_current_pid_tgid();
+    incomplete_file_message_t* event = get_current_event(FM_CREATE);
+    if (event == NULL) return;
+
     file_message_t fm = {0};
 
-    load_event(incomplete_creates, pid_tgid, incomplete_create_t);
-    if (event.target_dentry != NULL) goto NoEvent;
+    if (event->target_dentry != NULL) goto NoEvent;
 
-    event.target_dentry = dentry;
-    event.target_vfsmount = read_field_ptr(path, CRC_PATH_MNT);
-    if (event.target_vfsmount == NULL) goto EmitWarning;
-    event.source = source;
-
-    bpf_map_update_elem(&incomplete_creates, &pid_tgid, &event, BPF_ANY);
+    event->target_dentry = dentry;
+    event->target_vfsmount = read_field_ptr(path, CRC_PATH_MNT);
+    if (event->target_vfsmount == NULL) goto EmitWarning;
+    event->create.source = source;
     return;
 
-    EventMismatch:
-    fm.type = FM_WARNING;
-    fm.u.warning.pid_tgid = pid_tgid;
-    fm.u.warning.message_type.file = FM_CREATE;
-    fm.u.warning.code = W_PID_TGID_MISMATCH;
-    fm.u.warning.info.stored_pid_tgid = event.pid_tgid;
-
-    push_file_message(ctx, &fm);
-    return;
-
-    EmitWarning:
+ EmitWarning:
     push_file_warning(ctx, &fm, FM_CREATE);
 
-    NoEvent:
+ NoEvent:
     return;
 }
 
-static __always_inline void _exit_symlink(struct pt_regs *ctx)
+static __always_inline void _exit_symlink(struct pt_regs *ctx, u64 pid_tgid, incomplete_file_message_t *event)
 {
     u32 key = 0;
     buf_t *buffer = (buf_t *)bpf_map_lookup_elem(&buffers, &key);
@@ -94,22 +49,18 @@ static __always_inline void _exit_symlink(struct pt_regs *ctx)
     file_message_t *fm = (file_message_t *)buffer;
     cursor_t cursor = { .buffer = buffer, .offset = &fm->u.action.buffer_len };
     int ret = 0;
-    error_info_t info = {0};
-
-    u64 pid_tgid = bpf_get_current_pid_tgid();
-    load_event(incomplete_creates, pid_tgid, incomplete_create_t);
 
     if (cached_path->next_dentry != NULL) {
         goto ResolveTarget;
     }
 
-    if (event.target_dentry == NULL || event.target_vfsmount == NULL) goto NoEvent;
+    if (event->target_dentry == NULL || event->vfsmount == NULL) goto NoEvent;
 
     // not using read_field_ptr because we expect that `inode` could
     // be NULL in overlayfs as it gets called twice (recursively) and
     // the first time it exits it does not yet have an inode.
     void *d_inode = NULL;
-    ret = read_field(event.target_dentry, CRC_DENTRY_D_INODE, &d_inode, sizeof(d_inode));
+    ret = read_field(event->target_dentry, CRC_DENTRY_D_INODE, &d_inode, sizeof(d_inode));
     if (ret < 0) goto EmitWarning;
     if (d_inode == NULL) goto NoEvent;
 
@@ -117,12 +68,12 @@ static __always_inline void _exit_symlink(struct pt_regs *ctx)
     if (ret < 0) goto EmitWarning;
 
     fm->type = FM_CREATE;
-    fm->u.action.pid = event.pid_tgid >> 32;
-    fm->u.action.mono_ns = event.start_ktime_ns;
+    fm->u.action.pid = pid_tgid >> 32;
+    fm->u.action.mono_ns = event->start_ktime_ns;
     fm->u.action.buffer_len = sizeof(file_message_t);
     fm->u.action.u.create.source_link = LINK_SYMBOLIC;
 
-    init_filtered_cached_path(cached_path, event.target_dentry, event.target_vfsmount);
+    init_filtered_cached_path(cached_path, event->target_dentry, event->vfsmount);
 
  ResolveTarget:
     ret = write_path(ctx, cached_path, &cursor,
@@ -133,16 +84,12 @@ static __always_inline void _exit_symlink(struct pt_regs *ctx)
     if (ret < 0) goto EmitWarning;
     if (cached_path->filter_state <= 0) goto NoEvent; // Didn't match watched path filter
     write_null_char(cursor.buffer, cursor.offset);
-    write_string(event.source, cursor.buffer, cursor.offset, PATH_MAX);
+    write_string(event->create.source, cursor.buffer, cursor.offset, PATH_MAX);
     push_flexible_file_message(ctx, fm, *cursor.offset);
 
     // lookup tail calls completed; ensure we re-init cached_path next call
     cached_path->next_dentry = NULL;
     return;
-
- EventMismatch:
-    info.stored_pid_tgid = event.pid_tgid;
-    set_local_warning(W_PID_TGID_MISMATCH, info);
 
  EmitWarning:
     push_file_warning(ctx, fm, FM_CREATE);
@@ -153,22 +100,20 @@ static __always_inline void _exit_symlink(struct pt_regs *ctx)
     return;
 }
 
-static __always_inline void exit_create(void *ctx, file_link_type_t link_type)
+static __always_inline file_message_t* exit_create(void *ctx, u64 pid_tgid, incomplete_file_message_t *event, file_link_type_t link_type)
 {
     u32 key = 0;
     buf_t *buffer = (buf_t *)bpf_map_lookup_elem(&buffers, &key);
-    if (buffer == NULL) return;
+    if (buffer == NULL) return NULL;
 
     cached_path_t *cached_path = (cached_path_t *)bpf_map_lookup_elem(&percpu_path, &key);
-    if (cached_path == NULL) return;
+    if (cached_path == NULL) return NULL;
 
-    file_message_t *fm = (file_message_t *)buffer;
-    error_info_t info = {0};
+    file_message_t *fm = NULL;
+    if (event->target_dentry == NULL || event->vfsmount == NULL) goto Done;
 
-    u64 pid_tgid = bpf_get_current_pid_tgid();
-    load_event(incomplete_creates, pid_tgid, incomplete_create_t);
-
-    if (event.target_dentry == NULL || event.target_vfsmount == NULL) goto NoEvent;
+    fm = (file_message_t *)buffer;
+    fm->type = FM_CREATE;
 
     void *inode = NULL;
     int ret = 0;
@@ -177,14 +122,14 @@ static __always_inline void exit_create(void *ctx, file_link_type_t link_type)
         // dentry we captured during the security path may not be
         // assigned an inode during hardlinks since the real dentry
         // exists elsewhere with the same inode as the source
-        ret = file_from_dentry(event.source, &fm->u.action.target, &fm->u.action.target_owner);
+        ret = file_from_dentry(event->create.source, &fm->u.action.target, &fm->u.action.target_owner);
     } else {
         // `inode` could be NULL for kernel pseudo filesystems such as
         // cgroupfs. We don't care about these filesystems so skip if
         // inode is NULL. There may be false negatives here (inodes
         // being NULL for other reasons) but in our testing we have
         // only ever triggered this from cgroupfs
-        ret = read_field(event.target_dentry, CRC_DENTRY_D_INODE, &inode, sizeof(inode));
+        ret = read_field(event->target_dentry, CRC_DENTRY_D_INODE, &inode, sizeof(inode));
         if (ret < 0) goto EmitWarning;
         if (inode == NULL) goto NoEvent;
         ret = file_and_owner_from_ino(inode, &fm->u.action.target, &fm->u.action.target_owner);
@@ -192,32 +137,28 @@ static __always_inline void exit_create(void *ctx, file_link_type_t link_type)
 
     if (ret < 0) goto EmitWarning;
 
-    fm->type = FM_CREATE;
-    fm->u.action.pid = event.pid_tgid >> 32;
-    fm->u.action.mono_ns = event.start_ktime_ns;
+    fm->u.action.pid = pid_tgid >> 32;
+    fm->u.action.mono_ns = event->start_ktime_ns;
     fm->u.action.buffer_len = sizeof(file_message_t);
     fm->u.action.u.create.source_link = link_type;
 
-    init_filtered_cached_path(cached_path, event.target_dentry, event.target_vfsmount);
+    init_filtered_cached_path(cached_path, event->target_dentry, event->vfsmount);
     if (link_type == LINK_HARD) {
-        cached_path->next_path = event.source;
+        cached_path->next_path = event->create.source;
     }
 
-    bpf_tail_call(ctx, &tp_programs, FILE_PATHS);
-
-    info.tailcall = FILE_PATHS;
-    set_local_warning(W_TAIL_CALL_MAX, info);
-    goto EmitWarning;
-
- EventMismatch:
-    info.stored_pid_tgid = event.pid_tgid;
-    set_local_warning(W_PID_TGID_MISMATCH, info);
-
- EmitWarning:
-    push_file_warning(ctx, fm, FM_CREATE);
+    return fm;
 
  NoEvent:
-    // lookup tail calls completed; ensure we re-init cached_path next call
+    fm = NULL;
+    goto Done;
+
+ EmitWarning:
+    fm->u.warning.message_type.file = fm->type;
+    fm->type = FM_WARNING;
+
+ Done:
+    // reset next_dentry for this CPU
     cached_path->next_dentry = NULL;
-    return;
+    return NULL;
 }

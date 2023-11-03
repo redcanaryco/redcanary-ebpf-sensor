@@ -11,9 +11,10 @@
 #include "common/types.h"
 #include "file/create.h"
 #include "file/delete.h"
+#include "file/maps.h"
 #include "file/modify.h"
-#include "file/rename.h"
 #include "file/open.h"
+#include "file/rename.h"
 
 /* START CREATE-LIKE PROBES */
 
@@ -21,7 +22,11 @@
 SEC("kprobe/exit_symlink")
 int exit_symlink(struct pt_regs *ctx)
 {
-    _exit_symlink(ctx);
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+    incomplete_file_message_t *event = get_event(FM_CREATE, &pid_tgid);
+    if (event == NULL) return 0;
+    _exit_symlink(ctx, pid_tgid, event);
+
     return 0;
 }
 
@@ -53,18 +58,16 @@ int BPF_KPROBE(security_path_mkdir, const struct path *dir, struct dentry *dentr
 SEC("tracepoint/syscalls/sys_exit_mkdir")
 int sys_exit_mkdir(struct syscalls_exit_args *ctx)
 {
-    if (ctx->ret < 0)
-        return 0;
-    exit_create(ctx, LINK_NONE);
+    file_message_t *fm = POP_AND_SETUP_ARGS(FM_CREATE, exit_create, LINK_NONE);
+    handle_message(ctx, fm);
     return 0;
 }
 
 SEC("tracepoint/syscalls/sys_exit_mkdirat")
 int sys_exit_mkdirat(struct syscalls_exit_args *ctx)
 {
-    if (ctx->ret < 0)
-        return 0;
-    exit_create(ctx, LINK_NONE);
+    file_message_t *fm = POP_AND_SETUP_ARGS(FM_CREATE, exit_create, LINK_NONE);
+    handle_message(ctx, fm);
     return 0;
 }
 
@@ -83,6 +86,26 @@ SEC("tracepoint/syscalls/sys_enter_symlinkat")
 int sys_enter_symlinkat(void *ctx)
 {
     enter_create(ctx);
+    return 0;
+}
+
+SEC("tracepoint/syscalls/sys_exit_symlink")
+int sys_exit_symlink(void *ctx)
+{
+    // the kretprobe for vfs_symlink isn't guaranteed to fire - so we need to make sure we delete it
+    // at the exit of the syscall no matter what
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+    bpf_map_delete_elem(&incomplete_file_messages, &pid_tgid);
+    return 0;
+}
+
+SEC("tracepoint/syscalls/sys_exit_symlinkat")
+int sys_exit_symlinkat(void *ctx)
+{
+    // the kretprobe for vfs_symlink isn't guaranteed to fire - so we need to make sure we delete it
+    // at the exit of the syscall no matter what
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+    bpf_map_delete_elem(&incomplete_file_messages, &pid_tgid);
     return 0;
 }
 
@@ -130,18 +153,16 @@ int BPF_KPROBE(security_path_link, struct dentry *old_dentry, const struct path 
 SEC("tracepoint/syscalls/sys_exit_link")
 int sys_exit_link(struct syscalls_exit_args *ctx)
 {
-    if (ctx->ret < 0)
-        return 0;
-    exit_create(ctx, LINK_HARD);
+    file_message_t *fm = POP_AND_SETUP_ARGS(FM_CREATE, exit_create, LINK_HARD);
+    handle_message(ctx, fm);
     return 0;
 }
 
 SEC("tracepoint/syscalls/sys_exit_linkat")
 int sys_exit_linkat(struct syscalls_exit_args *ctx)
 {
-    if (ctx->ret < 0)
-        return 0;
-    exit_create(ctx, LINK_HARD);
+    file_message_t *fm = POP_AND_SETUP_ARGS(FM_CREATE, exit_create, LINK_HARD);
+    handle_message(ctx, fm);
     return 0;
 }
 
