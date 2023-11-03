@@ -1,5 +1,7 @@
 #pragma once
 
+#include "common/common.h"
+#include "common/offsets.h"
 #include "vmlinux.h"
 
 #include "common/bpf_helpers.h"

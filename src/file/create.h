@@ -17,23 +17,10 @@ static __always_inline void enter_create(void *ctx)
 // The source parameter should be NULL if there is no source, a dentry for hard links, or a char * for symlink
 static __always_inline void store_dentry(struct pt_regs *ctx, void *path, void *dentry, void *source)
 {
-    incomplete_file_message_t* event = get_current_event(FM_CREATE);
+    incomplete_file_message_t* event = set_file_path(ctx, FM_CREATE, path, dentry);
     if (event == NULL) return;
 
-    file_message_t fm = {0};
-
-    if (event->target_dentry != NULL) goto NoEvent;
-
-    event->target_dentry = dentry;
-    event->target_vfsmount = read_field_ptr(path, CRC_PATH_MNT);
-    if (event->target_vfsmount == NULL) goto EmitWarning;
     event->create.source = source;
-    return;
-
- EmitWarning:
-    push_file_warning(ctx, &fm, FM_CREATE);
-
- NoEvent:
     return;
 }
 

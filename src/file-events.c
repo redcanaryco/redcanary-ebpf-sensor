@@ -223,9 +223,8 @@ int sys_enter_unlink(void *ctx)
 SEC("tracepoint/syscalls/sys_exit_unlink")
 int sys_exit_unlink(struct syscalls_exit_args *ctx)
 {
-    if (ctx->ret < 0)
-        return 0;
-    exit_delete(ctx);
+    file_message_t *fm = POP_AND_SETUP(FM_DELETE, exit_delete);
+    handle_message(ctx, fm);
     return 0;
 }
 
@@ -239,9 +238,8 @@ int sys_enter_unlinkat(void *ctx)
 SEC("tracepoint/syscalls/sys_exit_unlinkat")
 int sys_exit_unlinkat(struct syscalls_exit_args *ctx)
 {
-    if (ctx->ret < 0)
-        return 0;
-    exit_delete(ctx);
+    file_message_t *fm = POP_AND_SETUP(FM_DELETE, exit_delete);
+    handle_message(ctx, fm);
     return 0;
 }
 
@@ -269,9 +267,8 @@ int BPF_KPROBE(security_path_rmdir, const struct path *dir, struct dentry *dentr
 SEC("tracepoint/syscalls/sys_exit_rmdir")
 int sys_exit_rmdir(struct syscalls_exit_args *ctx)
 {
-    if (ctx->ret < 0)
-        return 0;
-    exit_delete(ctx);
+    file_message_t *fm = POP_AND_SETUP(FM_DELETE, exit_delete);
+    handle_message(ctx, fm);
     return 0;
 }
 
