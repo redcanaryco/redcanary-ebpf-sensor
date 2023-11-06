@@ -24,6 +24,10 @@ typedef struct {
             file_ownership_t ownership; // ownership data prior to inode deletion
             file_info_t target;         // target info prior to inode deletion
         } delete;
+        struct {
+            file_ownership_t before_owner; // ownership data prior to any changes
+            bool is_created; // if the file was created when opened
+        } modify;
     };
 } incomplete_file_message_t;
 
@@ -33,7 +37,7 @@ struct bpf_map_def SEC("maps/incomplete_file_messages") incomplete_file_messages
     .type = BPF_MAP_TYPE_HASH,
     .key_size = sizeof(u64),
     .value_size = sizeof(incomplete_file_message_t),
-    .max_entries = 1024,
+    .max_entries = 1536,
     .pinning = 0,
     .namespace = "",
 };

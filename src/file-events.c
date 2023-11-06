@@ -194,18 +194,16 @@ int BPF_KPROBE(security_path_mknod, const struct path *dir, struct dentry *dentr
 SEC("tracepoint/syscalls/sys_exit_mknod")
 int sys_exit_mknod(struct syscalls_exit_args *ctx)
 {
-    if (ctx->ret < 0)
-        return 0;
-    exit_modify(ctx);
+    file_message_t *fm = POP_AND_SETUP(FM_MODIFY, exit_modify);
+    handle_message(ctx, fm);
     return 0;
 }
 
 SEC("tracepoint/syscalls/sys_exit_mknodat")
 int sys_exit_mknodat(struct syscalls_exit_args *ctx)
 {
-    if (ctx->ret < 0)
-        return 0;
-    exit_modify(ctx);
+    file_message_t *fm = POP_AND_SETUP(FM_MODIFY, exit_modify);
+    handle_message(ctx, fm);
     return 0;
 }
 
@@ -286,9 +284,8 @@ int sys_enter_chmod(void *ctx)
 SEC("tracepoint/syscalls/sys_exit_chmod")
 int sys_exit_chmod(struct syscalls_exit_args *ctx)
 {
-    if (ctx->ret < 0)
-        return 0;
-    exit_modify(ctx);
+    file_message_t *fm = POP_AND_SETUP(FM_MODIFY, exit_modify);
+    handle_message(ctx, fm);
     return 0;
 }
 
@@ -302,9 +299,8 @@ int sys_enter_fchmod(void *ctx)
 SEC("tracepoint/syscalls/sys_exit_fchmod")
 int sys_exit_fchmod(struct syscalls_exit_args *ctx)
 {
-    if (ctx->ret < 0)
-        return 0;
-    exit_modify(ctx);
+    file_message_t *fm = POP_AND_SETUP(FM_MODIFY, exit_modify);
+    handle_message(ctx, fm);
     return 0;
 }
 
@@ -318,9 +314,8 @@ int sys_enter_fchmodat(void *ctx)
 SEC("tracepoint/syscalls/sys_exit_fchmodat")
 int sys_exit_fchmodat(struct syscalls_exit_args *ctx)
 {
-    if (ctx->ret < 0)
-        return 0;
-    exit_modify(ctx);
+    file_message_t *fm = POP_AND_SETUP(FM_MODIFY, exit_modify);
+    handle_message(ctx, fm);
     return 0;
 }
 
@@ -345,9 +340,8 @@ int sys_enter_chown(void *ctx)
 SEC("tracepoint/syscalls/sys_exit_chown")
 int sys_exit_chown(struct syscalls_exit_args *ctx)
 {
-    if (ctx->ret < 0)
-        return 0;
-    exit_modify(ctx);
+    file_message_t *fm = POP_AND_SETUP(FM_MODIFY, exit_modify);
+    handle_message(ctx, fm);
     return 0;
 }
 
@@ -361,9 +355,8 @@ int sys_enter_lchown(void *ctx)
 SEC("tracepoint/syscalls/sys_exit_lchown")
 int sys_exit_lchown(struct syscalls_exit_args *ctx)
 {
-    if (ctx->ret < 0)
-        return 0;
-    exit_modify(ctx);
+    file_message_t *fm = POP_AND_SETUP(FM_MODIFY, exit_modify);
+    handle_message(ctx, fm);
     return 0;
 }
 
@@ -377,9 +370,8 @@ int sys_enter_fchown(void *ctx)
 SEC("tracepoint/syscalls/sys_exit_fchown")
 int sys_exit_fchown(struct syscalls_exit_args *ctx)
 {
-    if (ctx->ret < 0)
-        return 0;
-    exit_modify(ctx);
+    file_message_t *fm = POP_AND_SETUP(FM_MODIFY, exit_modify);
+    handle_message(ctx, fm);
     return 0;
 }
 
@@ -393,9 +385,8 @@ int sys_enter_fchownat(void *ctx)
 SEC("tracepoint/syscalls/sys_exit_fchownat")
 int sys_exit_fchownat(struct syscalls_exit_args *ctx)
 {
-    if (ctx->ret < 0)
-        return 0;
-    exit_modify(ctx);
+    file_message_t *fm = POP_AND_SETUP(FM_MODIFY, exit_modify);
+    handle_message(ctx, fm);
     return 0;
 }
 
@@ -473,10 +464,8 @@ int sys_enter_open(struct syscalls_enter_open_args *ctx)
 {
     if (is_write_open(ctx->flags)) {
         enter_modify(ctx);
-        return 0;
     }
-    u64 pid_tid = bpf_get_current_pid_tgid();
-    bpf_map_delete_elem(&incomplete_modifies, &pid_tid);
+
     return 0;
 }
 
@@ -485,10 +474,8 @@ int sys_enter_openat(struct syscalls_enter_openat_args *ctx)
 {
     if (is_write_open(ctx->flags)) {
         enter_modify(ctx);
-        return 0;
     }
-    u64 pid_tid = bpf_get_current_pid_tgid();
-    bpf_map_delete_elem(&incomplete_modifies, &pid_tid);
+
     return 0;
 }
 
@@ -499,10 +486,8 @@ int sys_enter_openat2(struct syscalls_enter_openat2_args *ctx)
     bpf_probe_read_user(&flags, sizeof(flags), &ctx->how->flags);
     if (is_write_open(flags)) {
         enter_modify(ctx);
-        return 0;
     }
-    u64 pid_tid = bpf_get_current_pid_tgid();
-    bpf_map_delete_elem(&incomplete_modifies, &pid_tid);
+
     return 0;
 }
 
@@ -511,10 +496,8 @@ int sys_enter_open_by_handle_at(struct syscalls_enter_open_by_handle_at_args *ct
 {
     if (is_write_open(ctx->flags)) {
         enter_modify(ctx);
-        return 0;
     }
-    u64 pid_tid = bpf_get_current_pid_tgid();
-    bpf_map_delete_elem(&incomplete_modifies, &pid_tid);
+
     return 0;
 }
 
@@ -535,36 +518,32 @@ int BPF_KPROBE(security_file_open, void *file)
 SEC("tracepoint/syscalls/sys_exit_open")
 int sys_exit_open(struct syscalls_exit_args *ctx)
 {
-    if (ctx->ret < 0)
-        return 0;
-    exit_modify(ctx);
+    file_message_t *fm = POP_AND_SETUP(FM_MODIFY, exit_modify);
+    handle_message(ctx, fm);
     return 0;
 }
 
 SEC("tracepoint/syscalls/sys_exit_openat")
 int sys_exit_openat(struct syscalls_exit_args *ctx)
 {
-    if (ctx->ret < 0)
-        return 0;
-    exit_modify(ctx);
+    file_message_t *fm = POP_AND_SETUP(FM_MODIFY, exit_modify);
+    handle_message(ctx, fm);
     return 0;
 }
 
 SEC("tracepoint/syscalls/sys_exit_openat2")
 int sys_exit_openat2(struct syscalls_exit_args *ctx)
 {
-    if (ctx->ret < 0)
-        return 0;
-    exit_modify(ctx);
+    file_message_t *fm = POP_AND_SETUP(FM_MODIFY, exit_modify);
+    handle_message(ctx, fm);
     return 0;
 }
 
 SEC("tracepoint/syscalls/sys_exit_open_by_handle_at")
 int sys_exit_open_by_handle_at(struct syscalls_exit_args *ctx)
 {
-    if (ctx->ret < 0)
-        return 0;
-    exit_modify(ctx);
+    file_message_t *fm = POP_AND_SETUP(FM_MODIFY, exit_modify);
+    handle_message(ctx, fm);
     return 0;
 }
 
@@ -581,9 +560,8 @@ int sys_enter_creat(void *ctx)
 SEC("tracepoint/syscalls/sys_exit_creat")
 int sys_exit_creat(struct syscalls_exit_args *ctx)
 {
-    if (ctx->ret < 0)
-        return 0;
-    exit_modify(ctx);
+    file_message_t *fm = POP_AND_SETUP(FM_MODIFY, exit_modify);
+    handle_message(ctx, fm);
     return 0;
 }
 
@@ -604,9 +582,8 @@ int BPF_KPROBE(security_path_truncate, const struct path *path)
 SEC("tracepoint/syscalls/sys_exit_truncate")
 int sys_exit_truncate(struct syscalls_exit_args *ctx)
 {
-    if (ctx->ret < 0)
-        return 0;
-    exit_modify(ctx);
+    file_message_t *fm = POP_AND_SETUP(FM_MODIFY, exit_modify);
+    handle_message(ctx, fm);
     return 0;
 }
 
