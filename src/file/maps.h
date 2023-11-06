@@ -28,6 +28,12 @@ typedef struct {
             file_ownership_t before_owner; // ownership data prior to any changes
             bool is_created; // if the file was created when opened
         } modify;
+        struct {
+            void *source_parent_dentry;         // The directory we are moving from
+            file_ownership_t overwr_owner;      // The owner of the overwritten file
+            file_info_t overwr;                 // Metadata of the overwritten file
+            char name[NAME_MAX+1];              // Name of the overwritten file
+        } rename;
     };
 } incomplete_file_message_t;
 
@@ -37,7 +43,7 @@ struct bpf_map_def SEC("maps/incomplete_file_messages") incomplete_file_messages
     .type = BPF_MAP_TYPE_HASH,
     .key_size = sizeof(u64),
     .value_size = sizeof(incomplete_file_message_t),
-    .max_entries = 1536,
+    .max_entries = 2048,
     .pinning = 0,
     .namespace = "",
 };
@@ -100,7 +106,11 @@ static __always_inline incomplete_file_message_t* set_file_path(struct pt_regs *
     return NULL;
 }
 
-static __always_inline void handle_message(void *ctx, file_message_t *fm)
+// Handles the end states of a given message
+// If null, do nothing
+// If warning, emit the warning
+// If success, tail call.
+static __always_inline void finish_message(void *ctx, file_message_t *fm)
 {
     if (fm == NULL) return;
     if (fm->type == FM_WARNING) goto EmitWarning;
@@ -122,6 +132,7 @@ EmitWarning:;
     if (event == NULL) goto Exit;                                       \
     if (ctx->ret < 0) goto Pop;
 
+// Returns a file_message_event_t* and handles the popping from the incomplete map
 #define POP_AND_SETUP(kind, fn)                                         \
     ({                                                                  \
         GET_EXIT_EVENT(kind)                                            \
@@ -132,6 +143,7 @@ EmitWarning:;
         ret;                                                            \
     })
 
+// Returns a file_message_event_t* and handles the popping from the incomplete map
 #define POP_AND_SETUP_ARGS(kind, fn, args...)                           \
     ({                                                                  \
         GET_EXIT_EVENT(kind)                                            \

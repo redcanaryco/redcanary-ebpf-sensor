@@ -7,100 +7,52 @@
 #include "common/types.h"
 #include "common/warning.h"
 #include "dentry.h"
+#include "file/maps.h"
 #include "push_file_message.h"
 
-typedef struct {
-    u64 pid_tgid;
-    u64 start_ktime_ns;
-    void *vfsmount;                     // vfsmount of the source AND the destination.
-    void *source_dentry;                // dentry of the file we are
-                                        // moving. By the time we exit
-                                        // the name + parent will be the target name + parent
-    void *source_parent_dentry;         // The directory we are moving from
-    file_ownership_t overwr_owner;      // The owner of the overwritten file
-    file_info_t overwr;                 // Metadata of the overwritten file
-} incomplete_rename_t;
-
-typedef struct {
-    u64 pid_tgid;
-    char name[NAME_MAX+1];
+// used for events with flexible sizes (i.e., exec*) so it can send
+// extra data. Used in conjuction with a map such that it does not use
+// the stack size limit.
+typedef struct
+{
+    char name[NAME_MAX + 1];
 } rename_name_t;
 
-struct bpf_map_def SEC("maps/incomplete_renames") incomplete_renames = {
-    .type = BPF_MAP_TYPE_LRU_HASH,
-    .key_size = sizeof(u64),
-    .value_size = sizeof(incomplete_rename_t),
-    .max_entries = 512,
-    .pinning = 0,
-    .namespace = "",
-};
-
+// A per cpu buffer that can hold more data than allowed in the
+// stack. Used to collect data of variable length such as a string.
 struct bpf_map_def SEC("maps/rename_names") rename_names = {
-    .type = BPF_MAP_TYPE_LRU_HASH,
-    .key_size = sizeof(u64),
+    .type = BPF_MAP_TYPE_PERCPU_ARRAY,
+    .key_size = sizeof(u32),
     .value_size = sizeof(rename_name_t),
-    .max_entries = 512,
+    .max_entries = 1,
     .pinning = 0,
     .namespace = "",
 };
 
 static __always_inline void enter_rename(void *ctx)
 {
-    u64 pid_tgid = bpf_get_current_pid_tgid();
-    rename_name_t rename_name = {0};
-    rename_name.pid_tgid = pid_tgid;
-    int ret = bpf_map_update_elem(&rename_names, &pid_tgid, &rename_name, BPF_ANY);
-    if (ret < 0) goto EmitWarning;
-
-    incomplete_rename_t event = {0};
-    event.pid_tgid = pid_tgid;
-    event.start_ktime_ns = bpf_ktime_get_ns();
-
-    ret = bpf_map_update_elem(&incomplete_renames, &pid_tgid, &event, BPF_ANY);
-    if (ret < 0) goto EmitWarning;
-
-    return;
-
- EmitWarning:;
-    file_message_t fm = {0};
-    fm.type = FM_WARNING;
-    fm.u.warning.pid_tgid = pid_tgid;
-    fm.u.warning.message_type.file = FM_RENAME;
-    fm.u.warning.code = W_UPDATE_MAP_ERROR;
-    fm.u.warning.info.err = ret;
-
-    push_file_message(ctx, &fm);
+    enter_file_message(ctx, FM_RENAME);
 }
 
 static __always_inline void store_renamed_dentries(struct pt_regs *ctx,
                                                    void *old_dir, void *old_dentry,
                                                    void *new_dir, void *new_dentry)
 {
-    u64 pid_tgid = bpf_get_current_pid_tgid();
-    file_message_t fm = {0};
+    incomplete_file_message_t* event = set_file_path(ctx, FM_RENAME, new_dir, old_dentry);
+    if (event == NULL) return;
 
-    load_event(incomplete_renames, pid_tgid, incomplete_rename_t);
-    if (event.source_dentry != NULL) goto NoEvent;
-
-    event.source_dentry = old_dentry;
-    event.source_parent_dentry = read_field_ptr(old_dentry, CRC_DENTRY_D_PARENT);
-    if (event.source_parent_dentry == NULL) goto EmitWarning;
+    event->rename.source_parent_dentry = read_field_ptr(old_dentry, CRC_DENTRY_D_PARENT);
+    if (event->rename.source_parent_dentry == NULL) goto EmitWarning;
     void *source_name = ptr_to_field(old_dentry, CRC_DENTRY_D_NAME);
     if (source_name == NULL) goto EmitWarning;
     source_name = read_field_ptr(source_name, CRC_QSTR_NAME);
     if (source_name == NULL) goto EmitWarning;
-    rename_name_t *name = bpf_map_lookup_elem(&rename_names, &pid_tgid);
-    if (name == NULL) goto NoEvent;
-    if (name->pid_tgid != pid_tgid) goto EventMismatch;
 
-    int ret = bpf_probe_read_kernel_str(&name->name, sizeof(name->name), source_name);
+    int ret = bpf_probe_read_kernel_str(&event->rename.name, sizeof(event->rename.name), source_name);
     if (ret < 0) {
         set_empty_local_warning(W_READ_PATH_STRING);
         goto EmitWarning;
     }
-
-    event.vfsmount = read_field_ptr(new_dir, CRC_PATH_MNT);
-    if (event.vfsmount == NULL) goto EmitWarning;
 
     // if the new_dentry already has an inode it means that we are replacing it
     // TODO: what about whiteouts? Will they have an inode?
@@ -108,74 +60,74 @@ static __always_inline void store_renamed_dentries(struct pt_regs *ctx,
     ret = read_field(new_dentry, CRC_DENTRY_D_INODE, &d_inode, sizeof(d_inode));
     if (ret < 0) goto EmitWarning;
     if (d_inode != NULL) {
-        ret = file_and_owner_from_ino(d_inode, &event.overwr, &event.overwr_owner);
+        ret = file_and_owner_from_ino(d_inode, &event->rename.overwr, &event->rename.overwr_owner);
         if (ret < 0) goto EmitWarning;
     }
 
-    bpf_map_update_elem(&incomplete_renames, &pid_tgid, &event, BPF_ANY);
     return;
 
- EventMismatch:
-    fm.type = FM_WARNING;
-    fm.u.warning.pid_tgid = pid_tgid;
-    fm.u.warning.message_type.file = FM_RENAME;
-    fm.u.warning.code = W_PID_TGID_MISMATCH;
-    fm.u.warning.info.stored_pid_tgid = event.pid_tgid;
-
-    push_file_message(ctx, &fm);
-    return;
-
- EmitWarning:
+ EmitWarning:;
+    file_message_t fm = {0};
     push_file_warning(ctx, &fm, FM_RENAME);
-
- NoEvent:
     return;
 }
 
-static __always_inline void exit_rename(void *ctx)
+static __always_inline file_message_t* exit_rename(void *ctx, u64 pid_tgid, incomplete_file_message_t *event)
 {
     u32 key = 0;
     buf_t *buffer = (buf_t *)bpf_map_lookup_elem(&buffers, &key);
-    if (buffer == NULL) return;
+    if (buffer == NULL) return NULL;
+
+    rename_name_t *rename_name = (rename_name_t *)bpf_map_lookup_elem(&rename_names, &key);
+    if (rename_name == NULL) return NULL;
 
     cached_path_t *cached_path = (cached_path_t *)bpf_map_lookup_elem(&percpu_path, &key);
-    if (cached_path == NULL) return;
+    if (cached_path == NULL) return NULL;
 
-    file_message_t *fm = (file_message_t *)buffer;
-    error_info_t info = {0};
-    u64 pid_tgid = bpf_get_current_pid_tgid();
-    load_event(incomplete_renames, pid_tgid, incomplete_rename_t);
+    file_message_t *fm = NULL;
+    if (event->target_dentry == NULL || event->vfsmount == NULL) goto Done;
 
-    if (event.source_dentry == NULL || event.vfsmount == NULL) goto NoEvent;
+    fm = (file_message_t *)buffer;
+    fm->type = FM_RENAME;
 
-    int ret = file_from_dentry(event.source_dentry, &fm->u.action.target, &fm->u.action.target_owner);
+    // What we want is to copy the name from the incomplete event into the per-cpu map (to be
+    // processed later via a tail-call). However, passing map values to map helpers is only allowed
+    // in v4.18+:
+    // https://github.com/torvalds/linux/commit/d71962f3e627b5941804036755c844fabfb65ff5. Use a
+    // stack variable as in between layer to make the copy happy in older kernels (incomplete map ->
+    // stack -> per cpu map).
+    rename_name_t name = {0};
+    int ret = bpf_probe_read_kernel_str(&name.name, sizeof(name.name), &event->rename.name);
+    if (ret < 0) {
+        set_empty_local_warning(W_READ_PATH_STRING);
+        goto EmitWarning;
+    }
+    ret = bpf_probe_read_kernel_str(&rename_name->name, sizeof(rename_name->name), &name.name);
+    if (ret < 0) {
+        set_empty_local_warning(W_READ_PATH_STRING);
+        goto EmitWarning;
+    }
+
+    ret = file_from_dentry(event->target_dentry, &fm->u.action.target, &fm->u.action.target_owner);
     if (ret < 0) goto EmitWarning;
 
-    fm->type = FM_RENAME;
-    fm->u.action.pid = event.pid_tgid >> 32;
-    fm->u.action.mono_ns = event.start_ktime_ns;
+    fm->u.action.pid = pid_tgid >> 32;
+    fm->u.action.mono_ns = event->start_ktime_ns;
     fm->u.action.buffer_len = sizeof(file_message_t);
-    fm->u.action.u.rename.overwr = event.overwr;
-    fm->u.action.u.rename.overwr_owner = event.overwr_owner;
+    fm->u.action.u.rename.overwr = event->rename.overwr;
+    fm->u.action.u.rename.overwr_owner = event->rename.overwr_owner;
 
-    init_filtered_cached_path(cached_path, event.source_dentry, event.vfsmount);
-    cached_path->next_path = event.source_parent_dentry;
+    init_filtered_cached_path(cached_path, event->target_dentry, event->vfsmount);
+    cached_path->next_path = event->rename.source_parent_dentry;
 
-    bpf_tail_call(ctx, &tp_programs, FILE_PATHS);
-
-    info.tailcall = FILE_PATHS;
-    set_local_warning(W_TAIL_CALL_MAX, info);
-    goto EmitWarning;
-
- EventMismatch:
-    info.stored_pid_tgid = event.pid_tgid;
-    set_local_warning(W_PID_TGID_MISMATCH, info);
+    return fm;
 
  EmitWarning:
-    push_file_warning(ctx, fm, FM_RENAME);
+    fm->u.warning.message_type.file = fm->type;
+    fm->type = FM_WARNING;
 
- NoEvent:
+ Done:
     // lookup tail calls completed; ensure we re-init cached_path next call
     cached_path->next_dentry = NULL;
-    return;
+    return fm;
 }
