@@ -198,3 +198,17 @@
 #define PTRACE_INTERRUPT	0x4207
 #define PTRACE_LISTEN		0x4208
 #define PTRACE_PEEKSIGINFO	0x4209
+
+/*
+ * DEV MACROS
+ */
+
+#define MINORBITS 20
+#define MINORMASK ((1U << MINORBITS) - 1)
+#ifndef MAJOR
+#define MAJOR(dev) ((unsigned int)((dev) >> MINORBITS))
+#endif
+
+#ifndef MINOR
+#define MINOR(dev) ((unsigned int)((dev)&MINORMASK))
+#endif

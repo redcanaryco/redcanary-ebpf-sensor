@@ -1,10 +1,7 @@
 #include "vmlinux.h"
 
 #include "common/bpf_helpers.h"
-#include "common/common.h"
 #include "common/definitions.h"
-#include "common/offsets.h"
-#include "common/repeat.h"
 #include "common/types.h"
 
 #define DECLARE_EVENT(TYPE, SP)                \
@@ -32,16 +29,7 @@ struct bpf_map_def SEC("maps/wpm_events") write_process_memory_events = {
     .type = BPF_MAP_TYPE_PERF_EVENT_ARRAY,
     .key_size = sizeof(u32),
     .value_size = sizeof(u32),
-    .max_entries = 0, // let oxidebpf set it to num_cpus
-    .pinning = 0,
-    .namespace = "",
-};
-
-struct bpf_map_def SEC("maps/cpm_events") change_process_memory_events = {
-    .type = BPF_MAP_TYPE_PERF_EVENT_ARRAY,
-    .key_size = sizeof(u32),
-    .value_size = sizeof(u32),
-    .max_entries = 0, // let oxidebpf set it to num_cpus
+    .max_entries = 0, // let loader set it to num_cpus
     .pinning = 0,
     .namespace = "",
 };
@@ -50,16 +38,7 @@ struct bpf_map_def SEC("maps/tp_events") trace_process_events = {
     .type = BPF_MAP_TYPE_PERF_EVENT_ARRAY,
     .key_size = sizeof(u32),
     .value_size = sizeof(u32),
-    .max_entries = 0, // let oxidebpf set it to num_cpus
-    .pinning = 0,
-    .namespace = "",
-};
-
-struct bpf_map_def SEC("maps/rrs_events") rrs_events = {
-    .type = BPF_MAP_TYPE_PERF_EVENT_ARRAY,
-    .key_size = sizeof(u32),
-    .value_size = sizeof(u32),
-    .max_entries = 0, // let oxidebpf set it to num_cpus
+    .max_entries = 0, // let loader set it to num_cpus
     .pinning = 0,
     .namespace = "",
 };
@@ -96,19 +75,6 @@ static __always_inline syscall_pattern_type_t ptrace_syscall_pattern(u32 request
     }
 
     return SP_IGNORE;
-}
-
-SEC("uprobe/read_return_string")
-int uprobe__read_return_string(struct pt_regs *ctx)
-{
-    DECLARE_EVENT(read_return_string_event_t, SP_USERMODE);
-    bpf_probe_read(ev.value, sizeof(ev.value), (void *)PT_REGS_RC(ctx));
-    bpf_perf_event_output(ctx,
-                          &rrs_events,
-                          BPF_F_CURRENT_CPU,
-                          &ev,
-                          sizeof(ev));
-    return 0;
 }
 
 SEC("kprobe/sys_ptrace_write")
@@ -164,60 +130,33 @@ Exit:
     return 0;
 }
 
-SEC("kprobe/sys_process_vm_writev_5_5")
-int BPF_KPROBE_SYSCALL(sys_process_vm_writev_5_5,
-                       u32 target_pid, piovec_t liov, u32 liovcnt, piovec_t riov, u32 riovcnt)
+struct syscalls_enter_process_vm_writev_args {
+    __u64 unused;
+    long __syscall_nr;
+    unsigned long pid;
+    const struct iovec *lvec;
+    unsigned long liovcnt;
+    const struct iovec *rvec;
+    unsigned long riovcnt;
+    unsigned long flags;
+};
+
+SEC("kprobe/sys_process_vm_writev")
+int BPF_KPROBE_SYSCALL(sys_process_vm_writev,
+                       u32 target_pid, const struct iovec *liov, u32 liovcnt, const struct iovec *riov, u32 riovcnt)
 {
     DECLARE_EVENT(write_process_memory_event_t, SP_PROCESS_VM_WRITEV);
     ev.target_pid = target_pid;
 
 #pragma unroll MAX_ADDRESSES
-    for (u32 ii = 0; ii < MAX_ADDRESSES && ii < riovcnt; ++ii, riov++)
-    {
-        iovec_t remote_iov;
-        bpf_probe_read_user(&remote_iov, sizeof(remote_iov), (const void *)riov);
-        ev.addresses[ii] = (u64)remote_iov.iov_base;
-    }
+    for (u32 ii = 0; ii < MAX_ADDRESSES && ii < riovcnt; ++ii)
+        {
+            iovec_t remote_iov;
+            bpf_probe_read_user(&remote_iov, sizeof(remote_iov), &riov[ii]);
+            ev.addresses[ii] = (u64)remote_iov.iov_base;
+        }
 
-    bpf_perf_event_output(ctx,
-                          &write_process_memory_events,
-                          BPF_F_CURRENT_CPU,
-                          &ev,
-                          sizeof(ev));
-
-    return 0;
-}
-
-SEC("kprobe/sys_process_vm_writev")
-int BPF_KPROBE_SYSCALL(sys_process_vm_writev,
-                       u32 target_pid)
-{
-    DECLARE_EVENT(write_process_memory_event_t, SP_PROCESS_VM_WRITEV);
-    ev.target_pid = target_pid;
-
-    bpf_perf_event_output(ctx,
-                          &write_process_memory_events,
-                          BPF_F_CURRENT_CPU,
-                          &ev,
-                          sizeof(ev));
-
-    return 0;
-}
-
-SEC("kprobe/sys_mprotect")
-int BPF_KPROBE_SYSCALL(sys_mprotect,
-                       void *addr, u64 len, u32 prot)
-{
-    DECLARE_EVENT(change_memory_permission_event_t, SP_MPROTECT);
-    ev.address = (u64)addr;
-    ev.len = len;
-    ev.prot = prot;
-
-    bpf_perf_event_output(ctx,
-                          &change_process_memory_events,
-                          BPF_F_CURRENT_CPU,
-                          &ev,
-                          sizeof(ev));
+    bpf_perf_event_output(ctx, &write_process_memory_events, BPF_F_CURRENT_CPU, &ev, sizeof(ev));
 
     return 0;
 }
