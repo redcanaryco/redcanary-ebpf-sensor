@@ -23,7 +23,7 @@ struct bpf_map_def SEC("maps/incomplete_unshare") incomplete_unshares = {
   .namespace = "",
 };
 
-static __always_inline void enter_unshare(struct pt_regs *ctx, int flags)
+static __always_inline void enter_unshare(void *ctx, int flags)
 {
   u64 pid_tgid = bpf_get_current_pid_tgid();
   incomplete_unshare_t event = {0};
@@ -45,12 +45,12 @@ static __always_inline void enter_unshare(struct pt_regs *ctx, int flags)
     }
 }
 
-static __always_inline void exit_unshare(struct pt_regs *ctx, pprocess_message_t pm)
+static __always_inline void exit_unshare(struct syscalls_exit_args *ctx, pprocess_message_t pm)
 {
   u64 pid_tgid = bpf_get_current_pid_tgid();
   load_event(incomplete_unshares, pid_tgid, incomplete_unshare_t);
 
-  int retcode = (int)PT_REGS_RC(ctx);
+  int retcode = ctx->ret;
   if (retcode < 0) goto Done;
 
   void *ts = (void *)bpf_get_current_task();

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0+
 #pragma once
 
-#include "bpf_tracing.h"
+#include "vmlinux.h"
 
 /* CRC64 of "loaded"  */
 const u64 CRC_LOADED = 0xec6642829d632573;

@@ -2,7 +2,6 @@
 
 #include "vmlinux.h"
 
-#include "../common/bpf_tracing.h"
 #include "../common/buffer.h"
 #include "../common/common.h"
 #include "../common/path.h"
@@ -177,7 +176,7 @@ static __always_inline void exit_exec(struct pt_regs *ctx, process_message_type_
     push_warning(ctx, pm, pm_type);
 }
 
-static __always_inline void process_pwd(struct pt_regs *ctx)
+static __always_inline void process_pwd(void *ctx)
 {
   /* SETUP ALL THE VARIABLES THAT WILL BE NEEDED ACCROSS GOTOS */
 
