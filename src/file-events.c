@@ -23,7 +23,7 @@ SEC("kprobe/exit_symlink")
 int exit_symlink(struct pt_regs *ctx)
 {
     u64 pid_tgid = bpf_get_current_pid_tgid();
-    incomplete_file_message_t *event = get_event(FM_CREATE, &pid_tgid);
+    incomplete_file_message_t *event = get_event(ctx, FM_CREATE, &pid_tgid);
     if (event == NULL) return 0;
     _exit_symlink(ctx, pid_tgid, event);
 

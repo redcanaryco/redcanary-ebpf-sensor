@@ -74,6 +74,7 @@ typedef enum
     W_NULL_FIELD,
     W_INTERP_MISMATCH,
     W_INTERP_SLOT,
+    W_KIND_MISMATCH,
 } warning_t;
 
 typedef enum
@@ -251,6 +252,7 @@ typedef union
         u64 end;
     } argv;
     tail_call_slot_t tailcall;
+    message_type_t stored_kind;
 } error_info_t;
 
 typedef struct

@@ -147,5 +147,5 @@ static __always_inline file_message_t* exit_create(void *ctx, u64 pid_tgid, inco
  Done:
     // reset next_dentry for this CPU
     cached_path->next_dentry = NULL;
-    return NULL;
+    return fm;
 }

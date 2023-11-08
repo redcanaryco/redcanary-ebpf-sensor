@@ -69,28 +69,41 @@ static __always_inline void enter_file_message(void *ctx, file_message_type_t ki
     }
 }
 
-static __always_inline incomplete_file_message_t* get_event(file_message_type_t kind, u64 *pid_tgid) {
+static __always_inline incomplete_file_message_t* get_event(void *ctx, file_message_type_t kind, u64 *pid_tgid) {
   incomplete_file_message_t *event = bpf_map_lookup_elem(&incomplete_file_messages, pid_tgid);
   if (event == NULL) return NULL;
 
-  if (event->kind != kind) {
-    // TODO: emit warning
-    bpf_map_delete_elem(&incomplete_file_messages, pid_tgid);
-    return NULL;
+  file_message_type_t stored_kind = event->kind;
+  if (stored_kind != kind) {
+      // emit warning
+      file_message_t fm = {0};
+      fm.type = FM_WARNING;
+      fm.u.warning.pid_tgid = *pid_tgid;
+      fm.u.warning.message_type.file = kind;
+      fm.u.warning.code = W_KIND_MISMATCH;
+      fm.u.warning.info.stored_kind.file = stored_kind;
+
+      push_file_message(ctx, &fm);
+
+      // just to be safe - let's delete ourselves since it isn't what we expect. It might mean some
+      // event may get lost but we'll know that from the warning
+      bpf_map_delete_elem(&incomplete_file_messages, pid_tgid);
+
+      return NULL;
   }
 
   return event;
 }
 
-static __always_inline incomplete_file_message_t* get_current_event(file_message_type_t kind) {
+static __always_inline incomplete_file_message_t* get_current_event(void *ctx, file_message_type_t kind) {
   u64 pid_tgid = bpf_get_current_pid_tgid();
-  return get_event(kind, &pid_tgid);
+  return get_event(ctx, kind, &pid_tgid);
 }
 
 static __always_inline incomplete_file_message_t* set_file_path(struct pt_regs *ctx, file_message_type_t kind,
                                                          void *path, void *dentry)
 {
-    incomplete_file_message_t* event = get_current_event(kind);
+    incomplete_file_message_t* event = get_current_event(ctx, kind);
     if (event == NULL) return NULL;
     if (event->target_dentry != NULL) return NULL;
 
@@ -127,7 +140,7 @@ EmitWarning:;
 
 #define GET_EXIT_EVENT(kind)                                            \
     u64 pid_tgid = bpf_get_current_pid_tgid();                          \
-    incomplete_file_message_t *event = get_event(kind, &pid_tgid);      \
+    incomplete_file_message_t *event = get_event(ctx, kind, &pid_tgid); \
     file_message_t *ret = NULL;                                         \
     if (event == NULL) goto Exit;                                       \
     if (ctx->ret < 0) goto Pop;
