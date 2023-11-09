@@ -60,6 +60,7 @@ static __always_inline file_message_t* exit_modify(void *ctx, u64 pid_tgid, inco
     fm = (file_message_t *)buffer;
     if (event->modify.is_created) {
         fm->type = FM_CREATE;
+        fm->u.action.u.create.source_link = LINK_NONE;
     } else {
         fm->type = FM_MODIFY;
         fm->u.action.u.modify.before_owner = event->modify.before_owner;
