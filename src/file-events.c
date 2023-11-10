@@ -8,6 +8,7 @@
 #include "vmlinux.h"
 
 #include "common/bpf_helpers.h"
+#include "common/offsets.h"
 #include "common/types.h"
 #include "file/create.h"
 #include "file/delete.h"
@@ -50,7 +51,7 @@ int sys_enter_mkdirat(void *ctx)
 SEC("kprobe/security_path_mkdir")
 int BPF_KPROBE(security_path_mkdir, const struct path *dir, struct dentry *dentry, umode_t mode)
 {
-    store_dentry(ctx, (void *)dir, (void *)dentry, NULL);
+    store_create_path_dentry(ctx, (void *)dir, (void *)dentry, NULL);
     return 0;
 }
 
@@ -111,7 +112,14 @@ int sys_exit_symlinkat(void *ctx)
 SEC("kprobe/security_path_symlink")
 int BPF_KPROBE(security_path_symlink, const struct path *dir, struct dentry *dentry, const char *old_name)
 {
-    store_dentry(ctx, (void *)dir, (void *)dentry, (void *)old_name);
+    store_create_path_dentry(ctx, (void *)dir, (void *)dentry, (void *)old_name);
+    return 0;
+}
+
+SEC("kprobe/security_inode_symlink")
+int BPF_KPROBE(security_inode_symlink, struct inode *dir, struct dentry *dentry, const char *old_name)
+{
+    store_create_dentry(ctx, dentry, (void *)old_name);
     return 0;
 }
 
@@ -145,7 +153,7 @@ int sys_enter_linkat(void *ctx)
 SEC("kprobe/security_path_link")
 int BPF_KPROBE(security_path_link, struct dentry *old_dentry, const struct path *new_dir, struct dentry *new_dentry)
 {
-    store_dentry(ctx, (void *)new_dir, (void *)new_dentry, (void *)old_dentry);
+    store_create_path_dentry(ctx, (void *)new_dir, (void *)new_dentry, (void *)old_dentry);
     return 0;
 }
 
@@ -651,6 +659,19 @@ SEC("tracepoint/filemod_paths")
 int filemod_paths(void *ctx)
 {
     _filemod_paths(ctx);
+    return 0;
+}
+
+/* MNT WANT WRITE */
+
+SEC("kprobe/mnt_want_write")
+int BPF_KPROBE(mnt_want_write, void *vfsmount)
+{
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+    incomplete_file_message_t *event = bpf_map_lookup_elem(&incomplete_file_messages, &pid_tgid);
+    if (event == NULL || event->vfsmount != NULL) return 0;
+
+    event->vfsmount = vfsmount;
     return 0;
 }
 

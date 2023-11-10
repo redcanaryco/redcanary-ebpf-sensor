@@ -15,13 +15,20 @@ static __always_inline void enter_create(void *ctx)
 }
 
 // The source parameter should be NULL if there is no source, a dentry for hard links, or a char * for symlink
-static __always_inline void store_dentry(struct pt_regs *ctx, void *path, void *dentry, void *source)
+static __always_inline incomplete_file_message_t* store_create_dentry(struct pt_regs *ctx, void *dentry, void *source)
 {
-    incomplete_file_message_t* event = set_file_path(ctx, FM_CREATE, path, dentry);
-    if (event == NULL) return;
+    incomplete_file_message_t* event = set_file_dentry(ctx, FM_CREATE, dentry);
+    if (event == NULL) return NULL;
 
     event->create.source = source;
-    return;
+    return event;
+}
+
+// The source parameter should be NULL if there is no source, a dentry for hard links, or a char * for symlink
+static __always_inline void store_create_path_dentry(struct pt_regs *ctx, void *path, void *dentry, void *source)
+{
+    incomplete_file_message_t* event = store_create_dentry(ctx, dentry, source);
+    set_path_mnt(ctx, event, path);
 }
 
 static __always_inline void _exit_symlink(struct pt_regs *ctx, u64 pid_tgid, incomplete_file_message_t *event)
