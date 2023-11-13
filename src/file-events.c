@@ -55,6 +55,13 @@ int BPF_KPROBE(security_path_mkdir, const struct path *dir, struct dentry *dentr
     return 0;
 }
 
+SEC("kprobe/security_inode_mkdir")
+int BPF_KPROBE(security_inode_mkdir, const struct inode *dir, struct dentry *dentry, umode_t mode)
+{
+    store_create_dentry(ctx, dentry, NULL);
+    return 0;
+}
+
 SEC("tracepoint/syscalls/sys_exit_mkdir")
 int sys_exit_mkdir(struct syscalls_exit_args *ctx)
 {
@@ -154,6 +161,13 @@ SEC("kprobe/security_path_link")
 int BPF_KPROBE(security_path_link, struct dentry *old_dentry, const struct path *new_dir, struct dentry *new_dentry)
 {
     store_create_path_dentry(ctx, (void *)new_dir, (void *)new_dentry, (void *)old_dentry);
+    return 0;
+}
+
+SEC("kprobe/security_inode_link")
+int BPF_KPROBE(security_inode_link, struct dentry *old_dentry, struct inode *dir, struct dentry *new_dentry)
+{
+    store_create_dentry(ctx, new_dentry, old_dentry);
     return 0;
 }
 
