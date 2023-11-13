@@ -13,7 +13,6 @@
 #include "file/delete.h"
 #include "file/maps.h"
 #include "file/modify.h"
-#include "file/open.h"
 #include "file/rename.h"
 
 /* START CREATE-LIKE PROBES */
@@ -459,9 +458,7 @@ int BPF_KPROBE(security_path_rename, const struct path *old_dir, struct dentry *
 SEC("tracepoint/syscalls/sys_enter_open")
 int sys_enter_open(struct syscalls_enter_open_args *ctx)
 {
-    if (is_write_open(ctx->flags)) {
-        enter_modify(ctx);
-    }
+    maybe_enter_modify(ctx, ctx->flags);
 
     return 0;
 }
@@ -469,9 +466,7 @@ int sys_enter_open(struct syscalls_enter_open_args *ctx)
 SEC("tracepoint/syscalls/sys_enter_openat")
 int sys_enter_openat(struct syscalls_enter_openat_args *ctx)
 {
-    if (is_write_open(ctx->flags)) {
-        enter_modify(ctx);
-    }
+    maybe_enter_modify(ctx, ctx->flags);
 
     return 0;
 }
@@ -481,9 +476,7 @@ int sys_enter_openat2(struct syscalls_enter_openat2_args *ctx)
 {
     u64 flags = 0;
     bpf_probe_read_user(&flags, sizeof(flags), &ctx->how->flags);
-    if (is_write_open(flags)) {
-        enter_modify(ctx);
-    }
+    maybe_enter_modify(ctx, flags);
 
     return 0;
 }
@@ -491,9 +484,7 @@ int sys_enter_openat2(struct syscalls_enter_openat2_args *ctx)
 SEC("tracepoint/syscalls/sys_enter_open_by_handle_at")
 int sys_enter_open_by_handle_at(struct syscalls_enter_open_by_handle_at_args *ctx)
 {
-    if (is_write_open(ctx->flags)) {
-        enter_modify(ctx);
-    }
+    maybe_enter_modify(ctx, ctx->flags);
 
     return 0;
 }

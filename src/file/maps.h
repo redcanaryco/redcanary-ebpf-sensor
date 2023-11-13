@@ -55,7 +55,10 @@ static __always_inline void enter_file_message(void *ctx, file_message_type_t ki
     event.start_ktime_ns = bpf_ktime_get_ns();
     event.kind = kind;
 
-    int ret = bpf_map_update_elem(&incomplete_file_messages, &pid_tgid, &event, BPF_ANY);
+    // deliberately only insert if the key does not exist -- we want
+    // to be truthful if we forgot to pop so userspace knows that
+    // there is a bug somewhere
+    int ret = bpf_map_update_elem(&incomplete_file_messages, &pid_tgid, &event, BPF_NOEXIST);
     if (ret < 0)
     {
         file_message_t fm = {0};
@@ -66,6 +69,10 @@ static __always_inline void enter_file_message(void *ctx, file_message_type_t ki
         fm.u.warning.info.err = ret;
 
         push_file_message(ctx, &fm);
+
+        // if we fail to insert delete it so that exit probes don't
+        // accidentally try to use it to re-emit the event
+        bpf_map_delete_elem(&incomplete_file_messages, &pid_tgid);
     }
 }
 

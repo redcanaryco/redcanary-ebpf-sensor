@@ -6,11 +6,24 @@
 #include "common/types.h"
 #include "file/dentry.h"
 #include "file/maps.h"
+#include "file/open.h"
 #include "push_file_message.h"
 
 static __always_inline void enter_modify(void *ctx)
 {
     enter_file_message(ctx, FM_MODIFY);
+}
+
+static __always_inline void maybe_enter_modify(void *ctx, long flags)
+{
+    if (is_write_open(flags)) {
+        enter_modify(ctx);
+    } else {
+        // if any previous message forgot to POP this pid_tgid; then we need to delete it as it is
+        // no longer valid. Forgetting to delete here may trigger a warning from kind mismatch
+        u64 pid_tgid = bpf_get_current_pid_tgid();
+        bpf_map_delete_elem(&incomplete_file_messages, &pid_tgid);
+    }
 }
 
 // This method is called when a file is created by passing through security_path_mknod. It stores the dentry
@@ -60,6 +73,7 @@ static __always_inline file_message_t* exit_modify(void *ctx, u64 pid_tgid, inco
     fm = (file_message_t *)buffer;
     if (event->modify.is_created) {
         fm->type = FM_CREATE;
+        fm->u.action.u.create.source_link = LINK_NONE;
     } else {
         fm->type = FM_MODIFY;
         fm->u.action.u.modify.before_owner = event->modify.before_owner;
