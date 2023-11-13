@@ -265,7 +265,14 @@ int sys_exit_unlinkat(struct syscalls_exit_args *ctx)
 SEC("kprobe/security_path_unlink")
 int BPF_KPROBE(security_path_unlink, const struct path *dir, struct dentry *dentry)
 {
-    store_deleted_dentry(ctx, (void *)dir, dentry);
+    store_deleted_path_dentry(ctx, (void *)dir, dentry);
+    return 0;
+}
+
+SEC("kprobe/security_inode_unlink")
+int BPF_KPROBE(security_inode_unlink, struct inode *dir, struct dentry *dentry)
+{
+    store_deleted_dentry(ctx, dentry);
     return 0;
 }
 
@@ -279,7 +286,14 @@ int sys_enter_rmdir(void *ctx)
 SEC("kprobe/security_path_rmdir")
 int BPF_KPROBE(security_path_rmdir, const struct path *dir, struct dentry *dentry)
 {
-    store_deleted_dentry(ctx, (void *)dir, dentry);
+    store_deleted_path_dentry(ctx, (void *)dir, dentry);
+    return 0;
+}
+
+SEC("kprobe/security_inode_rmdir")
+int BPF_KPROBE(security_inode_rmdir, struct inode *dir, struct dentry *dentry)
+{
+    store_deleted_dentry(ctx, dentry);
     return 0;
 }
 
