@@ -212,3 +212,7 @@
 #ifndef MINOR
 #define MINOR(dev) ((unsigned int)((dev)&MINORMASK))
 #endif
+
+#ifndef KERNEL_VERSION
+#define KERNEL_VERSION(a, b, c) (((a) << 16) + ((b) << 8) + ((c) > 255 ? 255 : (c)))
+#endif

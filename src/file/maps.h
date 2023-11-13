@@ -135,6 +135,23 @@ static __always_inline incomplete_file_message_t* set_path_mnt(struct pt_regs *c
     return NULL;
 }
 
+static __always_inline void set_current_file_mnt(struct pt_regs *ctx, void *file)
+{
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+    incomplete_file_message_t *event = bpf_map_lookup_elem(&incomplete_file_messages, &pid_tgid);
+    if (event == NULL || event->vfsmount != NULL) return;
+
+    void *path = read_field_ptr(file, CRC_FILE_F_PATH);
+    if (path == NULL) goto EmitWarning;
+    set_path_mnt(ctx, event, path);
+
+ EmitWarning:;
+    file_message_t fm = {0};
+    push_file_warning(ctx, &fm, event->kind);
+
+    return;
+}
+
 static __always_inline incomplete_file_message_t* set_file_path(struct pt_regs *ctx, file_message_type_t kind,
                                                          void *path, void *dentry)
 {

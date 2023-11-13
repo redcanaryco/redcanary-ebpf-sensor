@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0+
 
 // Configure path.h to include filter code
+#include "common/common.h"
+#include "common/definitions.h"
 #define USE_PATH_FILTER 1
 // Configure path.h with maximum segments we can read from a d_path before doing a tail call
 #define MAX_PATH_SEGMENTS_NOTAIL 25
@@ -309,6 +311,28 @@ int sys_exit_rmdir(struct syscalls_exit_args *ctx)
 
 /* START CHMOD-LIKE */
 
+SEC("kprobe/security_inode_setattr")
+int BPF_KPROBE(security_inode_setattr, void *first, void *second)
+{
+    u32 *kernel_version_code = get_offset(CRC_LINUX_KERNEL_VERSION);
+    if (kernel_version_code == NULL) return 0;
+
+    void *dentry = NULL;
+
+    if (*kernel_version_code >= KERNEL_VERSION(6, 0, 0)) {
+        // int security_inode_setattr(struct mnt_idmap *idmap, struct dentry *dentry, struct iattr *attr);
+        dentry = second;
+    } else {
+        // int security_inode_setattr(struct dentry *dentry, struct iattr *attr);
+        dentry = first;
+    }
+
+    store_modified_dentry(ctx, dentry);
+
+    return 0;
+}
+
+
 SEC("tracepoint/syscalls/sys_enter_chmod")
 int sys_enter_chmod(void *ctx)
 {
@@ -357,7 +381,7 @@ int sys_exit_fchmodat(struct syscalls_exit_args *ctx)
 SEC("kprobe/security_path_chmod")
 int BPF_KPROBE(security_path_chmod, const struct path *path, umode_t mode)
 {
-    store_modified_dentry(ctx, (void *)path);
+    store_modified_path_dentry(ctx, (void *)path);
     return 0;
 }
 
@@ -428,7 +452,7 @@ int sys_exit_fchownat(struct syscalls_exit_args *ctx)
 SEC("kprobe/security_path_chown")
 int BPF_KPROBE(security_path_chown, const struct path *path, uid_t uid, gid_t gid)
 {
-    store_modified_dentry(ctx, (void *)path);
+    store_modified_path_dentry(ctx, (void *)path);
     return 0;
 }
 
@@ -535,7 +559,7 @@ int BPF_KPROBE(security_file_open, void *file)
         push_file_warning(ctx, &fm, FM_MODIFY);
         return 0;
     }
-    store_modified_dentry(ctx, path);
+    store_modified_path_dentry(ctx, path);
     return 0;
 }
 
@@ -599,7 +623,7 @@ int sys_enter_truncate(void *ctx)
 SEC("kprobe/security_path_truncate")
 int BPF_KPROBE(security_path_truncate, const struct path *path)
 {
-    store_modified_dentry(ctx, (void *)path);
+    store_modified_path_dentry(ctx, (void *)path);
     return 0;
 }
 
@@ -700,6 +724,20 @@ int BPF_KPROBE(mnt_want_write, void *vfsmount)
     if (event == NULL || event->vfsmount != NULL) return 0;
 
     event->vfsmount = vfsmount;
+    return 0;
+}
+
+SEC("kprobe/mnt_want_write_file")
+int BPF_KPROBE(mnt_want_write_file, struct file *file)
+{
+    set_current_file_mnt(ctx, file);
+    return 0;
+}
+
+SEC("kprobe/mnt_want_write_file_path")
+int BPF_KPROBE(mnt_want_write_file_path, void *file)
+{
+    set_current_file_mnt(ctx, file);
     return 0;
 }
 
