@@ -508,7 +508,14 @@ int sys_exit_renameat2(struct syscalls_exit_args *ctx)
 SEC("kprobe/security_path_rename")
 int BPF_KPROBE(security_path_rename, const struct path *old_dir, struct dentry *old_dentry, const struct path *new_dir, struct dentry *new_dentry)
 {
-    store_renamed_dentries(ctx, (void *)old_dir, old_dentry, (void *)new_dir, new_dentry);
+    store_renamed_path_dentries(ctx, (void *)old_dir, old_dentry, (void *)new_dir, new_dentry);
+    return 0;
+}
+
+SEC("kprobe/security_inode_rename")
+int BPF_KPROBE(security_inode_rename, struct inode *old_dir, struct dentry *old_dentry, struct inode *new_dir, struct dentry *new_dentry)
+{
+    store_renamed_dentries(ctx, old_dentry, new_dentry);
     return 0;
 }
 
