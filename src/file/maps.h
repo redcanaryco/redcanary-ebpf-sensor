@@ -152,23 +152,6 @@ static __always_inline void set_current_file_mnt(struct pt_regs *ctx, void *file
     return;
 }
 
-static __always_inline incomplete_file_message_t* set_file_path(struct pt_regs *ctx, file_message_type_t kind,
-                                                         void *path, void *dentry)
-{
-    incomplete_file_message_t* event = set_file_dentry(ctx, kind, dentry);
-    if (event == NULL) return NULL;
-
-    event->vfsmount = read_field_ptr(path, CRC_PATH_MNT);
-    if (event->vfsmount == NULL) goto EmitWarning;
-
-    return event;
-
- EmitWarning:;
-    file_message_t fm = {0};
-    push_file_warning(ctx, &fm, event->kind);
-    return NULL;
-}
-
 // Handles the end states of a given message
 // If null, do nothing
 // If warning, emit the warning

@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0+
 
 // Configure path.h to include filter code
-#include "common/common.h"
-#include "common/definitions.h"
 #define USE_PATH_FILTER 1
 // Configure path.h with maximum segments we can read from a d_path before doing a tail call
 #define MAX_PATH_SEGMENTS_NOTAIL 25
@@ -10,6 +8,8 @@
 #include "vmlinux.h"
 
 #include "common/bpf_helpers.h"
+#include "common/common.h"
+#include "common/definitions.h"
 #include "common/offsets.h"
 #include "common/types.h"
 #include "file/create.h"
@@ -210,7 +210,14 @@ int sys_enter_mknodat(void *ctx)
 SEC("kprobe/security_path_mknod")
 int BPF_KPROBE(security_path_mknod, const struct path *dir, struct dentry *dentry, umode_t mode, unsigned int dev)
 {
-    store_open_create_dentry(ctx, (void *)dir, (void *)dentry);
+    store_open_create_path_dentry(ctx, (void *)dir, (void *)dentry);
+    return 0;
+}
+
+SEC("kprobe/security_inode_create")
+int BPF_KPROBE(security_inode_create, struct inode *dir, struct dentry *dentry, umode_t mode)
+{
+    store_open_create_dentry(ctx, dentry);
     return 0;
 }
 
