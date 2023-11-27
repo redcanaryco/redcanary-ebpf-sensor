@@ -34,12 +34,11 @@ static __always_inline void enter_rename(void *ctx)
     enter_file_message(ctx, FM_RENAME);
 }
 
-static __always_inline void store_renamed_dentries(struct pt_regs *ctx,
-                                                   void *old_dir, void *old_dentry,
-                                                   void *new_dir, void *new_dentry)
+static __always_inline incomplete_file_message_t*  store_renamed_dentries(struct pt_regs *ctx,
+                                                                          void *old_dentry, void *new_dentry)
 {
-    incomplete_file_message_t* event = set_file_path(ctx, FM_RENAME, new_dir, old_dentry);
-    if (event == NULL) return;
+    incomplete_file_message_t* event = set_file_dentry(ctx, FM_RENAME, old_dentry);
+    if (event == NULL) return NULL;
 
     event->rename.source_parent_dentry = read_field_ptr(old_dentry, CRC_DENTRY_D_PARENT);
     if (event->rename.source_parent_dentry == NULL) goto EmitWarning;
@@ -64,12 +63,20 @@ static __always_inline void store_renamed_dentries(struct pt_regs *ctx,
         if (ret < 0) goto EmitWarning;
     }
 
-    return;
+    return event;
 
  EmitWarning:;
     file_message_t fm = {0};
     push_file_warning(ctx, &fm, FM_RENAME);
-    return;
+    return NULL;
+}
+
+static __always_inline void store_renamed_path_dentries(struct pt_regs *ctx,
+                                                   void *old_dir, void *old_dentry,
+                                                   void *new_dir, void *new_dentry)
+{
+    incomplete_file_message_t* event = store_renamed_dentries(ctx, old_dentry, new_dentry);
+    set_path_mnt(ctx, event, new_dir);
 }
 
 static __always_inline file_message_t* exit_rename(void *ctx, u64 pid_tgid, incomplete_file_message_t *event)

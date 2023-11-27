@@ -152,3 +152,6 @@ const u64 CRC_TASK_STRUCT_AUDIT = 0x67da4ab26d333059;
 
 /* audit_task_info->loginuid */
 const u64 CRC_AUDIT_TASK_INFO_LOGINUID = 0xe6dd107ea26da1a0;
+
+/* LINUX_KERNEL_VERSION */
+const u64 CRC_LINUX_KERNEL_VERSION = 0xbd0860b98f6d2ade;

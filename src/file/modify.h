@@ -26,37 +26,49 @@ static __always_inline void maybe_enter_modify(void *ctx, long flags)
     }
 }
 
+static __always_inline incomplete_file_message_t* store_open_create_dentry(struct pt_regs *ctx, void *dentry)
+{
+    incomplete_file_message_t* event = set_file_dentry(ctx, FM_MODIFY, dentry);
+    if (event == NULL) return NULL;
+
+    event->modify.is_created = true;
+
+    return event;
+}
+
 // This method is called when a file is created by passing through security_path_mknod. It stores the dentry
 // and vfsmount of the created file in the incomplete_modifies map with a `is_created` flag.
 // If the file is created in a directory that is monitored we can reuse this information during an
 // open trace to mark the open event appropriately as either a modify or create.
-static __always_inline void store_open_create_dentry(struct pt_regs *ctx, void *dir, void *dentry)
+static __always_inline void store_open_create_path_dentry(struct pt_regs *ctx, void *dir, void *dentry)
 {
-    incomplete_file_message_t* event = set_file_path(ctx, FM_MODIFY, dir, dentry);
-    if (event == NULL) return;
+    incomplete_file_message_t* event = store_open_create_dentry(ctx, dentry);
+    set_path_mnt(ctx, event, dir);
+}
 
-    event->modify.is_created = true;
-
-    return;
- }
-
-static __always_inline void store_modified_dentry(struct pt_regs *ctx, void *path)
+static __always_inline incomplete_file_message_t* store_modified_dentry(struct pt_regs *ctx, void *dentry)
 {
-    void *dentry = read_field_ptr(path, CRC_PATH_DENTRY);
-    incomplete_file_message_t* event = set_file_path(ctx, FM_MODIFY, path, dentry);
-    if (event == NULL) return;
+    incomplete_file_message_t* event = set_file_dentry(ctx, FM_MODIFY, dentry);
+    if (event == NULL) return NULL;
 
     if (file_from_dentry(event->target_dentry, NULL, &event->modify.before_owner) < 0) {
         goto EmitWarning;
     }
 
-    return;
+    return event;
 
  EmitWarning:;
     file_message_t fm = {0};
     push_file_warning(ctx, &fm, FM_MODIFY);
-    return;
- }
+    return NULL;
+}
+
+static __always_inline void store_modified_path_dentry(struct pt_regs *ctx, void *path)
+{
+    void *dentry = read_field_ptr(path, CRC_PATH_DENTRY);
+    void *event = store_modified_dentry(ctx, dentry);
+    set_path_mnt(ctx, event, path);
+}
 
 static __always_inline file_message_t* exit_modify(void *ctx, u64 pid_tgid, incomplete_file_message_t *event)
 {

@@ -107,14 +107,23 @@ static __always_inline incomplete_file_message_t* get_current_event(void *ctx, f
   return get_event(ctx, kind, &pid_tgid);
 }
 
-static __always_inline incomplete_file_message_t* set_file_path(struct pt_regs *ctx, file_message_type_t kind,
-                                                         void *path, void *dentry)
+static __always_inline incomplete_file_message_t* set_file_dentry(struct pt_regs *ctx,
+                                                                  file_message_type_t kind, void *dentry)
 {
     incomplete_file_message_t* event = get_current_event(ctx, kind);
     if (event == NULL) return NULL;
     if (event->target_dentry != NULL) return NULL;
 
     event->target_dentry = dentry;
+
+    return event;
+}
+
+static __always_inline incomplete_file_message_t* set_path_mnt(struct pt_regs *ctx,
+                                                               incomplete_file_message_t* event, void *path)
+{
+    if (event == NULL) return NULL;
+
     event->vfsmount = read_field_ptr(path, CRC_PATH_MNT);
     if (event->vfsmount == NULL) goto EmitWarning;
 
@@ -124,6 +133,23 @@ static __always_inline incomplete_file_message_t* set_file_path(struct pt_regs *
     file_message_t fm = {0};
     push_file_warning(ctx, &fm, event->kind);
     return NULL;
+}
+
+static __always_inline void set_current_file_mnt(struct pt_regs *ctx, void *file)
+{
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+    incomplete_file_message_t *event = bpf_map_lookup_elem(&incomplete_file_messages, &pid_tgid);
+    if (event == NULL || event->vfsmount != NULL) return;
+
+    void *path = read_field_ptr(file, CRC_FILE_F_PATH);
+    if (path == NULL) goto EmitWarning;
+    set_path_mnt(ctx, event, path);
+
+ EmitWarning:;
+    file_message_t fm = {0};
+    push_file_warning(ctx, &fm, event->kind);
+
+    return;
 }
 
 // Handles the end states of a given message

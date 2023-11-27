@@ -8,6 +8,9 @@
 #include "vmlinux.h"
 
 #include "common/bpf_helpers.h"
+#include "common/common.h"
+#include "common/definitions.h"
+#include "common/offsets.h"
 #include "common/types.h"
 #include "file/create.h"
 #include "file/delete.h"
@@ -50,7 +53,14 @@ int sys_enter_mkdirat(void *ctx)
 SEC("kprobe/security_path_mkdir")
 int BPF_KPROBE(security_path_mkdir, const struct path *dir, struct dentry *dentry, umode_t mode)
 {
-    store_dentry(ctx, (void *)dir, (void *)dentry, NULL);
+    store_create_path_dentry(ctx, (void *)dir, (void *)dentry, NULL);
+    return 0;
+}
+
+SEC("kprobe/security_inode_mkdir")
+int BPF_KPROBE(security_inode_mkdir, const struct inode *dir, struct dentry *dentry, umode_t mode)
+{
+    store_create_dentry(ctx, dentry, NULL);
     return 0;
 }
 
@@ -111,7 +121,14 @@ int sys_exit_symlinkat(void *ctx)
 SEC("kprobe/security_path_symlink")
 int BPF_KPROBE(security_path_symlink, const struct path *dir, struct dentry *dentry, const char *old_name)
 {
-    store_dentry(ctx, (void *)dir, (void *)dentry, (void *)old_name);
+    store_create_path_dentry(ctx, (void *)dir, (void *)dentry, (void *)old_name);
+    return 0;
+}
+
+SEC("kprobe/security_inode_symlink")
+int BPF_KPROBE(security_inode_symlink, struct inode *dir, struct dentry *dentry, const char *old_name)
+{
+    store_create_dentry(ctx, dentry, (void *)old_name);
     return 0;
 }
 
@@ -145,7 +162,14 @@ int sys_enter_linkat(void *ctx)
 SEC("kprobe/security_path_link")
 int BPF_KPROBE(security_path_link, struct dentry *old_dentry, const struct path *new_dir, struct dentry *new_dentry)
 {
-    store_dentry(ctx, (void *)new_dir, (void *)new_dentry, (void *)old_dentry);
+    store_create_path_dentry(ctx, (void *)new_dir, (void *)new_dentry, (void *)old_dentry);
+    return 0;
+}
+
+SEC("kprobe/security_inode_link")
+int BPF_KPROBE(security_inode_link, struct dentry *old_dentry, struct inode *dir, struct dentry *new_dentry)
+{
+    store_create_dentry(ctx, new_dentry, old_dentry);
     return 0;
 }
 
@@ -186,7 +210,14 @@ int sys_enter_mknodat(void *ctx)
 SEC("kprobe/security_path_mknod")
 int BPF_KPROBE(security_path_mknod, const struct path *dir, struct dentry *dentry, umode_t mode, unsigned int dev)
 {
-    store_open_create_dentry(ctx, (void *)dir, (void *)dentry);
+    store_open_create_path_dentry(ctx, (void *)dir, (void *)dentry);
+    return 0;
+}
+
+SEC("kprobe/security_inode_create")
+int BPF_KPROBE(security_inode_create, struct inode *dir, struct dentry *dentry, umode_t mode)
+{
+    store_open_create_dentry(ctx, dentry);
     return 0;
 }
 
@@ -243,7 +274,14 @@ int sys_exit_unlinkat(struct syscalls_exit_args *ctx)
 SEC("kprobe/security_path_unlink")
 int BPF_KPROBE(security_path_unlink, const struct path *dir, struct dentry *dentry)
 {
-    store_deleted_dentry(ctx, (void *)dir, dentry);
+    store_deleted_path_dentry(ctx, (void *)dir, dentry);
+    return 0;
+}
+
+SEC("kprobe/security_inode_unlink")
+int BPF_KPROBE(security_inode_unlink, struct inode *dir, struct dentry *dentry)
+{
+    store_deleted_dentry(ctx, dentry);
     return 0;
 }
 
@@ -257,7 +295,14 @@ int sys_enter_rmdir(void *ctx)
 SEC("kprobe/security_path_rmdir")
 int BPF_KPROBE(security_path_rmdir, const struct path *dir, struct dentry *dentry)
 {
-    store_deleted_dentry(ctx, (void *)dir, dentry);
+    store_deleted_path_dentry(ctx, (void *)dir, dentry);
+    return 0;
+}
+
+SEC("kprobe/security_inode_rmdir")
+int BPF_KPROBE(security_inode_rmdir, struct inode *dir, struct dentry *dentry)
+{
+    store_deleted_dentry(ctx, dentry);
     return 0;
 }
 
@@ -272,6 +317,28 @@ int sys_exit_rmdir(struct syscalls_exit_args *ctx)
 /* END DELETE-LIKE PROBES */
 
 /* START CHMOD-LIKE */
+
+SEC("kprobe/security_inode_setattr")
+int BPF_KPROBE(security_inode_setattr, void *first, void *second)
+{
+    u32 *kernel_version_code = get_offset(CRC_LINUX_KERNEL_VERSION);
+    if (kernel_version_code == NULL) return 0;
+
+    void *dentry = NULL;
+
+    if (*kernel_version_code >= KERNEL_VERSION(6, 0, 0)) {
+        // int security_inode_setattr(struct mnt_idmap *idmap, struct dentry *dentry, struct iattr *attr);
+        dentry = second;
+    } else {
+        // int security_inode_setattr(struct dentry *dentry, struct iattr *attr);
+        dentry = first;
+    }
+
+    store_modified_dentry(ctx, dentry);
+
+    return 0;
+}
+
 
 SEC("tracepoint/syscalls/sys_enter_chmod")
 int sys_enter_chmod(void *ctx)
@@ -321,7 +388,7 @@ int sys_exit_fchmodat(struct syscalls_exit_args *ctx)
 SEC("kprobe/security_path_chmod")
 int BPF_KPROBE(security_path_chmod, const struct path *path, umode_t mode)
 {
-    store_modified_dentry(ctx, (void *)path);
+    store_modified_path_dentry(ctx, (void *)path);
     return 0;
 }
 
@@ -392,7 +459,7 @@ int sys_exit_fchownat(struct syscalls_exit_args *ctx)
 SEC("kprobe/security_path_chown")
 int BPF_KPROBE(security_path_chown, const struct path *path, uid_t uid, gid_t gid)
 {
-    store_modified_dentry(ctx, (void *)path);
+    store_modified_path_dentry(ctx, (void *)path);
     return 0;
 }
 
@@ -448,7 +515,14 @@ int sys_exit_renameat2(struct syscalls_exit_args *ctx)
 SEC("kprobe/security_path_rename")
 int BPF_KPROBE(security_path_rename, const struct path *old_dir, struct dentry *old_dentry, const struct path *new_dir, struct dentry *new_dentry)
 {
-    store_renamed_dentries(ctx, (void *)old_dir, old_dentry, (void *)new_dir, new_dentry);
+    store_renamed_path_dentries(ctx, (void *)old_dir, old_dentry, (void *)new_dir, new_dentry);
+    return 0;
+}
+
+SEC("kprobe/security_inode_rename")
+int BPF_KPROBE(security_inode_rename, struct inode *old_dir, struct dentry *old_dentry, struct inode *new_dir, struct dentry *new_dentry)
+{
+    store_renamed_dentries(ctx, old_dentry, new_dentry);
     return 0;
 }
 
@@ -499,7 +573,7 @@ int BPF_KPROBE(security_file_open, void *file)
         push_file_warning(ctx, &fm, FM_MODIFY);
         return 0;
     }
-    store_modified_dentry(ctx, path);
+    store_modified_path_dentry(ctx, path);
     return 0;
 }
 
@@ -563,7 +637,7 @@ int sys_enter_truncate(void *ctx)
 SEC("kprobe/security_path_truncate")
 int BPF_KPROBE(security_path_truncate, const struct path *path)
 {
-    store_modified_dentry(ctx, (void *)path);
+    store_modified_path_dentry(ctx, (void *)path);
     return 0;
 }
 
@@ -651,6 +725,33 @@ SEC("tracepoint/filemod_paths")
 int filemod_paths(void *ctx)
 {
     _filemod_paths(ctx);
+    return 0;
+}
+
+/* MNT WANT WRITE */
+
+SEC("kprobe/mnt_want_write")
+int BPF_KPROBE(mnt_want_write, void *vfsmount)
+{
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+    incomplete_file_message_t *event = bpf_map_lookup_elem(&incomplete_file_messages, &pid_tgid);
+    if (event == NULL || event->vfsmount != NULL) return 0;
+
+    event->vfsmount = vfsmount;
+    return 0;
+}
+
+SEC("kprobe/mnt_want_write_file")
+int BPF_KPROBE(mnt_want_write_file, struct file *file)
+{
+    set_current_file_mnt(ctx, file);
+    return 0;
+}
+
+SEC("kprobe/mnt_want_write_file_path")
+int BPF_KPROBE(mnt_want_write_file_path, void *file)
+{
+    set_current_file_mnt(ctx, file);
     return 0;
 }
 
