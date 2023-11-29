@@ -50,24 +50,13 @@ int ret_sys_execveat_pre_4_18(struct pt_regs *ctx)
     return 0;
 }
 
-struct syscalls_enter_clone_args {
-    __u64 unused;
-    long __syscall_nr;
-    unsigned long clone_flags;
-    unsigned long newsp;
-    int *parent_tid;
-    #if defined(__TARGET_ARCH_x86)
-    int *child_tid;
-    unsigned long tls;
-    #elif defined(__TARGET_ARCH_arm64)
-    unsigned long tls;
-    int *child_tid;
-    #endif
-};
-
-SEC("tracepoint/syscalls/sys_enter_clone")
-int sys_enter_clone(struct syscalls_enter_clone_args *args) {
-    enter_clone(args, PM_CLONE, args->clone_flags);
+// NB: the signature of sys_clone is different between aarch64 and
+// x86_64 but only starting on the 4th argument. Since we only care
+// about the flags we'll keep it like this
+SEC("kprobe/sys_clone")
+int BPF_KPROBE_SYSCALL(sys_clone, unsigned long flags)
+{
+    enter_clone(ctx, PM_CLONE, flags);
     return 0;
 }
 
@@ -93,7 +82,7 @@ SEC("tracepoint/syscalls/sys_exit_clone3")
 int sys_exit_clone3(struct syscalls_exit_args *ctx)
 {
     process_message_t sev = {0};
-    exit_clone(ctx, &sev, PM_CLONE3);
+    exit_clone(ctx, &sev, PM_CLONE3, ctx->ret);
     return 0;
 }
 
@@ -112,43 +101,43 @@ int read_pid_task_struct(struct pt_regs *ctx)
     return 0;
 }
 
-SEC("tracepoint/syscalls/sys_enter_fork")
-int sys_enter_fork(void *ctx)
+SEC("kprobe/sys_fork")
+int BPF_KPROBE_SYSCALL(sys_fork)
 {
     enter_clone(ctx, PM_FORK, SIGCHLD);
 
     return 0;
 }
 
-SEC("tracepoint/syscalls/sys_enter_vfork")
-int sys_enter_vfork(void *ctx)
+SEC("kprobe/sys_vfork")
+int BPF_KPROBE_SYSCALL(sys_vfork)
 {
     enter_clone(ctx, PM_VFORK, CLONE_VFORK | CLONE_VM | SIGCHLD);
 
     return 0;
 }
 
-SEC("tracepoint/syscalls/sys_exit_clone")
-int sys_exit_clone(struct syscalls_exit_args *ctx)
+SEC("kretprobe/ret_sys_clone")
+int ret_sys_clone(struct pt_regs *ctx)
 {
     process_message_t pm = {0};
-    exit_clone(ctx, &pm, PM_CLONE);
+    exit_clone(ctx, &pm, PM_CLONE, PT_REGS_RC(ctx));
     return 0;
 }
 
-SEC("tracepoint/syscalls/sys_exit_fork")
-int sys_exit_fork(struct syscalls_exit_args *ctx)
+SEC("kretprobe/ret_sys_fork")
+int ret_sys_fork(struct pt_regs *ctx)
 {
     process_message_t pm = {0};
-    exit_clone(ctx, &pm, PM_FORK);
+    exit_clone(ctx, &pm, PM_FORK, PT_REGS_RC(ctx));
     return 0;
 }
 
-SEC("tracepoint/syscalls/sys_exit_vfork")
-int sys_exit_vfork(struct syscalls_exit_args *ctx)
+SEC("kretprobe/ret_sys_vfork")
+int ret_sys_vfork(struct pt_regs *ctx)
 {
     process_message_t pm = {0};
-    exit_clone(ctx, &pm, PM_VFORK);
+    exit_clone(ctx, &pm, PM_VFORK, PT_REGS_RC(ctx));
     return 0;
 }
 
@@ -200,8 +189,8 @@ int sys_enter_exit_group(void *ctx)
     return 0;
 }
 
-SEC("tracepoint/syscalls/sys_enter_execveat")
-int sys_enter_execveat(void *ctx)
+SEC("kprobe/sys_execveat")
+int BPF_KPROBE_SYSCALL(sys_execveat)
 {
     u64 pid_tgid = bpf_get_current_pid_tgid();
     u32 pid = pid_tgid >> 32;
@@ -210,8 +199,8 @@ int sys_enter_execveat(void *ctx)
     return 0;
 }
 
-SEC("tracepoint/syscalls/sys_enter_execve")
-int sys_enter_execve(void *ctx)
+SEC("kprobe/sys_execve")
+int BPF_KPROBE_SYSCALL(sys_execve)
 {
     u64 pid_tgid = bpf_get_current_pid_tgid();
     u32 pid = pid_tgid >> 32;
