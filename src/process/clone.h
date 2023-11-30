@@ -55,12 +55,11 @@ static __always_inline void enter_clone(void *ctx, process_message_type_t pm_typ
 }
 
 // handles the kretprobe of clone-like syscalls (fork, vfork, clone, clone3)
-static __always_inline void exit_clone(struct syscalls_exit_args *ctx, pprocess_message_t pm, process_message_type_t pm_type)
+static __always_inline void exit_clone(void *ctx, pprocess_message_t pm, process_message_type_t pm_type, int retcode)
 {
   u64 pid_tgid = bpf_get_current_pid_tgid();
   load_event(incomplete_clones, pid_tgid, incomplete_clone_t);
 
-  int retcode = ctx->ret;
   if (retcode < 0)
     goto Done;
 
