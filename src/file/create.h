@@ -9,15 +9,10 @@
 #include "file/maps.h"
 #include "push_file_message.h"
 
-static __always_inline void enter_create(void *ctx)
-{
-    enter_file_message(ctx, FM_CREATE);
-}
-
 // The source parameter should be NULL if there is no source, a dentry for hard links, or a char * for symlink
-static __always_inline incomplete_file_message_t* store_create_dentry(struct pt_regs *ctx, void *dentry, void *source)
+static __always_inline incomplete_file_message_t* store_create_dentry(struct pt_regs *ctx, void *dentry, void *source, u64 probe_id)
 {
-    incomplete_file_message_t* event = set_file_dentry(ctx, FM_CREATE, dentry);
+    incomplete_file_message_t* event = set_file_dentry(ctx, FM_CREATE, dentry, probe_id);
     if (event == NULL) return NULL;
 
     event->create.source = source;
@@ -25,10 +20,10 @@ static __always_inline incomplete_file_message_t* store_create_dentry(struct pt_
 }
 
 // The source parameter should be NULL if there is no source, a dentry for hard links, or a char * for symlink
-static __always_inline void store_create_path_dentry(struct pt_regs *ctx, void *path, void *dentry, void *source)
+static __always_inline void store_create_path_dentry(struct pt_regs *ctx, void *path, void *dentry, void *source, u64 probe_id)
 {
-    incomplete_file_message_t* event = store_create_dentry(ctx, dentry, source);
-    set_path_mnt(ctx, event, path);
+    incomplete_file_message_t* event = store_create_dentry(ctx, dentry, source, probe_id);
+    set_path_mnt(ctx, event, path, probe_id);
 }
 
 static __always_inline void _exit_symlink(struct pt_regs *ctx, u64 pid_tgid, incomplete_file_message_t *event)
@@ -86,7 +81,7 @@ static __always_inline void _exit_symlink(struct pt_regs *ctx, u64 pid_tgid, inc
     return;
 
  EmitWarning:
-    push_file_warning(ctx, fm, FM_CREATE);
+    push_file_warning(ctx, fm, FM_CREATE, PF_EXIT_SYMLINK);
 
  NoEvent:
     // lookup tail calls completed; ensure we re-init cached_path next call
@@ -94,7 +89,7 @@ static __always_inline void _exit_symlink(struct pt_regs *ctx, u64 pid_tgid, inc
     return;
 }
 
-static __always_inline file_message_t* exit_create(void *ctx, u64 pid_tgid, incomplete_file_message_t *event, file_link_type_t link_type)
+static __always_inline file_message_t* exit_create(struct syscalls_exit_args *ctx, u64 pid_tgid, incomplete_file_message_t *event, file_link_type_t link_type)
 {
     u32 key = 0;
     buf_t *buffer = (buf_t *)bpf_map_lookup_elem(&buffers, &key);

@@ -32,6 +32,34 @@ struct in6_addr {
 #define MAX_ADDRESSES 16
 #define TASK_COMM_LEN 16
 
+typedef enum {
+  // there are less than 65535 syscalls so this is a safe value
+  PF_UNSPEC = 0xFFFF,
+  PF_EXIT_SYMLINK,
+  PF_SECURITY_FILE_OPEN,
+  PF_SECURITY_INODE_CREATE,
+  PF_SECURITY_INODE_LINK,
+  PF_SECURITY_INODE_MKDIR,
+  PF_SECURITY_INODE_RENAME,
+  PF_SECURITY_INODE_RMDIR,
+  PF_SECURITY_INODE_SETATTR,
+  PF_SECURITY_INODE_SYMLINK,
+  PF_SECURITY_INODE_UNLINK,
+  PF_SECURITY_PATH_CHMOD,
+  PF_SECURITY_PATH_CHOWN,
+  PF_SECURITY_PATH_LINK,
+  PF_SECURITY_PATH_MKDIR,
+  PF_SECURITY_PATH_MKNOD,
+  PF_SECURITY_PATH_RENAME,
+  PF_SECURITY_PATH_RMDIR,
+  PF_SECURITY_PATH_SYMLINK,
+  PF_SECURITY_PATH_TRUNCATE,
+  PF_SECURITY_PATH_UNLINK,
+  PF_MNT_WANT_WRITE_FILE,
+  PF_MNT_WANT_WRITE_FILE_PATH,
+  PF_FILEMOD_PATHS,
+} probe_func_t;
+
 typedef enum
 {
     SP_IGNORE,
@@ -252,12 +280,16 @@ typedef union
         u64 end;
     } argv;
     tail_call_slot_t tailcall;
-    message_type_t stored_kind;
+    struct {
+        u64 probe_id;
+        message_type_t kind;
+    } stored;
 } error_info_t;
 
 typedef struct
 {
     warning_t code;
+    u64 probe_id;
     message_type_t message_type;
     u64 pid_tgid;
     error_info_t info;

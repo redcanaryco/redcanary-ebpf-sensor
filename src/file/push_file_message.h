@@ -35,11 +35,12 @@ static __always_inline int push_flexible_file_message(void *ctx, file_message_t 
 
 // pushes a warning to the process_events perfmap for the current CPU.
 static __always_inline int push_file_warning(void *ctx, file_message_t *fm,
-                                             file_message_type_t fm_type)
+                                             file_message_type_t fm_type, u64 probe_id)
 {
     fm->type = FM_WARNING;
     message_type_t m_type;
     m_type.file = fm_type;
+    fm->u.warning.probe_id = probe_id;
 
     load_warning_info(&fm->u.warning, m_type);
 

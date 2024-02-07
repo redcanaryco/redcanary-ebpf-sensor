@@ -7,14 +7,9 @@
 #include "common/path.h"
 #include "dentry.h"
 
-static __always_inline void enter_delete(void *ctx)
+static __always_inline incomplete_file_message_t* store_deleted_dentry(struct pt_regs *ctx, void *dentry, u64 probe_id)
 {
-    enter_file_message(ctx, FM_DELETE);
-}
-
-static __always_inline incomplete_file_message_t* store_deleted_dentry(struct pt_regs *ctx, void *dentry)
-{
-    incomplete_file_message_t* event = set_file_dentry(ctx, FM_DELETE, dentry);
+    incomplete_file_message_t* event = set_file_dentry(ctx, FM_DELETE, dentry, probe_id);
     if (event == NULL) return NULL;
 
     // After deletion dentries become "negative" dentries and no
@@ -28,14 +23,14 @@ static __always_inline incomplete_file_message_t* store_deleted_dentry(struct pt
 
  EmitWarning:;
     file_message_t fm = {0};
-    push_file_warning(ctx, &fm, FM_DELETE);
+    push_file_warning(ctx, &fm, FM_DELETE, probe_id);
     return NULL;
 }
 
-static __always_inline void store_deleted_path_dentry(struct pt_regs *ctx, void *path, void *dentry)
+static __always_inline void store_deleted_path_dentry(struct pt_regs *ctx, void *path, void *dentry, u64 probe_id)
 {
-    incomplete_file_message_t* event = store_deleted_dentry(ctx, dentry);
-    set_path_mnt(ctx, event, path);
+    incomplete_file_message_t* event = store_deleted_dentry(ctx, dentry, probe_id);
+    set_path_mnt(ctx, event, path, probe_id);
 }
 
 static __always_inline file_message_t* exit_delete(void *ctx, u64 pid_tgid, incomplete_file_message_t *event)

@@ -25,7 +25,7 @@ SEC("kprobe/exit_symlink")
 int exit_symlink(struct pt_regs *ctx)
 {
     u64 pid_tgid = bpf_get_current_pid_tgid();
-    incomplete_file_message_t *event = get_event(ctx, FM_CREATE, &pid_tgid);
+    incomplete_file_message_t *event = get_event(ctx, FM_CREATE, &pid_tgid, PF_EXIT_SYMLINK);
     if (event == NULL) return 0;
     _exit_symlink(ctx, pid_tgid, event);
 
@@ -37,30 +37,30 @@ int exit_symlink(struct pt_regs *ctx)
 //
 
 SEC("tracepoint/syscalls/sys_enter_mkdir")
-int sys_enter_mkdir(void *ctx)
+int sys_enter_mkdir(struct syscalls_enter_generic_args *ctx)
 {
-    enter_create(ctx);
+    enter_file_message(ctx, FM_CREATE);
     return 0;
 }
 
 SEC("tracepoint/syscalls/sys_enter_mkdirat")
-int sys_enter_mkdirat(void *ctx)
+int sys_enter_mkdirat(struct syscalls_enter_generic_args *ctx)
 {
-    enter_create(ctx);
+    enter_file_message(ctx, FM_CREATE);
     return 0;
 }
 
 SEC("kprobe/security_path_mkdir")
 int BPF_KPROBE(security_path_mkdir, const struct path *dir, struct dentry *dentry, umode_t mode)
 {
-    store_create_path_dentry(ctx, (void *)dir, (void *)dentry, NULL);
+    store_create_path_dentry(ctx, (void *)dir, (void *)dentry, NULL, PF_SECURITY_PATH_MKDIR);
     return 0;
 }
 
 SEC("kprobe/security_inode_mkdir")
 int BPF_KPROBE(security_inode_mkdir, const struct inode *dir, struct dentry *dentry, umode_t mode)
 {
-    store_create_dentry(ctx, dentry, NULL);
+    store_create_dentry(ctx, dentry, NULL, PF_SECURITY_INODE_MKDIR);
     return 0;
 }
 
@@ -85,21 +85,21 @@ int sys_exit_mkdirat(struct syscalls_exit_args *ctx)
 //
 
 SEC("tracepoint/syscalls/sys_enter_symlink")
-int sys_enter_symlink(void *ctx)
+int sys_enter_symlink(struct syscalls_enter_generic_args *ctx)
 {
-    enter_create(ctx);
+    enter_file_message(ctx, FM_CREATE);
     return 0;
 }
 
 SEC("tracepoint/syscalls/sys_enter_symlinkat")
-int sys_enter_symlinkat(void *ctx)
+int sys_enter_symlinkat(struct syscalls_enter_generic_args *ctx)
 {
-    enter_create(ctx);
+    enter_file_message(ctx, FM_CREATE);
     return 0;
 }
 
 SEC("tracepoint/syscalls/sys_exit_symlink")
-int sys_exit_symlink(void *ctx)
+int sys_exit_symlink(struct syscalls_exit_args *ctx)
 {
     // the kretprobe for vfs_symlink isn't guaranteed to fire - so we need to make sure we delete it
     // at the exit of the syscall no matter what
@@ -109,7 +109,7 @@ int sys_exit_symlink(void *ctx)
 }
 
 SEC("tracepoint/syscalls/sys_exit_symlinkat")
-int sys_exit_symlinkat(void *ctx)
+int sys_exit_symlinkat(struct syscalls_exit_args *ctx)
 {
     // the kretprobe for vfs_symlink isn't guaranteed to fire - so we need to make sure we delete it
     // at the exit of the syscall no matter what
@@ -121,14 +121,14 @@ int sys_exit_symlinkat(void *ctx)
 SEC("kprobe/security_path_symlink")
 int BPF_KPROBE(security_path_symlink, const struct path *dir, struct dentry *dentry, const char *old_name)
 {
-    store_create_path_dentry(ctx, (void *)dir, (void *)dentry, (void *)old_name);
+    store_create_path_dentry(ctx, (void *)dir, (void *)dentry, (void *)old_name, PF_SECURITY_PATH_SYMLINK);
     return 0;
 }
 
 SEC("kprobe/security_inode_symlink")
 int BPF_KPROBE(security_inode_symlink, struct inode *dir, struct dentry *dentry, const char *old_name)
 {
-    store_create_dentry(ctx, dentry, (void *)old_name);
+    store_create_dentry(ctx, dentry, (void *)old_name, PF_SECURITY_INODE_SYMLINK);
     return 0;
 }
 
@@ -146,30 +146,30 @@ int BPF_KRETPROBE(ret_vfs_symlink, int retval)
 //
 
 SEC("tracepoint/syscalls/sys_enter_link")
-int sys_enter_link(void *ctx)
+int sys_enter_link(struct syscalls_enter_generic_args *ctx)
 {
-    enter_create(ctx);
+    enter_file_message(ctx, FM_CREATE);
     return 0;
 }
 
 SEC("tracepoint/syscalls/sys_enter_linkat")
-int sys_enter_linkat(void *ctx)
+int sys_enter_linkat(struct syscalls_enter_generic_args *ctx)
 {
-    enter_create(ctx);
+    enter_file_message(ctx, FM_CREATE);
     return 0;
 }
 
 SEC("kprobe/security_path_link")
 int BPF_KPROBE(security_path_link, struct dentry *old_dentry, const struct path *new_dir, struct dentry *new_dentry)
 {
-    store_create_path_dentry(ctx, (void *)new_dir, (void *)new_dentry, (void *)old_dentry);
+    store_create_path_dentry(ctx, (void *)new_dir, (void *)new_dentry, (void *)old_dentry, PF_SECURITY_PATH_LINK);
     return 0;
 }
 
 SEC("kprobe/security_inode_link")
 int BPF_KPROBE(security_inode_link, struct dentry *old_dentry, struct inode *dir, struct dentry *new_dentry)
 {
-    store_create_dentry(ctx, new_dentry, old_dentry);
+    store_create_dentry(ctx, new_dentry, old_dentry, PF_SECURITY_INODE_LINK);
     return 0;
 }
 
@@ -194,30 +194,30 @@ int sys_exit_linkat(struct syscalls_exit_args *ctx)
 //
 
 SEC("tracepoint/syscalls/sys_enter_mknod")
-int sys_enter_mknod(void *ctx)
+int sys_enter_mknod(struct syscalls_enter_generic_args *ctx)
 {
-    enter_modify(ctx);
+    enter_file_message(ctx, FM_MODIFY);
     return 0;
 }
 
 SEC("tracepoint/syscalls/sys_enter_mknodat")
-int sys_enter_mknodat(void *ctx)
+int sys_enter_mknodat(struct syscalls_enter_generic_args *ctx)
 {
-    enter_modify(ctx);
+    enter_file_message(ctx, FM_MODIFY);
     return 0;
 }
 
 SEC("kprobe/security_path_mknod")
 int BPF_KPROBE(security_path_mknod, const struct path *dir, struct dentry *dentry, umode_t mode, unsigned int dev)
 {
-    store_open_create_path_dentry(ctx, (void *)dir, (void *)dentry);
+    store_open_create_path_dentry(ctx, (void *)dir, (void *)dentry, PF_SECURITY_PATH_MKNOD);
     return 0;
 }
 
 SEC("kprobe/security_inode_create")
 int BPF_KPROBE(security_inode_create, struct inode *dir, struct dentry *dentry, umode_t mode)
 {
-    store_open_create_dentry(ctx, dentry);
+    store_open_create_dentry(ctx, dentry, PF_SECURITY_INODE_CREATE);
     return 0;
 }
 
@@ -242,9 +242,9 @@ int sys_exit_mknodat(struct syscalls_exit_args *ctx)
 /* START DELETE-LIKE PROBES */
 
 SEC("tracepoint/syscalls/sys_enter_unlink")
-int sys_enter_unlink(void *ctx)
+int sys_enter_unlink(struct syscalls_enter_generic_args *ctx)
 {
-    enter_delete(ctx);
+    enter_file_message(ctx, FM_DELETE);
     return 0;
 }
 
@@ -257,9 +257,9 @@ int sys_exit_unlink(struct syscalls_exit_args *ctx)
 }
 
 SEC("tracepoint/syscalls/sys_enter_unlinkat")
-int sys_enter_unlinkat(void *ctx)
+int sys_enter_unlinkat(struct syscalls_enter_generic_args *ctx)
 {
-    enter_delete(ctx);
+    enter_file_message(ctx, FM_DELETE);
     return 0;
 }
 
@@ -274,35 +274,35 @@ int sys_exit_unlinkat(struct syscalls_exit_args *ctx)
 SEC("kprobe/security_path_unlink")
 int BPF_KPROBE(security_path_unlink, const struct path *dir, struct dentry *dentry)
 {
-    store_deleted_path_dentry(ctx, (void *)dir, dentry);
+    store_deleted_path_dentry(ctx, (void *)dir, dentry, PF_SECURITY_PATH_UNLINK);
     return 0;
 }
 
 SEC("kprobe/security_inode_unlink")
 int BPF_KPROBE(security_inode_unlink, struct inode *dir, struct dentry *dentry)
 {
-    store_deleted_dentry(ctx, dentry);
+    store_deleted_dentry(ctx, dentry, PF_SECURITY_INODE_UNLINK);
     return 0;
 }
 
 SEC("tracepoint/syscalls/sys_enter_rmdir")
-int sys_enter_rmdir(void *ctx)
+int sys_enter_rmdir(struct syscalls_enter_generic_args *ctx)
 {
-    enter_delete(ctx);
+    enter_file_message(ctx, FM_DELETE);
     return 0;
 }
 
 SEC("kprobe/security_path_rmdir")
 int BPF_KPROBE(security_path_rmdir, const struct path *dir, struct dentry *dentry)
 {
-    store_deleted_path_dentry(ctx, (void *)dir, dentry);
+    store_deleted_path_dentry(ctx, (void *)dir, dentry, PF_SECURITY_PATH_RMDIR);
     return 0;
 }
 
 SEC("kprobe/security_inode_rmdir")
 int BPF_KPROBE(security_inode_rmdir, struct inode *dir, struct dentry *dentry)
 {
-    store_deleted_dentry(ctx, dentry);
+    store_deleted_dentry(ctx, dentry, PF_SECURITY_INODE_RMDIR);
     return 0;
 }
 
@@ -334,16 +334,16 @@ int BPF_KPROBE(security_inode_setattr, void *first, void *second)
         dentry = first;
     }
 
-    store_modified_dentry(ctx, dentry);
+    store_modified_dentry(ctx, dentry, PF_SECURITY_INODE_SETATTR);
 
     return 0;
 }
 
 
 SEC("tracepoint/syscalls/sys_enter_chmod")
-int sys_enter_chmod(void *ctx)
+int sys_enter_chmod(struct syscalls_enter_generic_args *ctx)
 {
-    enter_modify(ctx);
+    enter_file_message(ctx, FM_MODIFY);
     return 0;
 }
 
@@ -356,9 +356,9 @@ int sys_exit_chmod(struct syscalls_exit_args *ctx)
 }
 
 SEC("tracepoint/syscalls/sys_enter_fchmod")
-int sys_enter_fchmod(void *ctx)
+int sys_enter_fchmod(struct syscalls_enter_generic_args *ctx)
 {
-    enter_modify(ctx);
+    enter_file_message(ctx, FM_MODIFY);
     return 0;
 }
 
@@ -371,9 +371,9 @@ int sys_exit_fchmod(struct syscalls_exit_args *ctx)
 }
 
 SEC("tracepoint/syscalls/sys_enter_fchmodat")
-int sys_enter_fchmodat(void *ctx)
+int sys_enter_fchmodat(struct syscalls_enter_generic_args *ctx)
 {
-    enter_modify(ctx);
+    enter_file_message(ctx, FM_MODIFY);
     return 0;
 }
 
@@ -388,7 +388,7 @@ int sys_exit_fchmodat(struct syscalls_exit_args *ctx)
 SEC("kprobe/security_path_chmod")
 int BPF_KPROBE(security_path_chmod, const struct path *path, umode_t mode)
 {
-    store_modified_path_dentry(ctx, (void *)path);
+    store_modified_path_dentry(ctx, (void *)path, PF_SECURITY_PATH_CHMOD);
     return 0;
 }
 
@@ -397,9 +397,9 @@ int BPF_KPROBE(security_path_chmod, const struct path *path, umode_t mode)
 /* START CHOWN-LIKE */
 
 SEC("tracepoint/syscalls/sys_enter_chown")
-int sys_enter_chown(void *ctx)
+int sys_enter_chown(struct syscalls_enter_generic_args *ctx)
 {
-    enter_modify(ctx);
+    enter_file_message(ctx, FM_MODIFY);
     return 0;
 }
 
@@ -412,9 +412,9 @@ int sys_exit_chown(struct syscalls_exit_args *ctx)
 }
 
 SEC("tracepoint/syscalls/sys_enter_lchown")
-int sys_enter_lchown(void *ctx)
+int sys_enter_lchown(struct syscalls_enter_generic_args *ctx)
 {
-    enter_modify(ctx);
+    enter_file_message(ctx, FM_MODIFY);
     return 0;
 }
 
@@ -427,9 +427,9 @@ int sys_exit_lchown(struct syscalls_exit_args *ctx)
 }
 
 SEC("tracepoint/syscalls/sys_enter_fchown")
-int sys_enter_fchown(void *ctx)
+int sys_enter_fchown(struct syscalls_enter_generic_args *ctx)
 {
-    enter_modify(ctx);
+    enter_file_message(ctx, FM_MODIFY);
     return 0;
 }
 
@@ -442,9 +442,9 @@ int sys_exit_fchown(struct syscalls_exit_args *ctx)
 }
 
 SEC("tracepoint/syscalls/sys_enter_fchownat")
-int sys_enter_fchownat(void *ctx)
+int sys_enter_fchownat(struct syscalls_enter_generic_args *ctx)
 {
-    enter_modify(ctx);
+    enter_file_message(ctx, FM_MODIFY);
     return 0;
 }
 
@@ -459,7 +459,7 @@ int sys_exit_fchownat(struct syscalls_exit_args *ctx)
 SEC("kprobe/security_path_chown")
 int BPF_KPROBE(security_path_chown, const struct path *path, uid_t uid, gid_t gid)
 {
-    store_modified_path_dentry(ctx, (void *)path);
+    store_modified_path_dentry(ctx, (void *)path, PF_SECURITY_PATH_CHOWN);
     return 0;
 }
 
@@ -468,9 +468,9 @@ int BPF_KPROBE(security_path_chown, const struct path *path, uid_t uid, gid_t gi
 /* START RENAME PROBES */
 
 SEC("tracepoint/syscalls/sys_enter_rename")
-int sys_enter_rename(void *ctx)
+int sys_enter_rename(struct syscalls_enter_generic_args *ctx)
 {
-    enter_rename(ctx);
+    enter_file_message(ctx, FM_RENAME);
     return 0;
 }
 
@@ -483,9 +483,9 @@ int sys_exit_rename(struct syscalls_exit_args *ctx)
 }
 
 SEC("tracepoint/syscalls/sys_enter_renameat")
-int sys_enter_renameat(void *ctx)
+int sys_enter_renameat(struct syscalls_enter_generic_args *ctx)
 {
-    enter_rename(ctx);
+    enter_file_message(ctx, FM_RENAME);
     return 0;
 }
 
@@ -498,9 +498,9 @@ int sys_exit_renameat(struct syscalls_exit_args *ctx)
 }
 
 SEC("tracepoint/syscalls/sys_enter_renameat2")
-int sys_enter_renameat2(void *ctx)
+int sys_enter_renameat2(struct syscalls_enter_generic_args *ctx)
 {
-    enter_rename(ctx);
+    enter_file_message(ctx, FM_RENAME);
     return 0;
 }
 
@@ -515,14 +515,14 @@ int sys_exit_renameat2(struct syscalls_exit_args *ctx)
 SEC("kprobe/security_path_rename")
 int BPF_KPROBE(security_path_rename, const struct path *old_dir, struct dentry *old_dentry, const struct path *new_dir, struct dentry *new_dentry)
 {
-    store_renamed_path_dentries(ctx, (void *)old_dir, old_dentry, (void *)new_dir, new_dentry);
+    store_renamed_path_dentries(ctx, (void *)old_dir, old_dentry, (void *)new_dir, new_dentry, PF_SECURITY_PATH_RENAME);
     return 0;
 }
 
 SEC("kprobe/security_inode_rename")
 int BPF_KPROBE(security_inode_rename, struct inode *old_dir, struct dentry *old_dentry, struct inode *new_dir, struct dentry *new_dentry)
 {
-    store_renamed_dentries(ctx, old_dentry, new_dentry);
+    store_renamed_dentries(ctx, old_dentry, new_dentry, PF_SECURITY_INODE_RENAME);
     return 0;
 }
 
@@ -532,7 +532,8 @@ int BPF_KPROBE(security_inode_rename, struct inode *old_dir, struct dentry *old_
 SEC("tracepoint/syscalls/sys_enter_open")
 int sys_enter_open(struct syscalls_enter_open_args *ctx)
 {
-    maybe_enter_modify(ctx, ctx->flags);
+    // safe because this ctx is a superset of syscalls_enter_generic_args
+    maybe_enter_modify((struct syscalls_enter_generic_args *)ctx, ctx->flags);
 
     return 0;
 }
@@ -540,7 +541,8 @@ int sys_enter_open(struct syscalls_enter_open_args *ctx)
 SEC("tracepoint/syscalls/sys_enter_openat")
 int sys_enter_openat(struct syscalls_enter_openat_args *ctx)
 {
-    maybe_enter_modify(ctx, ctx->flags);
+    // safe because this ctx is a superset of syscalls_enter_generic_args
+    maybe_enter_modify((struct syscalls_enter_generic_args *)ctx, ctx->flags);
 
     return 0;
 }
@@ -550,15 +552,16 @@ int sys_enter_openat2(struct syscalls_enter_openat2_args *ctx)
 {
     u64 flags = 0;
     bpf_probe_read_user(&flags, sizeof(flags), &ctx->how->flags);
-    maybe_enter_modify(ctx, flags);
+    // safe because this ctx is a superset of syscalls_enter_generic_args
+    maybe_enter_modify((struct syscalls_enter_generic_args *)ctx, flags);
 
     return 0;
 }
 
 SEC("tracepoint/syscalls/sys_enter_open_by_handle_at")
-int sys_enter_open_by_handle_at(struct syscalls_enter_open_by_handle_at_args *ctx)
-{
-    maybe_enter_modify(ctx, ctx->flags);
+int sys_enter_open_by_handle_at(struct syscalls_enter_open_by_handle_at_args *ctx) {
+    // safe because this ctx is a superset of syscalls_enter_generic_args
+    maybe_enter_modify((struct syscalls_enter_generic_args *)ctx, ctx->flags);
 
     return 0;
 }
@@ -570,10 +573,10 @@ int BPF_KPROBE(security_file_open, void *file)
     if (path == NULL)
     {
         file_message_t fm = {0};
-        push_file_warning(ctx, &fm, FM_MODIFY);
+        push_file_warning(ctx, &fm, FM_MODIFY, PF_SECURITY_FILE_OPEN);
         return 0;
     }
-    store_modified_path_dentry(ctx, path);
+    store_modified_path_dentry(ctx, path, PF_SECURITY_FILE_OPEN);
     return 0;
 }
 
@@ -611,11 +614,11 @@ int sys_exit_open_by_handle_at(struct syscalls_exit_args *ctx)
 
 
 SEC("tracepoint/syscalls/sys_enter_creat")
-int sys_enter_creat(void *ctx)
+int sys_enter_creat(struct syscalls_enter_generic_args *ctx)
 {
     // creat is equivalent to calling open with O_CREAT | O_WRONLY | O_TRUNC
     // If we see a creat, we should treat it as a write open
-    enter_modify(ctx);
+    enter_file_message(ctx, FM_MODIFY);
     return 0;
 }
 
@@ -628,16 +631,16 @@ int sys_exit_creat(struct syscalls_exit_args *ctx)
 }
 
 SEC("tracepoint/syscalls/sys_enter_truncate")
-int sys_enter_truncate(void *ctx)
+int sys_enter_truncate(struct syscalls_enter_generic_args *ctx)
 {
-    enter_modify(ctx);
+    enter_file_message(ctx, FM_MODIFY);
     return 0;
 }
 
 SEC("kprobe/security_path_truncate")
 int BPF_KPROBE(security_path_truncate, const struct path *path)
 {
-    store_modified_path_dentry(ctx, (void *)path);
+    store_modified_path_dentry(ctx, (void *)path, PF_SECURITY_PATH_TRUNCATE);
     return 0;
 }
 
@@ -713,7 +716,7 @@ static __always_inline void _filemod_paths(void *ctx)
     goto Done;
 
 EmitWarning:
-    push_file_warning(ctx, fm, fm->type);
+    push_file_warning(ctx, fm, fm->type, PF_FILEMOD_PATHS);
 
 Done:
     // lookup tail calls completed; ensure we re-init cached_path next call
@@ -744,14 +747,14 @@ int BPF_KPROBE(mnt_want_write, void *vfsmount)
 SEC("kprobe/mnt_want_write_file")
 int BPF_KPROBE(mnt_want_write_file, struct file *file)
 {
-    set_current_file_mnt(ctx, file);
+    set_current_file_mnt(ctx, file, PF_MNT_WANT_WRITE_FILE);
     return 0;
 }
 
 SEC("kprobe/mnt_want_write_file_path")
 int BPF_KPROBE(mnt_want_write_file_path, void *file)
 {
-    set_current_file_mnt(ctx, file);
+    set_current_file_mnt(ctx, file, PF_MNT_WANT_WRITE_FILE_PATH);
     return 0;
 }
 
