@@ -29,15 +29,10 @@ struct bpf_map_def SEC("maps/rename_names") rename_names = {
     .namespace = "",
 };
 
-static __always_inline void enter_rename(void *ctx)
-{
-    enter_file_message(ctx, FM_RENAME);
-}
-
 static __always_inline incomplete_file_message_t*  store_renamed_dentries(struct pt_regs *ctx,
-                                                                          void *old_dentry, void *new_dentry)
+                                                                          void *old_dentry, void *new_dentry, u64 probe_id)
 {
-    incomplete_file_message_t* event = set_file_dentry(ctx, FM_RENAME, old_dentry);
+    incomplete_file_message_t* event = set_file_dentry(ctx, FM_RENAME, old_dentry, probe_id);
     if (event == NULL) return NULL;
 
     event->rename.source_parent_dentry = read_field_ptr(old_dentry, CRC_DENTRY_D_PARENT);
@@ -67,16 +62,16 @@ static __always_inline incomplete_file_message_t*  store_renamed_dentries(struct
 
  EmitWarning:;
     file_message_t fm = {0};
-    push_file_warning(ctx, &fm, FM_RENAME);
+    push_file_warning(ctx, &fm, FM_RENAME, probe_id);
     return NULL;
 }
 
 static __always_inline void store_renamed_path_dentries(struct pt_regs *ctx,
                                                    void *old_dir, void *old_dentry,
-                                                   void *new_dir, void *new_dentry)
+                                                   void *new_dir, void *new_dentry, u64 probe_id)
 {
-    incomplete_file_message_t* event = store_renamed_dentries(ctx, old_dentry, new_dentry);
-    set_path_mnt(ctx, event, new_dir);
+    incomplete_file_message_t* event = store_renamed_dentries(ctx, old_dentry, new_dentry, probe_id);
+    set_path_mnt(ctx, event, new_dir, probe_id);
 }
 
 static __always_inline file_message_t* exit_rename(void *ctx, u64 pid_tgid, incomplete_file_message_t *event)

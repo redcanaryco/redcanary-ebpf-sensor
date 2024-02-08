@@ -9,8 +9,15 @@
 #include "common/types.h"
 #include "file/push_file_message.h"
 
+struct syscalls_enter_generic_args {
+    __u64 unused;
+    long __syscall_nr;
+    /* other args -- make custom structs if needed */
+};
+
 typedef struct {
     file_message_type_t kind;   // kind of file message
+    u64 probe_id;               // ID of the probe that inserted the event
     u64 start_ktime_ns;         // when did the syscall start
     void *vfsmount;             // vfsmount of the relevant dentries
     void *target_dentry;        // dentry of the file acted on in the case of FM_RENAME this is the
@@ -48,12 +55,13 @@ struct bpf_map_def SEC("maps/incomplete_file_messages") incomplete_file_messages
     .namespace = "",
 };
 
-static __always_inline void enter_file_message(void *ctx, file_message_type_t kind)
+static __always_inline void enter_file_message(struct syscalls_enter_generic_args *ctx, file_message_type_t kind)
 {
     u64 pid_tgid = bpf_get_current_pid_tgid();
     incomplete_file_message_t event = {0};
     event.start_ktime_ns = bpf_ktime_get_ns();
     event.kind = kind;
+    event.probe_id = ctx->__syscall_nr;
 
     // deliberately only insert if the key does not exist -- we want
     // to be truthful if we forgot to pop so userspace knows that
@@ -63,6 +71,7 @@ static __always_inline void enter_file_message(void *ctx, file_message_type_t ki
     {
         file_message_t fm = {0};
         fm.type = FM_WARNING;
+        fm.u.warning.probe_id = ctx->__syscall_nr;
         fm.u.warning.pid_tgid = pid_tgid;
         fm.u.warning.message_type.file = kind;
         fm.u.warning.code = W_UPDATE_MAP_ERROR;
@@ -76,7 +85,8 @@ static __always_inline void enter_file_message(void *ctx, file_message_type_t ki
     }
 }
 
-static __always_inline incomplete_file_message_t* get_event(void *ctx, file_message_type_t kind, u64 *pid_tgid) {
+static __always_inline incomplete_file_message_t *get_event(void *ctx,
+                                                            file_message_type_t kind, u64 *pid_tgid, u64 probe_id) {
   incomplete_file_message_t *event = bpf_map_lookup_elem(&incomplete_file_messages, pid_tgid);
   if (event == NULL) return NULL;
 
@@ -85,10 +95,12 @@ static __always_inline incomplete_file_message_t* get_event(void *ctx, file_mess
       // emit warning
       file_message_t fm = {0};
       fm.type = FM_WARNING;
+      fm.u.warning.probe_id = probe_id;
       fm.u.warning.pid_tgid = *pid_tgid;
       fm.u.warning.message_type.file = kind;
       fm.u.warning.code = W_KIND_MISMATCH;
-      fm.u.warning.info.stored_kind.file = stored_kind;
+      fm.u.warning.info.stored.kind.file = stored_kind;
+      fm.u.warning.info.stored.probe_id = event->probe_id;
 
       push_file_message(ctx, &fm);
 
@@ -102,15 +114,16 @@ static __always_inline incomplete_file_message_t* get_event(void *ctx, file_mess
   return event;
 }
 
-static __always_inline incomplete_file_message_t* get_current_event(void *ctx, file_message_type_t kind) {
+static __always_inline incomplete_file_message_t *get_current_event(void *ctx,
+                                                                    file_message_type_t kind, u64 probe_id) {
   u64 pid_tgid = bpf_get_current_pid_tgid();
-  return get_event(ctx, kind, &pid_tgid);
+  return get_event(ctx, kind, &pid_tgid, probe_id);
 }
 
 static __always_inline incomplete_file_message_t* set_file_dentry(struct pt_regs *ctx,
-                                                                  file_message_type_t kind, void *dentry)
+                                                                  file_message_type_t kind, void *dentry, u64 probe_id)
 {
-    incomplete_file_message_t* event = get_current_event(ctx, kind);
+    incomplete_file_message_t* event = get_current_event(ctx, kind, probe_id);
     if (event == NULL) return NULL;
     if (event->target_dentry != NULL) return NULL;
 
@@ -120,7 +133,7 @@ static __always_inline incomplete_file_message_t* set_file_dentry(struct pt_regs
 }
 
 static __always_inline incomplete_file_message_t* set_path_mnt(struct pt_regs *ctx,
-                                                               incomplete_file_message_t* event, void *path)
+                                                               incomplete_file_message_t* event, void *path, u64 probe_id)
 {
     if (event == NULL) return NULL;
 
@@ -131,11 +144,11 @@ static __always_inline incomplete_file_message_t* set_path_mnt(struct pt_regs *c
 
  EmitWarning:;
     file_message_t fm = {0};
-    push_file_warning(ctx, &fm, event->kind);
+    push_file_warning(ctx, &fm, event->kind, probe_id);
     return NULL;
 }
 
-static __always_inline void set_current_file_mnt(struct pt_regs *ctx, void *file)
+static __always_inline void set_current_file_mnt(struct pt_regs *ctx, void *file, u64 probe_id)
 {
     u64 pid_tgid = bpf_get_current_pid_tgid();
     incomplete_file_message_t *event = bpf_map_lookup_elem(&incomplete_file_messages, &pid_tgid);
@@ -143,11 +156,13 @@ static __always_inline void set_current_file_mnt(struct pt_regs *ctx, void *file
 
     void *path = read_field_ptr(file, CRC_FILE_F_PATH);
     if (path == NULL) goto EmitWarning;
-    set_path_mnt(ctx, event, path);
+    set_path_mnt(ctx, event, path, probe_id);
+
+    return;
 
  EmitWarning:;
     file_message_t fm = {0};
-    push_file_warning(ctx, &fm, event->kind);
+    push_file_warning(ctx, &fm, event->kind, probe_id);
 
     return;
 }
@@ -156,7 +171,7 @@ static __always_inline void set_current_file_mnt(struct pt_regs *ctx, void *file
 // If null, do nothing
 // If warning, emit the warning
 // If success, tail call.
-static __always_inline void finish_message(void *ctx, file_message_t *fm)
+static __always_inline void finish_message(struct syscalls_exit_args *ctx, file_message_t *fm)
 {
     if (fm == NULL) return;
     if (fm->type == FM_WARNING) goto EmitWarning;
@@ -168,12 +183,12 @@ static __always_inline void finish_message(void *ctx, file_message_t *fm)
     info.tailcall = FILE_PATHS;
     set_local_warning(W_TAIL_CALL_MAX, info);
 EmitWarning:;
-    push_file_warning(ctx, fm, fm->u.warning.message_type.file);
+    push_file_warning(ctx, fm, fm->u.warning.message_type.file, ctx->__syscall_nr);
 }
 
 #define GET_EXIT_EVENT(kind)                                            \
     u64 pid_tgid = bpf_get_current_pid_tgid();                          \
-    incomplete_file_message_t *event = get_event(ctx, kind, &pid_tgid); \
+    incomplete_file_message_t *event = get_event(ctx, kind, &pid_tgid, ctx->__syscall_nr); \
     file_message_t *ret = NULL;                                         \
     if (event == NULL) goto Exit;                                       \
     if (ctx->ret < 0) goto Pop;
