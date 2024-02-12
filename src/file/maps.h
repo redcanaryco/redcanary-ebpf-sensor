@@ -114,21 +114,17 @@ static __always_inline incomplete_file_message_t *get_event(void *ctx,
   return event;
 }
 
-static __always_inline incomplete_file_message_t *get_current_event(void *ctx,
-                                                                    file_message_type_t kind, u64 probe_id) {
-  u64 pid_tgid = bpf_get_current_pid_tgid();
-  return get_event(ctx, kind, &pid_tgid, probe_id);
-}
-
 static __always_inline incomplete_file_message_t* set_file_dentry(struct pt_regs *ctx,
                                                                   file_message_type_t kind, void *dentry, u64 probe_id)
 {
-    incomplete_file_message_t* event = get_current_event(ctx, kind, probe_id);
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+    incomplete_file_message_t *event = bpf_map_lookup_elem(&incomplete_file_messages, &pid_tgid);
+
     if (event == NULL) return NULL;
     if (event->target_dentry != NULL) return NULL;
+    if (event->kind != kind) return NULL;
 
     event->target_dentry = dentry;
-
     return event;
 }
 
