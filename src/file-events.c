@@ -25,8 +25,16 @@ SEC("kprobe/exit_symlink")
 int exit_symlink(struct pt_regs *ctx)
 {
     u64 pid_tgid = bpf_get_current_pid_tgid();
-    incomplete_file_message_t *event = get_event(ctx, FM_CREATE, &pid_tgid, PF_EXIT_SYMLINK);
-    if (event == NULL) return 0;
+    incomplete_file_message_t *event =
+        bpf_map_lookup_elem(&incomplete_file_messages, &pid_tgid);
+    if (event == NULL)
+      return 0;
+
+    // sometimes vfs_symlink is called outside the context of a symlink syscall -- ignore those
+    if (event->kind != FM_CREATE) {
+        return 0;
+    }
+
     _exit_symlink(ctx, pid_tgid, event);
 
     return 0;
