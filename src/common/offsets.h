@@ -78,6 +78,9 @@ const u64 CRC_INODE_I_GID = 0x5353E0ECE03150E1;
 /* super_block->s_dev */
 const u64 CRC_SBLOCK_S_DEV = 0xb1c03bec387e1aca;
 
+/* super_block->s_magic */
+const u64 CRC_SBLOCK_S_MAGIC = 0xa21f8d524c580c5d;
+
 /* task_struct->fs */
 const u64 CRC_TASK_STRUCT_FS = 0x7e927c27fc9f401f;
 
@@ -155,3 +158,14 @@ const u64 CRC_AUDIT_TASK_INFO_LOGINUID = 0xe6dd107ea26da1a0;
 
 /* LINUX_KERNEL_VERSION */
 const u64 CRC_LINUX_KERNEL_VERSION = 0xbd0860b98f6d2ade;
+
+/* BTRFS support */
+
+/* btrfs_inode->root */
+const u64 CRC_BTRFS_INODE_ROOT = 0xb45c091ac97692c3;
+
+/* btrfs_inode->vfs_inode */
+const u64 CRC_BTRFS_INODE_VFS_INODE = 0xc4a24e4c91af5451;
+
+/* btrfs_root->anon_dev */
+const u64 CRC_BTRFS_ROOT_ANON_DEV = 0xa274b01a7473b236;
