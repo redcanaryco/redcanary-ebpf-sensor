@@ -216,3 +216,10 @@
 #ifndef KERNEL_VERSION
 #define KERNEL_VERSION(a, b, c) (((a) << 16) + ((b) << 8) + ((c) > 255 ? 255 : (c)))
 #endif
+
+/*
+ * BTRFS Support
+ */
+
+/* (btrfs_tree.h) ASCII for _BHRfS_M, no terminating nul */
+#define BTRFS_SB_MAGIC 0x4D5F53665248425F
