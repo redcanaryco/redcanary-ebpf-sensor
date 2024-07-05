@@ -196,19 +196,15 @@ static __always_inline int file_info_from_ino(void *inode, file_info_t *file_inf
     if (read_field(inode, CRC_INODE_I_INO, &file_info->inode, sizeof(file_info->inode)) < 0)
         return -1;
 
-
     // check sb magic to determine if the file in question is on a
     // btrfs volume. if it is, the actual device ids that we care
     // about are embedded in the btrfs_superblock struct.
     unsigned long s_magic = 0;
     if (read_field(i_sb, CRC_SBLOCK_S_MAGIC, &s_magic, sizeof(s_magic)) < 0) return -1;
 
-
     // device major/minor
     u32 i_dev = 0;
-    if (s_magic != BTRFS_SB_MAGIC) {
-      if (read_field(i_sb, CRC_SBLOCK_S_DEV, &i_dev, sizeof(i_dev)) < 0) return -1;
-    } else {
+    if (s_magic == BTRFS_SB_MAGIC) {
       // we need to traverse from the internal btrfs_inode to its
       // btrfs_root. now that we know our inode is on btrfs, we can
       // expect that it points to the vfs_inode contained within
@@ -222,6 +218,8 @@ static __always_inline int file_info_from_ino(void *inode, file_info_t *file_inf
       if (btrfs_root == NULL) return -1;
 
       if (read_field(btrfs_root, CRC_BTRFS_ROOT_ANON_DEV, &i_dev, sizeof(i_dev)) < 0) return -1;
+    } else {
+      if (read_field(i_sb, CRC_SBLOCK_S_DEV, &i_dev, sizeof(i_dev)) < 0) return -1;
     }
 
     file_info->devmajor = MAJOR(i_dev);
