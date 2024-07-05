@@ -221,5 +221,4 @@
  * BTRFS Support
  */
 
-/* (btrfs_tree.h) ASCII for _BHRfS_M, no terminating nul */
-#define BTRFS_SB_MAGIC 0x4D5F53665248425F
+#define BTRFS_SB_MAGIC 0x9123683E
