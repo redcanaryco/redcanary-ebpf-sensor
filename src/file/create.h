@@ -74,6 +74,7 @@ static __always_inline void _exit_symlink(struct pt_regs *ctx, u64 pid_tgid, inc
     if (cached_path->filter_state <= 0) goto NoEvent; // Didn't match watched path filter
     write_null_char(cursor.buffer, cursor.offset);
     write_string(event->create.source, cursor.buffer, cursor.offset, PATH_MAX);
+    fm->u.action.tag = cached_path->filter_tag;
     push_flexible_file_message(ctx, fm, *cursor.offset);
 
     // lookup tail calls completed; ensure we re-init cached_path next call
