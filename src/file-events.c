@@ -15,6 +15,7 @@
 #include "file/create.h"
 #include "file/delete.h"
 #include "file/maps.h"
+#include "file/memfd.h"
 #include "file/modify.h"
 #include "file/rename.h"
 
@@ -536,6 +537,21 @@ int BPF_KPROBE(security_inode_rename, struct inode *old_dir, struct dentry *old_
 
 /* END RENAME PROBES */
 /* BEGIN OPEN-LIKE PROBES */
+
+SEC("tracepoint/syscalls/sys_enter_memfd_create")
+int sys_enter_memfd_create(struct syscalls_enter_memfd_create_args *ctx)
+{
+    enter_memfd_create(ctx);
+    return 0;
+}
+
+SEC("tracepoint/syscalls/sys_exit_memfd_create")
+int sys_exit_memfd_create(struct syscalls_exit_args *ctx)
+{
+    // exit_memfd pushes the message
+    (void) POP_AND_SETUP(FM_MEMFD_CREATE, exit_memfd);
+    return 0;
+}
 
 SEC("tracepoint/syscalls/sys_enter_open")
 int sys_enter_open(struct syscalls_enter_open_args *ctx)
