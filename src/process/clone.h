@@ -65,7 +65,7 @@ static __always_inline void exit_clone(void *ctx, pprocess_message_t pm, process
 
   void *ts = (void *)bpf_get_current_task();
   int ret = fill_syscall(&pm->u.syscall_info, ts, pid_tgid >> 32);
-  if (ret > 0) return;
+  if (ret > 0) goto Done;
   if (ret < 0) goto EmitWarning;
 
   pm->type = pm_type;
