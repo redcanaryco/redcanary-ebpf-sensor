@@ -7,6 +7,11 @@
 
 #include "common/definitions.h"
 
+static const char MEMFD_PREFIX[] = "memfd:";
+
+#define MEMFD_PREFIX_LEN sizeof(MEMFD_PREFIX) - 1
+const unsigned long MEMFD_NAME_MAX = NAME_MAX - MEMFD_PREFIX_LEN;
+
 static __always_inline void enter_memfd_create(struct syscalls_enter_memfd_create_args *ctx)
 {
     incomplete_file_message_t event = {0};
@@ -34,20 +39,23 @@ static __always_inline file_message_t* exit_memfd(struct syscalls_exit_args *ctx
     fm->u.action.u.memfd_create.fdno = ctx->ret;
     fm->u.action.buffer_len = sizeof(file_message_t);
 
-    // if present, write the memfd's name into the string buffer.
+    char* name_buf = (void*)buffer + sizeof(file_message_t);
+    __builtin_memcpy_inline(name_buf, MEMFD_PREFIX, MEMFD_PREFIX_LEN);
+    name_buf += MEMFD_PREFIX_LEN;
+
+    long read_len = 0;
     if (event->memfd_create.uname != NULL) {
         // note that the name as read is the name passed by the caller, without
         // the `memfd:` prepended by the kernel.
-        char* name_buf = (void*)buffer + sizeof(file_message_t);
-        long ret = bpf_probe_read_user_str(name_buf, MFD_NAME_MAX_LEN+1, event->memfd_create.uname);
-        if (ret < 0) {
+        read_len = bpf_probe_read_user_str(name_buf, MEMFD_NAME_MAX, event->memfd_create.uname);
+        if (read_len < 0) {
             file_message_t fm = {0};
             fm.type = FM_WARNING;
             fm.u.warning.probe_id = ctx->__syscall_nr;
             fm.u.warning.pid_tgid = bpf_get_current_pid_tgid();
             fm.u.warning.message_type.file = FM_MEMFD_CREATE;
             fm.u.warning.code = W_READ_MEMFD_NAME;
-            fm.u.warning.info.err = ret;
+            fm.u.warning.info.err = read_len;
 
             push_file_message((struct syscalls_enter_generic_args *)ctx, &fm);
 
@@ -55,11 +63,12 @@ static __always_inline file_message_t* exit_memfd(struct syscalls_exit_args *ctx
             // function. ensure that there isn't an unterminated string in the
             // buffer as the result of the failed read.
             name_buf[0] = (char)0;
-            ret = 0;
-        }
 
-        fm->u.action.buffer_len += ret;
+            read_len = 0;
+        }
     }
+
+    fm->u.action.buffer_len += read_len + MEMFD_PREFIX_LEN;
 
     push_flexible_file_message(ctx, fm, fm->u.action.buffer_len);
 
