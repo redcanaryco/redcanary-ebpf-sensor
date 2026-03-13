@@ -1,3 +1,5 @@
+#include "common/bpf_helpers.h"
+#include "common/types.h"
 #include "maps.h"
 #include "modify.h"
 #include "push_file_message.h"
@@ -32,13 +34,11 @@ static __always_inline file_message_t* exit_memfd(struct syscalls_exit_args *ctx
     fm->u.action.u.memfd_create.fdno = ctx->ret;
     fm->u.action.buffer_len = sizeof(file_message_t);
 
-    u64 dynamic_size = sizeof(file_message_t); 
-
     // if present, write the memfd's name into the string buffer.
     if (event->memfd_create.uname != NULL) {
         // note that the name as read is the name passed by the caller, without
         // the `memfd:` prepended by the kernel.
-        char* name_buf = (void*)buffer + dynamic_size;
+        char* name_buf = (void*)buffer + sizeof(file_message_t);
         long ret = bpf_probe_read_user_str(name_buf, MFD_NAME_MAX_LEN+1, event->memfd_create.uname);
         if (ret < 0) {
             file_message_t fm = {0};
@@ -55,12 +55,13 @@ static __always_inline file_message_t* exit_memfd(struct syscalls_exit_args *ctx
             // function. ensure that there isn't an unterminated string in the
             // buffer as the result of the failed read.
             name_buf[0] = (char)0;
+            ret = 0;
         }
 
-        dynamic_size += ret;
+        fm->u.action.buffer_len += ret;
     }
 
-    push_flexible_file_message(ctx, fm, dynamic_size);
+    push_flexible_file_message(ctx, fm, fm->u.action.buffer_len);
 
     // to reuse POP_AND_SETUP this function needs declare a file_message_t* return type
     return NULL;
