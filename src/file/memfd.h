@@ -1,3 +1,4 @@
+#pragma once
 #include "common/bpf_helpers.h"
 #include "common/types.h"
 #include "maps.h"
@@ -9,8 +10,8 @@
 
 static const char MEMFD_PREFIX[] = "memfd:";
 
-#define MEMFD_PREFIX_LEN sizeof(MEMFD_PREFIX) - 1
-const unsigned long MEMFD_NAME_MAX = NAME_MAX - MEMFD_PREFIX_LEN;
+#define MEMFD_PREFIX_LEN (sizeof(MEMFD_PREFIX) - 1)
+static const unsigned long MEMFD_NAME_MAX = NAME_MAX - MEMFD_PREFIX_LEN;
 
 static __always_inline void enter_memfd_create(struct syscalls_enter_memfd_create_args *ctx)
 {
