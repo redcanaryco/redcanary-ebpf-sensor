@@ -72,6 +72,6 @@ static __always_inline file_message_t* exit_memfd(struct syscalls_exit_args *ctx
 
     push_flexible_file_message(ctx, fm, fm->u.action.buffer_len);
 
-    // to reuse POP_AND_SETUP this function needs declare a file_message_t* return type
+    // to reuse POP_AND_THEN this function needs declare a file_message_t* return type
     return NULL;
 }

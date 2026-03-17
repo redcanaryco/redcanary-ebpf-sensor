@@ -205,7 +205,7 @@ EmitWarning:;
     if (ctx->ret < 0) goto Pop;
 
 // Returns a file_message_event_t* and handles the popping from the incomplete map
-#define POP_AND_SETUP(kind, fn)                                         \
+#define POP_AND_THEN(kind, fn)                                         \
     ({                                                                  \
         GET_EXIT_EVENT(kind)                                            \
         ret = fn(ctx, pid_tgid, event);                                 \
@@ -216,7 +216,7 @@ EmitWarning:;
     })
 
 // Returns a file_message_event_t* and handles the popping from the incomplete map
-#define POP_AND_SETUP_ARGS(kind, fn, args...)                           \
+#define POP_AND_THEN_ARGS(kind, fn, args...)                           \
     ({                                                                  \
         GET_EXIT_EVENT(kind)                                            \
         ret = fn(ctx, pid_tgid, event, args);                           \

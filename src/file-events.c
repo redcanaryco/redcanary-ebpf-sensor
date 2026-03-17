@@ -76,7 +76,7 @@ int BPF_KPROBE(security_inode_mkdir, const struct inode *dir, struct dentry *den
 SEC("tracepoint/syscalls/sys_exit_mkdir")
 int sys_exit_mkdir(struct syscalls_exit_args *ctx)
 {
-    file_message_t *fm = POP_AND_SETUP_ARGS(FM_CREATE, exit_create, LINK_NONE);
+    file_message_t *fm = POP_AND_THEN_ARGS(FM_CREATE, exit_create, LINK_NONE);
     finish_message(ctx, fm);
     return 0;
 }
@@ -84,7 +84,7 @@ int sys_exit_mkdir(struct syscalls_exit_args *ctx)
 SEC("tracepoint/syscalls/sys_exit_mkdirat")
 int sys_exit_mkdirat(struct syscalls_exit_args *ctx)
 {
-    file_message_t *fm = POP_AND_SETUP_ARGS(FM_CREATE, exit_create, LINK_NONE);
+    file_message_t *fm = POP_AND_THEN_ARGS(FM_CREATE, exit_create, LINK_NONE);
     finish_message(ctx, fm);
     return 0;
 }
@@ -185,7 +185,7 @@ int BPF_KPROBE(security_inode_link, struct dentry *old_dentry, struct inode *dir
 SEC("tracepoint/syscalls/sys_exit_link")
 int sys_exit_link(struct syscalls_exit_args *ctx)
 {
-    file_message_t *fm = POP_AND_SETUP_ARGS(FM_CREATE, exit_create, LINK_HARD);
+    file_message_t *fm = POP_AND_THEN_ARGS(FM_CREATE, exit_create, LINK_HARD);
     finish_message(ctx, fm);
     return 0;
 }
@@ -193,7 +193,7 @@ int sys_exit_link(struct syscalls_exit_args *ctx)
 SEC("tracepoint/syscalls/sys_exit_linkat")
 int sys_exit_linkat(struct syscalls_exit_args *ctx)
 {
-    file_message_t *fm = POP_AND_SETUP_ARGS(FM_CREATE, exit_create, LINK_HARD);
+    file_message_t *fm = POP_AND_THEN_ARGS(FM_CREATE, exit_create, LINK_HARD);
     finish_message(ctx, fm);
     return 0;
 }
@@ -233,7 +233,7 @@ int BPF_KPROBE(security_inode_create, struct inode *dir, struct dentry *dentry, 
 SEC("tracepoint/syscalls/sys_exit_mknod")
 int sys_exit_mknod(struct syscalls_exit_args *ctx)
 {
-    file_message_t *fm = POP_AND_SETUP(FM_MODIFY, exit_modify);
+    file_message_t *fm = POP_AND_THEN(FM_MODIFY, exit_modify);
     finish_message(ctx, fm);
     return 0;
 }
@@ -241,7 +241,7 @@ int sys_exit_mknod(struct syscalls_exit_args *ctx)
 SEC("tracepoint/syscalls/sys_exit_mknodat")
 int sys_exit_mknodat(struct syscalls_exit_args *ctx)
 {
-    file_message_t *fm = POP_AND_SETUP(FM_MODIFY, exit_modify);
+    file_message_t *fm = POP_AND_THEN(FM_MODIFY, exit_modify);
     finish_message(ctx, fm);
     return 0;
 }
@@ -260,7 +260,7 @@ int sys_enter_unlink(struct syscalls_enter_generic_args *ctx)
 SEC("tracepoint/syscalls/sys_exit_unlink")
 int sys_exit_unlink(struct syscalls_exit_args *ctx)
 {
-    file_message_t *fm = POP_AND_SETUP(FM_DELETE, exit_delete);
+    file_message_t *fm = POP_AND_THEN(FM_DELETE, exit_delete);
     finish_message(ctx, fm);
     return 0;
 }
@@ -275,7 +275,7 @@ int sys_enter_unlinkat(struct syscalls_enter_generic_args *ctx)
 SEC("tracepoint/syscalls/sys_exit_unlinkat")
 int sys_exit_unlinkat(struct syscalls_exit_args *ctx)
 {
-    file_message_t *fm = POP_AND_SETUP(FM_DELETE, exit_delete);
+    file_message_t *fm = POP_AND_THEN(FM_DELETE, exit_delete);
     finish_message(ctx, fm);
     return 0;
 }
@@ -318,7 +318,7 @@ int BPF_KPROBE(security_inode_rmdir, struct inode *dir, struct dentry *dentry)
 SEC("tracepoint/syscalls/sys_exit_rmdir")
 int sys_exit_rmdir(struct syscalls_exit_args *ctx)
 {
-    file_message_t *fm = POP_AND_SETUP(FM_DELETE, exit_delete);
+    file_message_t *fm = POP_AND_THEN(FM_DELETE, exit_delete);
     finish_message(ctx, fm);
     return 0;
 }
@@ -359,7 +359,7 @@ int sys_enter_chmod(struct syscalls_enter_generic_args *ctx)
 SEC("tracepoint/syscalls/sys_exit_chmod")
 int sys_exit_chmod(struct syscalls_exit_args *ctx)
 {
-    file_message_t *fm = POP_AND_SETUP(FM_MODIFY, exit_modify);
+    file_message_t *fm = POP_AND_THEN(FM_MODIFY, exit_modify);
     finish_message(ctx, fm);
     return 0;
 }
@@ -374,7 +374,7 @@ int sys_enter_fchmod(struct syscalls_enter_generic_args *ctx)
 SEC("tracepoint/syscalls/sys_exit_fchmod")
 int sys_exit_fchmod(struct syscalls_exit_args *ctx)
 {
-    file_message_t *fm = POP_AND_SETUP(FM_MODIFY, exit_modify);
+    file_message_t *fm = POP_AND_THEN(FM_MODIFY, exit_modify);
     finish_message(ctx, fm);
     return 0;
 }
@@ -389,7 +389,7 @@ int sys_enter_fchmodat(struct syscalls_enter_generic_args *ctx)
 SEC("tracepoint/syscalls/sys_exit_fchmodat")
 int sys_exit_fchmodat(struct syscalls_exit_args *ctx)
 {
-    file_message_t *fm = POP_AND_SETUP(FM_MODIFY, exit_modify);
+    file_message_t *fm = POP_AND_THEN(FM_MODIFY, exit_modify);
     finish_message(ctx, fm);
     return 0;
 }
@@ -415,7 +415,7 @@ int sys_enter_chown(struct syscalls_enter_generic_args *ctx)
 SEC("tracepoint/syscalls/sys_exit_chown")
 int sys_exit_chown(struct syscalls_exit_args *ctx)
 {
-    file_message_t *fm = POP_AND_SETUP(FM_MODIFY, exit_modify);
+    file_message_t *fm = POP_AND_THEN(FM_MODIFY, exit_modify);
     finish_message(ctx, fm);
     return 0;
 }
@@ -430,7 +430,7 @@ int sys_enter_lchown(struct syscalls_enter_generic_args *ctx)
 SEC("tracepoint/syscalls/sys_exit_lchown")
 int sys_exit_lchown(struct syscalls_exit_args *ctx)
 {
-    file_message_t *fm = POP_AND_SETUP(FM_MODIFY, exit_modify);
+    file_message_t *fm = POP_AND_THEN(FM_MODIFY, exit_modify);
     finish_message(ctx, fm);
     return 0;
 }
@@ -445,7 +445,7 @@ int sys_enter_fchown(struct syscalls_enter_generic_args *ctx)
 SEC("tracepoint/syscalls/sys_exit_fchown")
 int sys_exit_fchown(struct syscalls_exit_args *ctx)
 {
-    file_message_t *fm = POP_AND_SETUP(FM_MODIFY, exit_modify);
+    file_message_t *fm = POP_AND_THEN(FM_MODIFY, exit_modify);
     finish_message(ctx, fm);
     return 0;
 }
@@ -460,7 +460,7 @@ int sys_enter_fchownat(struct syscalls_enter_generic_args *ctx)
 SEC("tracepoint/syscalls/sys_exit_fchownat")
 int sys_exit_fchownat(struct syscalls_exit_args *ctx)
 {
-    file_message_t *fm = POP_AND_SETUP(FM_MODIFY, exit_modify);
+    file_message_t *fm = POP_AND_THEN(FM_MODIFY, exit_modify);
     finish_message(ctx, fm);
     return 0;
 }
@@ -486,7 +486,7 @@ int sys_enter_rename(struct syscalls_enter_generic_args *ctx)
 SEC("tracepoint/syscalls/sys_exit_rename")
 int sys_exit_rename(struct syscalls_exit_args *ctx)
 {
-    file_message_t *fm = POP_AND_SETUP(FM_RENAME, exit_rename);
+    file_message_t *fm = POP_AND_THEN(FM_RENAME, exit_rename);
     finish_message(ctx, fm);
     return 0;
 }
@@ -501,7 +501,7 @@ int sys_enter_renameat(struct syscalls_enter_generic_args *ctx)
 SEC("tracepoint/syscalls/sys_exit_renameat")
 int sys_exit_renameat(struct syscalls_exit_args *ctx)
 {
-    file_message_t *fm = POP_AND_SETUP(FM_RENAME, exit_rename);
+    file_message_t *fm = POP_AND_THEN(FM_RENAME, exit_rename);
     finish_message(ctx, fm);
     return 0;
 }
@@ -516,7 +516,7 @@ int sys_enter_renameat2(struct syscalls_enter_generic_args *ctx)
 SEC("tracepoint/syscalls/sys_exit_renameat2")
 int sys_exit_renameat2(struct syscalls_exit_args *ctx)
 {
-    file_message_t *fm = POP_AND_SETUP(FM_RENAME, exit_rename);
+    file_message_t *fm = POP_AND_THEN(FM_RENAME, exit_rename);
     finish_message(ctx, fm);
     return 0;
 }
@@ -549,7 +549,7 @@ SEC("tracepoint/syscalls/sys_exit_memfd_create")
 int sys_exit_memfd_create(struct syscalls_exit_args *ctx)
 {
     // exit_memfd pushes the message
-    (void) POP_AND_SETUP(FM_MEMFD_CREATE, exit_memfd);
+    (void) POP_AND_THEN(FM_MEMFD_CREATE, exit_memfd);
     return 0;
 }
 
@@ -607,7 +607,7 @@ int BPF_KPROBE(security_file_open, void *file)
 SEC("tracepoint/syscalls/sys_exit_open")
 int sys_exit_open(struct syscalls_exit_args *ctx)
 {
-    file_message_t *fm = POP_AND_SETUP(FM_MODIFY, exit_modify);
+    file_message_t *fm = POP_AND_THEN(FM_MODIFY, exit_modify);
     finish_message(ctx, fm);
     return 0;
 }
@@ -615,7 +615,7 @@ int sys_exit_open(struct syscalls_exit_args *ctx)
 SEC("tracepoint/syscalls/sys_exit_openat")
 int sys_exit_openat(struct syscalls_exit_args *ctx)
 {
-    file_message_t *fm = POP_AND_SETUP(FM_MODIFY, exit_modify);
+    file_message_t *fm = POP_AND_THEN(FM_MODIFY, exit_modify);
     finish_message(ctx, fm);
     return 0;
 }
@@ -623,7 +623,7 @@ int sys_exit_openat(struct syscalls_exit_args *ctx)
 SEC("tracepoint/syscalls/sys_exit_openat2")
 int sys_exit_openat2(struct syscalls_exit_args *ctx)
 {
-    file_message_t *fm = POP_AND_SETUP(FM_MODIFY, exit_modify);
+    file_message_t *fm = POP_AND_THEN(FM_MODIFY, exit_modify);
     finish_message(ctx, fm);
     return 0;
 }
@@ -631,7 +631,7 @@ int sys_exit_openat2(struct syscalls_exit_args *ctx)
 SEC("tracepoint/syscalls/sys_exit_open_by_handle_at")
 int sys_exit_open_by_handle_at(struct syscalls_exit_args *ctx)
 {
-    file_message_t *fm = POP_AND_SETUP(FM_MODIFY, exit_modify);
+    file_message_t *fm = POP_AND_THEN(FM_MODIFY, exit_modify);
     finish_message(ctx, fm);
     return 0;
 }
@@ -649,7 +649,7 @@ int sys_enter_creat(struct syscalls_enter_generic_args *ctx)
 SEC("tracepoint/syscalls/sys_exit_creat")
 int sys_exit_creat(struct syscalls_exit_args *ctx)
 {
-    file_message_t *fm = POP_AND_SETUP(FM_MODIFY, exit_modify);
+    file_message_t *fm = POP_AND_THEN(FM_MODIFY, exit_modify);
     finish_message(ctx, fm);
     return 0;
 }
@@ -671,7 +671,7 @@ int BPF_KPROBE(security_path_truncate, const struct path *path)
 SEC("tracepoint/syscalls/sys_exit_truncate")
 int sys_exit_truncate(struct syscalls_exit_args *ctx)
 {
-    file_message_t *fm = POP_AND_SETUP(FM_MODIFY, exit_modify);
+    file_message_t *fm = POP_AND_THEN(FM_MODIFY, exit_modify);
     finish_message(ctx, fm);
     return 0;
 }
