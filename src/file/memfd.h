@@ -8,10 +8,10 @@
 #include "common/definitions.h"
 
 struct syscalls_enter_memfd_create_args {
-   __u64 unused;
-   long __syscall_nr;
-   const char *uname;
-   unsigned long flags;
+    __u64 unused;
+    long __syscall_nr;
+    const char *uname;
+    unsigned long flags;
 };
 
 static const char MEMFD_PREFIX[] = "memfd:";
