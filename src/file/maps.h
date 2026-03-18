@@ -28,6 +28,10 @@ typedef struct {
             void *source;           // dentry for hard link, char for symlink, NULL otherwise
         } create;
         struct {
+            unsigned long flags;   // Flags passed to memfd_create (or memfd_secret)
+            const char* uname;     // Informative name of the memfd if available. memfd_create limits this to 249+1 bytes.
+        } memfd_create;
+        struct {
             file_ownership_t ownership; // ownership data prior to inode deletion
             file_info_t target;         // target info prior to inode deletion
         } delete;
@@ -55,25 +59,29 @@ struct bpf_map_def SEC("maps/incomplete_file_messages") incomplete_file_messages
     .namespace = "",
 };
 
-static __always_inline void enter_file_message(struct syscalls_enter_generic_args *ctx, file_message_type_t kind)
+static __always_inline void prepare_file_message(struct syscalls_enter_generic_args* ctx, file_message_type_t kind, incomplete_file_message_t* event)
+{
+    *event = (incomplete_file_message_t){0};
+
+    event->start_ktime_ns = bpf_ktime_get_ns();
+    event->kind = kind;
+    event->probe_id = ctx->__syscall_nr;
+}
+
+static __always_inline void try_insert_incomplete_file_message(struct syscalls_enter_generic_args* ctx, incomplete_file_message_t* event)
 {
     u64 pid_tgid = bpf_get_current_pid_tgid();
-    incomplete_file_message_t event = {0};
-    event.start_ktime_ns = bpf_ktime_get_ns();
-    event.kind = kind;
-    event.probe_id = ctx->__syscall_nr;
 
     // deliberately only insert if the key does not exist -- we want
     // to be truthful if we forgot to pop so userspace knows that
     // there is a bug somewhere
-    int ret = bpf_map_update_elem(&incomplete_file_messages, &pid_tgid, &event, BPF_NOEXIST);
-    if (ret < 0)
-    {
+    int ret = bpf_map_update_elem(&incomplete_file_messages, &pid_tgid, event, BPF_NOEXIST);
+    if (ret < 0) {
         file_message_t fm = {0};
         fm.type = FM_WARNING;
         fm.u.warning.probe_id = ctx->__syscall_nr;
         fm.u.warning.pid_tgid = pid_tgid;
-        fm.u.warning.message_type.file = kind;
+        fm.u.warning.message_type.file = event->kind;
         fm.u.warning.code = W_UPDATE_MAP_ERROR;
         fm.u.warning.info.err = ret;
 
@@ -83,6 +91,13 @@ static __always_inline void enter_file_message(struct syscalls_enter_generic_arg
         // accidentally try to use it to re-emit the event
         bpf_map_delete_elem(&incomplete_file_messages, &pid_tgid);
     }
+}
+
+static __always_inline void enter_file_message(struct syscalls_enter_generic_args *ctx, file_message_type_t kind)
+{
+    incomplete_file_message_t event = {0};
+    prepare_file_message(ctx, kind, &event);
+    try_insert_incomplete_file_message(ctx, &event);
 }
 
 static __always_inline incomplete_file_message_t *get_event(void *ctx,
@@ -190,7 +205,7 @@ EmitWarning:;
     if (ctx->ret < 0) goto Pop;
 
 // Returns a file_message_event_t* and handles the popping from the incomplete map
-#define POP_AND_SETUP(kind, fn)                                         \
+#define POP_AND_THEN(kind, fn)                                         \
     ({                                                                  \
         GET_EXIT_EVENT(kind)                                            \
         ret = fn(ctx, pid_tgid, event);                                 \
@@ -201,7 +216,7 @@ EmitWarning:;
     })
 
 // Returns a file_message_event_t* and handles the popping from the incomplete map
-#define POP_AND_SETUP_ARGS(kind, fn, args...)                           \
+#define POP_AND_THEN_ARGS(kind, fn, args...)                           \
     ({                                                                  \
         GET_EXIT_EVENT(kind)                                            \
         ret = fn(ctx, pid_tgid, event, args);                           \

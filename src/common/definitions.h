@@ -11,8 +11,8 @@
 
 #define __always_inline	inline __attribute__((always_inline))
 
-#define NAME_MAX         255	/* # chars in a file name */
-#define PATH_MAX        4096	/* # chars in a path name including nul */
+#define NAME_MAX  255 /* # chars in a file name */
+#define PATH_MAX 4096 /* # chars in a path name including nul */
 
 #define O_ACCMODE	00000003
 #define O_RDONLY	00000000

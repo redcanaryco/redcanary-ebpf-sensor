@@ -103,6 +103,7 @@ typedef enum
     W_INTERP_MISMATCH,
     W_INTERP_SLOT,
     W_KIND_MISMATCH,
+    W_READ_MEMFD_NAME,
 } warning_t;
 
 typedef enum
@@ -129,6 +130,7 @@ typedef enum
     FM_MODIFY,
     FM_RENAME,
     FM_WARNING,
+    FM_MEMFD_CREATE,
 } file_message_type_t;
 
 typedef union
@@ -340,6 +342,10 @@ typedef struct
         struct {
             file_link_type_t source_link;
         } create;
+        struct {
+            unsigned long flags;
+            int fdno;
+        } memfd_create;
         struct {
             file_ownership_t before_owner;
         } modify;
