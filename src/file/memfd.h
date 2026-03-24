@@ -46,6 +46,10 @@ static __always_inline file_message_t* exit_memfd(struct syscalls_exit_args *ctx
     fm->u.action.u.memfd_create.fdno = ctx->ret;
     fm->u.action.buffer_len = sizeof(file_message_t);
 
+    // ensure unused fields are zeroed
+    fm->u.action.target = (file_info_t){0};
+    fm->u.action.target_owner = (file_ownership_t){0};
+
     char* name_buf = (void*)buffer + sizeof(file_message_t);
     __builtin_memcpy_inline(name_buf, MEMFD_PREFIX, MEMFD_PREFIX_LEN);
     name_buf += MEMFD_PREFIX_LEN;
