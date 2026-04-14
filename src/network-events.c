@@ -46,6 +46,7 @@ typedef struct {
     u16 remote_port;
     u32 pid;
     ip_addr_t protos;
+    enum direction_t direction;
 } network_event_key_t;
 
 struct bpf_map_def SEC("maps/lru_hash") lru_hash = {
@@ -62,6 +63,7 @@ static __always_inline int push_event(void *ctx, network_event_t *data) {
     key.pid = data->process.pid;
     key.protos = data->protos;
     key.remote_port = data->protocol_type == IPPROTO_UDP ? 0 : data->dest_port;
+    key.direction = data->direction;
 
     if (bpf_map_lookup_elem(&lru_hash, &key) != NULL) {
         return 0;
