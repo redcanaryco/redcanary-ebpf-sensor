@@ -12,17 +12,11 @@
 // the kernel deliberately fails if it has to rewrite it more than 4 times
 #define MAX_INTERPRETERS 4
 
-#define PATH_MAX 4096
-
 typedef struct
 {
   u32 pid;
 
   struct {
-    // relative path to the script. This string has already been
-    // copied into kernel space and it is not freed during
-    // interpreter finding thus making it safe to use directly
-    char *path;
     file_info_t identity;
   } file;
 
@@ -41,7 +35,19 @@ struct bpf_map_def SEC("maps/scripts") scripts = {
 
 typedef struct {
   char path[BINPRM_BUF_SIZE];
-} interpreter_path_t;
+} binprm_path_t;
+
+// A map of pid -> script path. The script path (bprm->filename) is
+// copied here during the kprobe for load_script because the kernel
+// frees the backing struct filename before the exec kretprobe fires.
+struct bpf_map_def SEC("maps/script_paths") script_paths = {
+  .type = BPF_MAP_TYPE_LRU_HASH,
+  .key_size = sizeof(u32),
+  .value_size = sizeof(binprm_path_t),
+  .max_entries = 1024,
+  .pinning = 0,
+  .namespace = "",
+};
 
 // A map of file identities -> interpreter paths. We do not currently
 // invalidate keys when paths are deleted/renamed so this is meant to
@@ -55,7 +61,7 @@ typedef struct {
 struct bpf_map_def SEC("maps/interpreters") interpreters = {
   .type = BPF_MAP_TYPE_LRU_HASH,
   .key_size = sizeof(file_info_t),
-  .value_size = sizeof(interpreter_path_t),
+  .value_size = sizeof(binprm_path_t),
   .max_entries = 1024,
   .pinning = 0,
   .namespace = "",
@@ -73,7 +79,7 @@ typedef struct {
 struct bpf_map_def SEC("maps/rel_interpreters") rel_interpreters = {
   .type = BPF_MAP_TYPE_LRU_HASH,
   .key_size = sizeof(relative_file_info_t),
-  .value_size = sizeof(interpreter_path_t),
+  .value_size = sizeof(binprm_path_t),
   .max_entries = 128, // TODO: should we expand oxidebpf to allow scaling based on # cpus?
   .pinning = 0,
   .namespace = "",
@@ -121,7 +127,7 @@ static __always_inline void enter_script(struct pt_regs *ctx, void *bprm) {
   rel_interpreter.pid = pid;
   rel_interpreter.interpreter = *new_interpreter;
 
-  interpreter_path_t path = {0};
+  binprm_path_t path = {0};
 
   // skip check if sz == BINPRM_BUF_SIZE. If a future kernel increases
   // the value of BINPRM_BUF_SIZE then we may run into truncation but
@@ -173,48 +179,22 @@ static __always_inline void enter_script(struct pt_regs *ctx, void *bprm) {
   event.pid = pid;
   if (file_info_from_file(file, &event.file.identity) < 0) goto EmitWarning;
 
-  char dev[] = "/dev/fd/";
-  char truncated_filename[sizeof(dev)] = {0};
-  int sz = bpf_probe_read_kernel_str(truncated_filename, sizeof(dev), filename);
-  int is_dev_fd_file = 0;
-  if (sz == sizeof(dev)) {
-    is_dev_fd_file = 1;
-#pragma unroll sizeof(dev)
-    for (int i = 0; i < sizeof(dev); i++) {
-      if (dev[i] != truncated_filename[i]) {
-        is_dev_fd_file = 0;
-        break;
-      }
-    }
-  }
+  {
+    binprm_path_t path = {0};
 
-  // If our filename is /dev/fd/* then the kernel (most likely)
-  // allocated the string during the creation of the binprm for an
-  // execveat. Because the binprm is de-allocated before the kretprobe
-  // for exec* is fired we need to copy that string manually.
-  if (is_dev_fd_file) {
-    interpreter_path_t path = {0};
-
-    // skip check if sz == BINPRM_BUF_SIZE. In theory this *can*
-    // truncate the name in the case of a script launched using
-    // execveat that uses both the dirfd and a *really long*
-    // pathname. I rather truncate in this extreme edge case instead
-    // of incurring the runtime cost for all the normal cases.
     ret = bpf_probe_read_kernel_str(&path.path, BINPRM_BUF_SIZE, filename);
     if (ret < 0) {
       set_empty_local_warning(W_READ_PATH_STRING);
       goto EmitWarning;
     }
 
-    ret = bpf_map_update_elem(&interpreters, &event.file.identity, &path, BPF_ANY);
+    ret = bpf_map_update_elem(&script_paths, &pid, &path, BPF_ANY);
     if (ret < 0) {
       error_info_t info = {0};
       info.err = ret;
       set_local_warning(W_UPDATE_MAP_ERROR, info);
       goto EmitWarning;
     }
-  } else {
-    event.file.path = filename;
   }
 
   goto SaveEvent;
@@ -264,23 +244,11 @@ static __always_inline u64 push_scripts(void *ctx, buf_t *buffer) {
   pm->u.script_info.buffer_length = sizeof(process_message_t);
 
   int sz = 0;
-  if (event.file.path == NULL) {
-    // we didn't save the path because the kernel was going to
-    // de-allocate it; look it up in our interpreters map instead. No
-    // need to look at the rel_interpreters, it is always an absolute
-    // path for the /dev/fd/* case
-    interpreter_path_t *intp_path = bpf_map_lookup_elem(&interpreters, &event.file.identity);
-    if (intp_path == NULL) {
-      write_null_char(buffer, &pm->u.script_info.buffer_length);
-    } else {
-      sz = write_string(intp_path->path, buffer, &pm->u.script_info.buffer_length, BINPRM_BUF_SIZE);
-    }
+  binprm_path_t *script_path = bpf_map_lookup_elem(&script_paths, &pid);
+  if (script_path == NULL) {
+    write_null_char(buffer, &pm->u.script_info.buffer_length);
   } else {
-    // the original script file path came from the user; the kernel
-    // verifies that the user provided path cannot go beyond
-    // PATH_MAX. The total path can still be beyond PATH_MAX once you
-    // combine it with the CWD but userspace can take care of that
-    sz = write_string(event.file.path, buffer, &pm->u.script_info.buffer_length, PATH_MAX);
+    sz = write_string(script_path->path, buffer, &pm->u.script_info.buffer_length, BINPRM_BUF_SIZE);
   }
 
   if (sz < 0) goto WriteError;
@@ -299,7 +267,7 @@ static __always_inline u64 push_scripts(void *ctx, buf_t *buffer) {
     rel_interpreter.pid = pid;
     rel_interpreter.interpreter = *intp_key;
 
-    interpreter_path_t *intp_path = bpf_map_lookup_elem(&rel_interpreters, &rel_interpreter);
+    binprm_path_t *intp_path = bpf_map_lookup_elem(&rel_interpreters, &rel_interpreter);
     if (intp_path == NULL) {
       intp_path = bpf_map_lookup_elem(&interpreters, intp_key);
     }
@@ -346,6 +314,7 @@ static __always_inline u64 push_scripts(void *ctx, buf_t *buffer) {
 
  Done:;
   bpf_map_delete_elem(&scripts, &pid);
+  bpf_map_delete_elem(&script_paths, &pid);
 
  NoEvent:;
   return event_id;
