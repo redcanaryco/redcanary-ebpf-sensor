@@ -42,6 +42,14 @@ typedef struct {
   char path[PATH_MAX];
 } script_path_t;
 
+// Shorter variant for kernels < 4.18 where bpf_map_update_elem
+// requires the value pointer to be on the stack. PATH_MAX (4096)
+// does not fit in the 512-byte BPF stack; BINPRM_BUF_SIZE (256) does.
+typedef struct {
+  u32 pid;
+  char path[BINPRM_BUF_SIZE];
+} script_path_short_t;
+
 // A map of pid -> script path. The script path (bprm->filename) is
 // copied here during the kprobe for load_script because the kernel
 // frees the backing struct filename before the exec kretprobe fires.
@@ -49,6 +57,18 @@ struct bpf_map_def SEC("maps/script_paths") script_paths = {
   .type = BPF_MAP_TYPE_LRU_HASH,
   .key_size = sizeof(u32),
   .value_size = sizeof(script_path_t),
+  .max_entries = 1024,
+  .pinning = 0,
+  .namespace = "",
+};
+
+// Same purpose as script_paths but with a truncated path for kernels
+// < 4.18. Used by load_script_pre_4_18 which must pass the value on
+// the stack to bpf_map_update_elem.
+struct bpf_map_def SEC("maps/script_paths_short") script_paths_short = {
+  .type = BPF_MAP_TYPE_LRU_HASH,
+  .key_size = sizeof(u32),
+  .value_size = sizeof(script_path_short_t),
   .max_entries = 1024,
   .pinning = 0,
   .namespace = "",
@@ -103,7 +123,7 @@ struct bpf_map_def SEC("maps/rel_interpreters") rel_interpreters = {
   .namespace = "",
 };
 
-static __always_inline void enter_script(struct pt_regs *ctx, void *bprm) {
+static __always_inline void enter_script(struct pt_regs *ctx, void *bprm, int short_path) {
   if (!offset_loaded()) return;
 
   // filename = bprm->filename
@@ -197,7 +217,23 @@ static __always_inline void enter_script(struct pt_regs *ctx, void *bprm) {
   event.pid = pid;
   if (file_info_from_file(file, &event.file.identity) < 0) goto EmitWarning;
 
-  {
+  if (short_path) {
+    script_path_short_t sp = {0};
+    sp.pid = pid;
+    ret = bpf_probe_read_kernel_str(&sp.path, BINPRM_BUF_SIZE, filename);
+    if (ret < 0) {
+      set_empty_local_warning(W_READ_PATH_STRING);
+      goto EmitWarning;
+    }
+
+    ret = bpf_map_update_elem(&script_paths_short, &pid, &sp, BPF_ANY);
+    if (ret < 0) {
+      error_info_t info = {0};
+      info.err = ret;
+      set_local_warning(W_UPDATE_MAP_ERROR, info);
+      goto EmitWarning;
+    }
+  } else {
     u32 zero = 0;
     script_path_t *path = (script_path_t *)bpf_map_lookup_elem(&buffers, &zero);
     if (path == NULL) goto EmitWarning;
@@ -266,25 +302,37 @@ static __always_inline u64 push_scripts(void *ctx, buf_t *buffer) {
 
   int sz = 0;
   u32 zero = 0;
+  int path_max = PATH_MAX;
   script_path_t *scratch = bpf_map_lookup_elem(&script_path_scratch, &zero);
-  script_path_t *script_path = bpf_map_lookup_elem(&script_paths, &pid);
-  if (scratch == NULL || script_path == NULL) {
-    // The LRU-cache evicted our path (script_path == NULL) prior to us accessing the map -- it's
-    // unfortunate but not fatal. Still emit that there was a script we just don't know the path to
-    // it. scratch == NULL is just there as a guard during boot/shutdown of programs prior to the
-    // maps being accessible, it isn't really an issue
+  // should only happen during boot/shutdown
+  if (scratch == NULL) {
     write_null_char(buffer, &pm->u.script_info.buffer_length);
+    goto PathDone;
+  }
+
+  script_path_t *script_path = bpf_map_lookup_elem(&script_paths, &pid);
+  if (script_path == NULL) {
+    // Not in the full-size map; check the short map (pre-4.18 kernels).
+    script_path_short_t *sp = bpf_map_lookup_elem(&script_paths_short, &pid);
+    if (sp == NULL) {
+      // got evicted -- not fatal we just don't know the path of the script
+      write_null_char(buffer, &pm->u.script_info.buffer_length);
+      goto PathDone;
+    }
+    bpf_probe_read_kernel(scratch, sizeof(script_path_short_t), sp);
+    path_max = BINPRM_BUF_SIZE;
   } else {
     bpf_probe_read_kernel(scratch, sizeof(script_path_t), script_path);
-    if (scratch->pid != pid) {
-      // The LRU-cache evicted our data after the retrieval but before the copy finished, so we
-      // copied data for a separate process. This happens under high load. Same as the case above,
-      // it's not fatal we just can't know the path
-      write_null_char(buffer, &pm->u.script_info.buffer_length);
-    } else {
-      sz = write_string(scratch->path, buffer, &pm->u.script_info.buffer_length, PATH_MAX);
-    }
   }
+
+  if (scratch->pid != pid) {
+    // got evicted after the read succedeed, not fatal we just don't know the path
+    write_null_char(buffer, &pm->u.script_info.buffer_length);
+  } else {
+    sz = write_string(scratch->path, buffer, &pm->u.script_info.buffer_length, path_max);
+  }
+
+ PathDone:;
 
   if (sz < 0) goto WriteError;
 
@@ -350,6 +398,7 @@ static __always_inline u64 push_scripts(void *ctx, buf_t *buffer) {
  Done:;
   bpf_map_delete_elem(&scripts, &pid);
   bpf_map_delete_elem(&script_paths, &pid);
+  bpf_map_delete_elem(&script_paths_short, &pid);
 
  NoEvent:;
   return event_id;
