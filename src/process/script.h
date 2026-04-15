@@ -35,7 +35,11 @@ struct bpf_map_def SEC("maps/scripts") scripts = {
 
 typedef struct {
   char path[BINPRM_BUF_SIZE];
-} binprm_path_t;
+} interpreter_path_t;
+
+typedef struct {
+  char path[PATH_MAX];
+} script_path_t;
 
 // A map of pid -> script path. The script path (bprm->filename) is
 // copied here during the kprobe for load_script because the kernel
@@ -43,7 +47,7 @@ typedef struct {
 struct bpf_map_def SEC("maps/script_paths") script_paths = {
   .type = BPF_MAP_TYPE_LRU_HASH,
   .key_size = sizeof(u32),
-  .value_size = sizeof(binprm_path_t),
+  .value_size = sizeof(script_path_t),
   .max_entries = 1024,
   .pinning = 0,
   .namespace = "",
@@ -61,7 +65,7 @@ struct bpf_map_def SEC("maps/script_paths") script_paths = {
 struct bpf_map_def SEC("maps/interpreters") interpreters = {
   .type = BPF_MAP_TYPE_LRU_HASH,
   .key_size = sizeof(file_info_t),
-  .value_size = sizeof(binprm_path_t),
+  .value_size = sizeof(interpreter_path_t),
   .max_entries = 1024,
   .pinning = 0,
   .namespace = "",
@@ -79,7 +83,7 @@ typedef struct {
 struct bpf_map_def SEC("maps/rel_interpreters") rel_interpreters = {
   .type = BPF_MAP_TYPE_LRU_HASH,
   .key_size = sizeof(relative_file_info_t),
-  .value_size = sizeof(binprm_path_t),
+  .value_size = sizeof(interpreter_path_t),
   .max_entries = 128, // TODO: should we expand oxidebpf to allow scaling based on # cpus?
   .pinning = 0,
   .namespace = "",
@@ -127,7 +131,7 @@ static __always_inline void enter_script(struct pt_regs *ctx, void *bprm) {
   rel_interpreter.pid = pid;
   rel_interpreter.interpreter = *new_interpreter;
 
-  binprm_path_t path = {0};
+  interpreter_path_t path = {0};
 
   // skip check if sz == BINPRM_BUF_SIZE. If a future kernel increases
   // the value of BINPRM_BUF_SIZE then we may run into truncation but
@@ -180,15 +184,17 @@ static __always_inline void enter_script(struct pt_regs *ctx, void *bprm) {
   if (file_info_from_file(file, &event.file.identity) < 0) goto EmitWarning;
 
   {
-    binprm_path_t path = {0};
+    u32 zero = 0;
+    script_path_t *path = (script_path_t *)bpf_map_lookup_elem(&buffers, &zero);
+    if (path == NULL) goto EmitWarning;
 
-    ret = bpf_probe_read_kernel_str(&path.path, BINPRM_BUF_SIZE, filename);
+    ret = bpf_probe_read_kernel_str(&path->path, PATH_MAX, filename);
     if (ret < 0) {
       set_empty_local_warning(W_READ_PATH_STRING);
       goto EmitWarning;
     }
 
-    ret = bpf_map_update_elem(&script_paths, &pid, &path, BPF_ANY);
+    ret = bpf_map_update_elem(&script_paths, &pid, path, BPF_ANY);
     if (ret < 0) {
       error_info_t info = {0};
       info.err = ret;
@@ -244,11 +250,11 @@ static __always_inline u64 push_scripts(void *ctx, buf_t *buffer) {
   pm->u.script_info.buffer_length = sizeof(process_message_t);
 
   int sz = 0;
-  binprm_path_t *script_path = bpf_map_lookup_elem(&script_paths, &pid);
+  script_path_t *script_path = bpf_map_lookup_elem(&script_paths, &pid);
   if (script_path == NULL) {
     write_null_char(buffer, &pm->u.script_info.buffer_length);
   } else {
-    sz = write_string(script_path->path, buffer, &pm->u.script_info.buffer_length, BINPRM_BUF_SIZE);
+    sz = write_string(script_path->path, buffer, &pm->u.script_info.buffer_length, PATH_MAX);
   }
 
   if (sz < 0) goto WriteError;
@@ -267,7 +273,7 @@ static __always_inline u64 push_scripts(void *ctx, buf_t *buffer) {
     rel_interpreter.pid = pid;
     rel_interpreter.interpreter = *intp_key;
 
-    binprm_path_t *intp_path = bpf_map_lookup_elem(&rel_interpreters, &rel_interpreter);
+    interpreter_path_t *intp_path = bpf_map_lookup_elem(&rel_interpreters, &rel_interpreter);
     if (intp_path == NULL) {
       intp_path = bpf_map_lookup_elem(&interpreters, intp_key);
     }
