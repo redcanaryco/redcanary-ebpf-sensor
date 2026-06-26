@@ -40,7 +40,14 @@ static __always_inline void exit_exec(struct pt_regs *ctx, process_message_type_
 
     // do not emit if we couldn't fill the syscall info
     ret = fill_syscall(&pm->u.syscall_info, ts, pid_tgid >> 32);
-    if (ret > 0) return; // TODO: send discard event if pm->u.syscall_info.data.exec_info.event_id != 0?
+    if (ret > 0) {
+        // not a qualifying exec (kernel thread, or offsets not yet loaded). Silent skip,
+        // matching the original behavior — but if push_scripts already emitted a PM_SCRIPT
+        // we still need to tell userspace to drop the orphan.
+        u64 event_id = pm->u.syscall_info.data.exec_info.event_id;
+        if (event_id != 0) push_discard(ctx, pm, event_id);
+        return;
+    }
     if (ret < 0) goto EmitWarning;
 
     void *mmptr = read_field_ptr(ts, CRC_TASK_STRUCT_MM);
@@ -168,9 +175,15 @@ static __always_inline void exit_exec(struct pt_regs *ctx, process_message_type_
     error_info_t info = {0};
     info.tailcall = tail_call;
     set_local_warning(W_TAIL_CALL_MAX, info);
+    // manually emit the warning rather than calling for EmitWarning as that also sends a discard
+    cached_path->next_dentry = NULL;
+    push_warning(ctx, pm, pm_type);
+    return;
 
  EmitWarning:;
-    // TODO: send discard event if pm->u.syscall_info.data.exec_info.event_id != 0?
+    // an error occurred so if we pushed a script let's send a discard event now
+    u64 event_id = pm->u.syscall_info.data.exec_info.event_id;
+    if (event_id != 0) push_discard(ctx, pm, event_id);
     cached_path->next_dentry = NULL;
 
     push_warning(ctx, pm, pm_type);

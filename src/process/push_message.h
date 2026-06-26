@@ -45,3 +45,12 @@ static __always_inline int push_warning(void *ctx, pprocess_message_t pm,
 
     return push_message(ctx, pm);
 }
+
+// Pushes a discard message for an incomplete event (e.g., a script event where we couldn't emit the
+// exec event)
+static __always_inline int push_discard(void *ctx, pprocess_message_t pm, u64 event_id)
+{
+    pm->type = PM_DISCARD;
+    pm->u.discard_info.event_id = event_id;
+    return push_message(ctx, pm);
+}

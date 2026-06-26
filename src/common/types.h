@@ -120,6 +120,7 @@ typedef enum
     PM_EXECVEAT,
     PM_WARNING,
     PM_SCRIPT,
+    PM_DISCARD,
 } process_message_type_t;
 
 typedef enum
@@ -304,11 +305,17 @@ typedef struct
     file_info_t scripts[4];
 } script_info_t;
 
+typedef struct
+{
+    u64 event_id;
+} discard_info_t;
+
 typedef union
 {
     syscall_info_t syscall_info;
     warning_info_t warning_info;
     script_info_t script_info;
+    discard_info_t discard_info;
 } process_message_data_t;
 
 typedef struct
